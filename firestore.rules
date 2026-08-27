@@ -1,0 +1,20 @@
+rules_version = '2';
+
+// হিসাব-খাতা — Firestore security rules.
+//
+// Data model: one document per user at /users/{uid}, containing their
+// entire app state (transactions, budget, tasks, debts, categories,
+// accounts, transfers). A user may only read or write their OWN document —
+// this is enforced here, server-side, not just by the app's UI.
+//
+// HOW TO APPLY: Firebase console → Build → Firestore Database → Rules tab
+// → paste this entire file, replacing whatever is there → Publish.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+    // everything else is denied by default (no wildcard match below this)
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "হিসাব-খাতা",
+  "short_name": "হিসাব-খাতা",
+  "description": "ব্যক্তিগত হিসাব-খাতা — আয়-ব্যয়, বাজেট, দেনা-পাওনা ও রিপোর্ট",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#101716",
+  "theme_color": "#0F5B46",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
