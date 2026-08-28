@@ -539,6 +539,25 @@ function App() {
         setProfileName(trimmed || null);
         persistAll({ profileName: trimmed || null });
     };
+    // full-fidelity JSON backup — every field, unlike the CSV export which is
+    // transactions-only. This is what "Backup Export"/"Backup Restore" in
+    // Settings use, independent of whether cloud sync is signed in or not.
+    const exportBackupJSON = () => JSON.stringify({
+        transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats,
+        categoryBudgets, accountOpening, transfers, profileName,
+        exportedAt: Date.now(),
+    }, null, 2);
+    const importBackupJSON = (jsonText) => {
+        try {
+            const data = JSON.parse(jsonText);
+            applyUserData(data);
+            persistAll(data);
+            return true;
+        }
+        catch (e) {
+            return false;
+        }
+    };
     /* ---------------- Firebase auth + cloud backup (optional, best-effort) ----------------
        window.FB is set up by a <script type="module"> in index.html. If it never loads
        (no internet, blocked, etc.) every function below is a safe no-op and the app keeps
@@ -554,8 +573,24 @@ function App() {
     const [syncStatus, setSyncStatus] = useState("offline"); // offline | syncing | synced | error
     const [lastSyncedAt, setLastSyncedAt] = useState(null);
     const [showLogin, setShowLogin] = useState(false);
+    const [isOnline, setIsOnline] = useState(typeof navigator === "undefined" || navigator.onLine !== false);
+    const [pendingChanges, setPendingChanges] = useState(0);
     const cloudPushTimer = useRef(null);
     const suppressNextPush = useRef(false);
+    const localUpdatedAtRef = useRef(0);
+    // track connectivity — used to show an "অফলাইন" state and to kick off an
+    // automatic sync the moment the connection comes back, instead of making
+    // the person remember to press "এখনই Sync করুন" themselves
+    useEffect(() => {
+        const goOnline = () => setIsOnline(true);
+        const goOffline = () => setIsOnline(false);
+        window.addEventListener("online", goOnline);
+        window.addEventListener("offline", goOffline);
+        return () => {
+            window.removeEventListener("online", goOnline);
+            window.removeEventListener("offline", goOffline);
+        };
+    }, []);
     const loadIdentityData = useCallback(async (identity) => {
         try {
             const res = await window.storage.get(userDataKey(identity));
@@ -690,6 +725,13 @@ function App() {
             suppressNextPush.current = false;
             return;
         }
+        localUpdatedAtRef.current = Date.now();
+        if (!isOnline) {
+            // no point even trying — queue it and let the reconnect effect
+            // below retry automatically the moment the connection is back
+            setPendingChanges((n) => n + 1);
+            return;
+        }
         if (cloudPushTimer.current)
             clearTimeout(cloudPushTimer.current);
         setSyncStatus("syncing");
@@ -698,12 +740,14 @@ function App() {
                 await window.FB.saveCloudData(user.uid, data);
                 setSyncStatus("synced");
                 setLastSyncedAt(Date.now());
+                setPendingChanges(0);
             }
             catch (e) {
                 setSyncStatus("error");
+                setPendingChanges((n) => n + 1);
             }
         }, 1500);
-    }, [user, autoSync]);
+    }, [user, autoSync, isOnline]);
     // whenever synced data changes (and the user is logged in, and auto-sync
     // is on), push it to the cloud — always sees the latest state, so no
     // stale-closure risk
@@ -716,9 +760,21 @@ function App() {
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, user, loaded, autoSync]);
+    // the moment the connection comes back, automatically flush any changes
+    // that piled up while offline — the person never has to remember to sync
+    const manualSyncRef = useRef(null);
+    useEffect(() => {
+        if (!isOnline || !user || !window.FB || !autoSync || pendingChanges === 0)
+            return;
+        manualSyncRef.current && manualSyncRef.current();
+    }, [isOnline, user, autoSync, pendingChanges]);
     const manualSync = async () => {
         if (!user || !window.FB)
             return;
+        if (!isOnline) {
+            setSyncStatus("error");
+            return;
+        }
         try {
             setSyncStatus("syncing");
             await window.FB.saveCloudData(user.uid, {
@@ -727,14 +783,25 @@ function App() {
             });
             setSyncStatus("synced");
             setLastSyncedAt(Date.now());
+            setPendingChanges(0);
         }
         catch (e) {
             setSyncStatus("error");
+            setPendingChanges((n) => Math.max(n, 1));
         }
     };
+    manualSyncRef.current = manualSync;
+    // restoring overwrites local data, so if there are unsynced local edits
+    // (pendingChanges > 0) this could silently discard them — the caller
+    // (Settings UI) checks pendingChanges first and confirms with the person
+    // before calling this, exactly like any other destructive action in the app
     const restoreFromCloud = async () => {
         if (!user || !window.FB)
             return;
+        if (!isOnline) {
+            setSyncStatus("error");
+            return;
+        }
         setSyncStatus("syncing");
         try {
             const cloudData = await window.FB.loadCloudData(user.uid);
@@ -742,6 +809,7 @@ function App() {
                 suppressNextPush.current = true;
                 applyUserData(cloudData);
                 window.storage.set(userDataKey(user.uid), JSON.stringify(cloudData)).catch(() => { });
+                setPendingChanges(0);
             }
             setSyncStatus("synced");
             setLastSyncedAt(Date.now());
@@ -1107,7 +1175,7 @@ function App() {
                 }, theme: theme, onSaveTheme: saveTheme, user: user, syncStatus: syncStatus, lastSyncedAt: lastSyncedAt, onShowLogin: () => {
                     setShowSettings(false);
                     setShowLogin(true);
-                }, onLogout: logOut, onManualSync: manualSync, onRestoreFromCloud: restoreFromCloud, profileName: profileName, onSaveProfileName: saveProfileName, autoSync: autoSync, onSaveAutoSync: saveAutoSync })),
+                }, onLogout: logOut, onManualSync: manualSync, onRestoreFromCloud: restoreFromCloud, isOnline: isOnline, pendingChanges: pendingChanges, onExportJSON: exportBackupJSON, onImportJSON: importBackupJSON, profileName: profileName, onSaveProfileName: saveProfileName, autoSync: autoSync, onSaveAutoSync: saveAutoSync })),
             showLogin && (React.createElement(LoginScreen, { onClose: () => setShowLogin(false), onSignedIn: () => setShowLogin(false) })),
             saveErr && (React.createElement("div", { style: styles.saveErrBanner }, "\u09B8\u0982\u09B0\u0995\u09CD\u09B7\u09A3\u09C7 \u09B8\u09AE\u09B8\u09CD\u09AF\u09BE \u09B9\u09AF\u09BC\u09C7\u099B\u09C7, \u0986\u09AC\u09BE\u09B0 \u099A\u09C7\u09B7\u09CD\u099F\u09BE \u0995\u09B0\u09C1\u09A8")),
             activeReminder && (React.createElement("div", { style: styles.reminderBanner, onClick: () => setActiveReminder(null) },
@@ -2949,9 +3017,12 @@ function CategoryManager({ type, list, onAdd, onUpdate, onDelete }) {
                     setNewLabel("");
                 } }, "+"))));
 }
-function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, onClose, onEditBudget, onClearAll, accounts, accountOpening, onSaveAccountOpening, onAddCategory, onUpdateCategory, onDeleteCategory, pin, onSavePin, onImportTransactions, theme, onSaveTheme, user, syncStatus, lastSyncedAt, onShowLogin, onLogout, onManualSync, onRestoreFromCloud, profileName, onSaveProfileName, autoSync, onSaveAutoSync, }) {
+function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, onClose, onEditBudget, onClearAll, accounts, accountOpening, onSaveAccountOpening, onAddCategory, onUpdateCategory, onDeleteCategory, pin, onSavePin, onImportTransactions, theme, onSaveTheme, user, syncStatus, lastSyncedAt, onShowLogin, onLogout, onManualSync, onRestoreFromCloud, isOnline, pendingChanges, onExportJSON, onImportJSON, profileName, onSaveProfileName, autoSync, onSaveAutoSync, }) {
     const cats = useCategories();
     const [confirmClear, setConfirmClear] = useState(false);
+    const [confirmRestore, setConfirmRestore] = useState(false);
+    const [jsonImportMsg, setJsonImportMsg] = useState("");
+    const jsonFileInputRef = useRef(null);
     const [editingName, setEditingName] = useState(false);
     const [nameDraft, setNameDraft] = useState("");
     const [showExport, setShowExport] = useState(false);
@@ -3079,7 +3150,18 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
                     React.createElement("div", { style: styles.accountEmail }, user.email))),
             React.createElement("div", { style: styles.syncStatusRow },
                 React.createElement(Icon, { name: "sync", size: 13, style: { verticalAlign: "-2px", marginRight: 4 } }),
-                syncStatus === "syncing" ? "সিঙ্ক হচ্ছে…" : syncStatus === "error" ? "⚠ সিঙ্ক করা যায়নি" : lastSyncedAt ? `শেষ সিঙ্ক: ${formatSyncTime(lastSyncedAt)}` : "এখনো সিঙ্ক হয়নি"),
+                !isOnline
+                    ? "📴 অফলাইন — ইন্টারনেট এলে স্বয়ংক্রিয়ভাবে সিঙ্ক হবে"
+                    : syncStatus === "syncing"
+                        ? "সিঙ্ক হচ্ছে…"
+                        : syncStatus === "error"
+                            ? "⚠ সিঙ্ক করা যায়নি"
+                            : lastSyncedAt
+                                ? `শেষ সিঙ্ক: ${formatSyncTime(lastSyncedAt)}`
+                                : "এখনো সিঙ্ক হয়নি",
+                pendingChanges > 0 && React.createElement("span", { style: styles.pendingBadge },
+                    toBnDigits(pendingChanges),
+                    " \u09AA\u09C7\u09A8\u09CD\u09A1\u09BF\u0982")),
             React.createElement("div", { style: styles.autoSyncRow },
                 React.createElement("div", null,
                     React.createElement("div", { style: styles.autoSyncLabel }, "\u09B8\u09CD\u09AC\u09AF\u09BC\u0982\u0995\u09CD\u09B0\u09BF\u09AF\u09BC Sync"),
@@ -3087,10 +3169,25 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
                 React.createElement("button", { style: Object.assign(Object.assign({}, styles.toggleSwitch), (autoSync ? styles.toggleSwitchOn : {})), onClick: () => onSaveAutoSync(!autoSync), "aria-label": "\u09B8\u09CD\u09AC\u09AF\u09BC\u0982\u0995\u09CD\u09B0\u09BF\u09AF\u09BC \u09B8\u09BF\u0999\u09CD\u0995 \u099A\u09BE\u09B2\u09C1/\u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8" },
                     React.createElement("span", { style: Object.assign(Object.assign({}, styles.toggleKnob), (autoSync ? styles.toggleKnobOn : {})) }))),
             React.createElement("div", { style: styles.formActions },
-                React.createElement("button", { style: styles.saveBtn, onClick: onManualSync }, "\u098F\u0996\u09A8\u0987 Sync \u0995\u09B0\u09C1\u09A8")),
-            React.createElement("button", { style: styles.settingsRow, onClick: onRestoreFromCloud },
+                React.createElement("button", { style: styles.saveBtn, onClick: onManualSync, disabled: !isOnline }, "\u098F\u0996\u09A8\u0987 Sync \u0995\u09B0\u09C1\u09A8")),
+            React.createElement("button", { style: styles.settingsRow, onClick: () => {
+                    if (pendingChanges > 0) {
+                        setConfirmRestore(true);
+                    }
+                    else {
+                        onRestoreFromCloud();
+                    }
+                } },
                 React.createElement("span", null, "\u0995\u09CD\u09B2\u09BE\u0989\u09A1 \u09A5\u09C7\u0995\u09C7 Restore \u0995\u09B0\u09C1\u09A8"),
                 React.createElement("span", { style: styles.settingsRowValue }, "\u203A")),
+            confirmRestore && (React.createElement("div", { style: styles.confirmBox },
+                React.createElement("div", { style: { marginBottom: 8 } },
+                    "\u0986\u09AA\u09A8\u09BE\u09B0 \u0995\u09BF\u099B\u09C1 \u09AA\u09B0\u09BF\u09AC\u09B0\u09CD\u09A4\u09A8 \u098F\u0996\u09A8\u09CB \u0995\u09CD\u09B2\u09BE\u0989\u09A1\u09C7 \u09B8\u09BF\u0999\u09CD\u0995 \u09B9\u09AF\u09BC\u09A8\u09BF (",
+                    toBnDigits(pendingChanges),
+                    "\u099F\u09BF) \u2014 Restore \u0995\u09B0\u09B2\u09C7 \u09B8\u09C7\u0997\u09C1\u09B2\u09CB \u09B9\u09BE\u09B0\u09BF\u09AF\u09BC\u09C7 \u09AF\u09BE\u09AC\u09C7\u0964 \u09A4\u09AC\u09C1 Restore \u0995\u09B0\u09AC\u09C7\u09A8?"),
+                React.createElement("div", { style: styles.formActions },
+                    React.createElement("button", { style: styles.deleteBtn, onClick: () => { onRestoreFromCloud(); setConfirmRestore(false); } }, "\u09B9\u09CD\u09AF\u09BE\u0981, Restore \u0995\u09B0\u09C1\u09A8"),
+                    React.createElement("button", { style: styles.saveBtn, onClick: () => setConfirmRestore(false) }, "\u09AC\u09BE\u09A4\u09BF\u09B2")))),
             React.createElement("div", { style: styles.securityNote },
                 React.createElement(Icon, { name: "security", size: 12, style: { verticalAlign: "-1px", marginRight: 4 } }),
                 "\u0986\u09AA\u09A8\u09BE\u09B0 \u09A1\u09C7\u099F\u09BE \u0986\u09AA\u09A8\u09BE\u09B0 Google \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u09C7\u09B0 \u09B8\u09BE\u09A5\u09C7 \u09A8\u09BF\u09B0\u09BE\u09AA\u09A6\u09AD\u09BE\u09AC\u09C7 \u09B8\u0982\u09AF\u09C1\u0995\u09CD\u09A4"),
@@ -3153,8 +3250,44 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
                 React.createElement("button", { style: styles.saveBtn, onClick: saveSpecial }, specialSaved ? "সংরক্ষিত হয়েছে ✓" : "সংরক্ষণ করুন"),
                 React.createElement("div", { style: { height: 10 } })))),
         React.createElement(SettingsSection, { title: "\u09AC\u09CD\u09AF\u09BE\u0995\u0986\u09AA" },
+            React.createElement("button", { style: styles.settingsRow, onClick: () => {
+                    const json = onExportJSON();
+                    const blob = new Blob([json], { type: "application/json" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `hisab-khata-backup-${todayStr()}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                } },
+                React.createElement("span", null,
+                    React.createElement(Icon, { name: "backup", size: 14, style: { verticalAlign: "-3px", marginRight: 5 } }),
+                    " \u09B8\u09AE\u09CD\u09AA\u09C2\u09B0\u09CD\u09A3 \u09AC\u09CD\u09AF\u09BE\u0995\u0986\u09AA \u09A1\u09BE\u0989\u09A8\u09B2\u09CB\u09A1 \u0995\u09B0\u09C1\u09A8 (JSON)"),
+                React.createElement("span", { style: styles.settingsRowValue }, "\u203A")),
+            React.createElement("button", { style: styles.settingsRow, onClick: () => jsonFileInputRef.current && jsonFileInputRef.current.click() },
+                React.createElement("span", null,
+                    React.createElement(Icon, { name: "sync", size: 14, style: { verticalAlign: "-3px", marginRight: 5 } }),
+                    " JSON \u09AC\u09CD\u09AF\u09BE\u0995\u0986\u09AA \u09A5\u09C7\u0995\u09C7 \u09AB\u09BF\u09B0\u09BF\u09AF\u09BC\u09C7 \u0986\u09A8\u09C1\u09A8"),
+                React.createElement("span", { style: styles.settingsRowValue }, "\u203A")),
+            React.createElement("input", { ref: jsonFileInputRef, type: "file", accept: "application/json", style: { display: "none" }, onChange: (e) => {
+                    const file = e.target.files && e.target.files[0];
+                    if (!file)
+                        return;
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const ok = onImportJSON(String(reader.result));
+                        setJsonImportMsg(ok ? "ব্যাকআপ থেকে সফলভাবে ফিরিয়ে আনা হয়েছে ✓" : "এই ফাইলটা পড়া যায়নি — সঠিক ব্যাকআপ ফাইল কিনা দেখুন");
+                        setTimeout(() => setJsonImportMsg(""), 4000);
+                    };
+                    reader.readAsText(file);
+                    e.target.value = "";
+                } }),
+            jsonImportMsg ? React.createElement("div", { style: styles.formHint }, jsonImportMsg) : null,
+            React.createElement("div", { style: { height: 6 } }),
             React.createElement("button", { style: styles.settingsRow, onClick: () => setShowExport((v) => !v) },
-                React.createElement("span", null, "\u09A1\u09C7\u099F\u09BE \u098F\u0995\u09CD\u09B8\u09AA\u09CB\u09B0\u09CD\u099F \u0995\u09B0\u09C1\u09A8 (CSV)"),
+                React.createElement("span", null, "\u09B6\u09C1\u09A7\u09C1 \u09B2\u09C7\u09A8\u09A6\u09C7\u09A8 \u098F\u0995\u09CD\u09B8\u09AA\u09CB\u09B0\u09CD\u099F \u0995\u09B0\u09C1\u09A8 (CSV)"),
                 React.createElement("span", { style: styles.settingsRowValue },
                     showExport ? "লুকান" : "দেখুন",
                     " \u203A")),
@@ -3167,7 +3300,7 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
                     showImport ? "লুকান" : "দেখুন",
                     " \u203A")),
             showImport && (React.createElement("div", null,
-                React.createElement("div", { style: styles.formHint }, "\u098F\u0995\u09CD\u09B8\u09AA\u09CB\u09B0\u09CD\u099F \u0995\u09B0\u09BE CSV (\u09A4\u09BE\u09B0\u09BF\u0996,\u09A7\u09B0\u09A8,\u0996\u09BE\u09A4,\u09AA\u09B0\u09BF\u09AE\u09BE\u09A3,\u09AE\u09BE\u09A7\u09CD\u09AF\u09AE,\u09A8\u09CB\u099F \u09AB\u09B0\u09AE\u09CD\u09AF\u09BE\u099F\u09C7) \u098F\u0996\u09BE\u09A8\u09C7 \u09AA\u09C7\u09B8\u09CD\u099F \u0995\u09B0\u09C7 \u09AF\u09CB\u0997 \u0995\u09B0\u09C1\u09A8\u0964 \u098F\u0987 \u0985\u09CD\u09AF\u09BE\u09AA\u09C7 \u09B8\u09B0\u09BE\u09B8\u09B0\u09BF Google \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AF\u09C1\u0995\u09CD\u09A4 \u0995\u09B0\u09C7 \u0985\u099F\u09CB-\u09B8\u09BF\u0999\u09CD\u0995 \u0995\u09B0\u09BE\u09B0 \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE \u098F\u0996\u09A8\u09CB \u09A8\u09C7\u0987 \u2014 \u0995\u09AA\u09BF-\u09AA\u09C7\u09B8\u09CD\u099F \u0995\u09B0\u09C7\u0987 \u09AC\u09CD\u09AF\u09BE\u0995\u0986\u09AA \u09A8\u09C7\u0993\u09AF\u09BC\u09BE \u0993 \u09AB\u09C7\u09B0\u09BE\u09A8\u09CB \u09AF\u09BE\u09AC\u09C7\u0964"),
+                React.createElement("div", { style: styles.formHint }, "\u098F\u0995\u09CD\u09B8\u09AA\u09CB\u09B0\u09CD\u099F \u0995\u09B0\u09BE CSV (\u09A4\u09BE\u09B0\u09BF\u0996,\u09A7\u09B0\u09A8,\u0996\u09BE\u09A4,\u09AA\u09B0\u09BF\u09AE\u09BE\u09A3,\u09AE\u09BE\u09A7\u09CD\u09AF\u09AE,\u09A8\u09CB\u099F \u09AB\u09B0\u09AE\u09CD\u09AF\u09BE\u099F\u09C7) \u098F\u0996\u09BE\u09A8\u09C7 \u09AA\u09C7\u09B8\u09CD\u099F \u0995\u09B0\u09C7 \u09AF\u09CB\u0997 \u0995\u09B0\u09C1\u09A8\u0964 \u098F\u099F\u09BE \u09B6\u09C1\u09A7\u09C1 \u09B2\u09C7\u09A8\u09A6\u09C7\u09A8 \u09AF\u09CB\u0997 \u0995\u09B0\u09C7 \u2014 \u09B8\u09AE\u09CD\u09AA\u09C2\u09B0\u09CD\u09A3 \u09AC\u09CD\u09AF\u09BE\u0995\u0986\u09AA/\u09B0\u09BF\u09B8\u09CD\u099F\u09CB\u09B0\u09C7\u09B0 \u099C\u09A8\u09CD\u09AF \u0989\u09AA\u09B0\u09C7\u09B0 JSON \u0985\u09AA\u09B6\u09A8\u099F\u09BE \u09AC\u09CD\u09AF\u09AC\u09B9\u09BE\u09B0 \u0995\u09B0\u09C1\u09A8\u0964"),
                 React.createElement("textarea", { style: styles.exportBox, value: importText, onChange: (e) => setImportText(e.target.value), placeholder: "তারিখ,ধরন,খাত,পরিমাণ,মাধ্যম,নোট\n2026-08-01,ব্যয়,খাবার,150,ক্যাশ,দুপুরের খাবার" }),
                 importMsg ? React.createElement("div", { style: styles.formHint }, importMsg) : null,
                 React.createElement("button", { style: styles.saveBtn, onClick: runImport }, "\u09AF\u09CB\u0997 \u0995\u09B0\u09C1\u09A8"),
@@ -5019,6 +5152,16 @@ const styles = {
         fontSize: 11.5,
         color: "var(--hk-text-muted)",
         marginBottom: 10,
+    },
+    pendingBadge: {
+        display: "inline-block",
+        marginLeft: 8,
+        fontSize: 10,
+        fontWeight: 700,
+        background: "var(--hk-gold)",
+        color: "var(--hk-card)",
+        borderRadius: 20,
+        padding: "1px 8px",
     },
     accountNameBtn: {
         display: "flex",
