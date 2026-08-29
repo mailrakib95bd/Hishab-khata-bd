@@ -284,6 +284,15 @@ function formatTimeBn(time) {
         h12 = 12;
     return `${period} ${toBnDigits(h12)}:${toBnDigits(String(m).padStart(2, "0"))}`;
 }
+// "রাকিব" -> "রাকিবের খাতা", "শেখ আশরাফুল" -> "শেখ আশরাফুলের খাতা" —
+// falls back to a neutral title when no profile name is set yet
+const APP_TAGLINE = "জীবনের হিসাব থেকে আখিরাতের হিসাব";
+function dashboardTitle(name) {
+    const trimmed = (name || "").trim();
+    if (!trimmed)
+        return "আমার খাতা";
+    return `${trimmed}ের খাতা`;
+}
 // formats a JS timestamp (ms) as "আজ, সকাল ১০:৩০" or a full date for older syncs
 function formatSyncTime(ts) {
     if (!ts)
@@ -671,7 +680,9 @@ function App() {
                     setPin(d.pin || null);
                     setUnlocked(!d.pin);
                     setTheme(d.theme || "light");
-                    setAutoSync(d.autoSync !== false);
+                    // Auto Sync is always on — no user-facing toggle exists anymore,
+                    // so a legacy "false" saved by an older version is intentionally
+                    // ignored rather than leaving sync silently disabled forever
                 }
                 else {
                     // migrate pin/theme out of the old flat key, if present
@@ -901,13 +912,22 @@ function App() {
         setBudget(val);
         persistAll({ budget: val });
     };
+    // clears EVERY user-scoped field (not just transactions/budget/tasks/
+    // debts/transfers — special days, custom categories, category budgets,
+    // wallet opening balances, and the profile name too), and — critically —
+    // if signed in, also pushes the cleared state to Firestore so the next
+    // auto-sync can't silently bring the old data back from the cloud
     const clearAll = () => {
-        setTransactions([]);
-        setBudget(0);
-        setTasks([]);
-        setDebts([]);
-        setTransfers([]);
-        persistAll({ transactions: [], budget: 0, tasks: [], debts: [], transfers: [] });
+        applyUserData(null); // resets every field to the same defaults applyUserData always uses
+        const cleared = {
+            transactions: [], budget: 0, tasks: [], specialDays: {}, debts: [],
+            expenseCats: EXPENSE_CATS, incomeCats: INCOME_CATS, categoryBudgets: {},
+            accountOpening: {}, transfers: [], profileName: null,
+        };
+        persistAll(cleared);
+        if (user && window.FB) {
+            window.FB.saveCloudData(user.uid, cleared).catch(() => { });
+        }
     };
     const addTask = (text) => {
         const trimmed = text.trim();
@@ -1084,7 +1104,7 @@ function App() {
                 setActiveReminder(fired.join(" · "));
                 try {
                     if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-                        new Notification("রাকিবের খাতা — রিমাইন্ডার", { body: fired.join(", ") });
+                        new Notification(`${dashboardTitle(profileName)} — রিমাইন্ডার`, { body: fired.join(", ") });
                     }
                 }
                 catch (e) {
@@ -1105,24 +1125,24 @@ function App() {
             React.createElement(FontLoader, null),
             React.createElement("div", { style: styles.loadingMonogram }, "\u09F3"),
             React.createElement("div", { style: styles.loadingBrand }, "\u09B9\u09BF\u09B8\u09BE\u09AC-\u0996\u09BE\u09A4\u09BE"),
-            React.createElement("div", { style: styles.loadingTagline }, "\u0986\u09AA\u09A8\u09BE\u09B0 \u099F\u09BE\u0995\u09BE\u09B0 \u0997\u09B2\u09CD\u09AA"),
+            React.createElement("div", { style: styles.loadingTagline }, "\u099C\u09C0\u09AC\u09A8\u09C7\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC \u09A5\u09C7\u0995\u09C7 \u0986\u0996\u09BF\u09B0\u09BE\u09A4\u09C7\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC"),
             React.createElement("div", { style: styles.loadingSpinner }),
             React.createElement("div", { style: { fontFamily: "'Hind Siliguri', sans-serif", color: "var(--hk-text-on-dark-soft)", marginTop: 14, fontSize: 12.5 } }, "\u0996\u09BE\u09A4\u09BE \u0996\u09CB\u09B2\u09BE \u09B9\u099A\u09CD\u099B\u09C7\u2026")));
     }
     if (pin && !unlocked) {
         return (React.createElement("div", { style: styles.app },
             React.createElement(FontLoader, null),
-            React.createElement(LockScreen, { pin: pin, onUnlock: () => setUnlocked(true) })));
+            React.createElement(LockScreen, { pin: pin, onUnlock: () => setUnlocked(true), profileName: profileName })));
     }
     return (React.createElement(CatCtx.Provider, { value: { expenseCats, incomeCats } },
         React.createElement("div", { style: styles.app },
             React.createElement(FontLoader, null),
-            React.createElement(Header, { transactions: transactions, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true) }),
+            React.createElement(Header, { transactions: transactions, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName }),
             React.createElement("main", { style: styles.main },
                 tab === "dashboard" && (React.createElement(Dashboard, { transactions: transactions, budget: budget, categoryBudgets: categoryBudgets, debts: debts, accounts: accounts, onEditBudget: () => setShowBudget(true), onOpenTx: (t) => setEditingTx(t), onGoDebts: () => setTab("debts"), onGoReports: () => setTab("reports"), onQuickAdd: (type) => {
                         setQuickAddType(type);
                         setShowAdd(true);
-                    }, onTransfer: () => setShowTransfer(true), onTransferHistory: () => setShowTransferHistory(true) })),
+                    }, onTransfer: () => setShowTransfer(true), onTransferHistory: () => setShowTransferHistory(true), profileName: profileName })),
                 tab === "timeline" && (React.createElement(Timeline, { transactions: transactions, onOpenTx: (t) => setEditingTx(t) })),
                 tab === "debts" && (React.createElement(DebtsView, { debts: debts, onOpenDebt: (d) => setEditingDebt(d), onAddDebt: () => setShowAddDebt(true) })),
                 tab === "reports" && React.createElement(Reports, { transactions: transactions, categoryBudgets: categoryBudgets, budget: budget }),
@@ -1258,7 +1278,7 @@ function LoginScreen({ onClose, onSignedIn }) {
         }
     };
     return (React.createElement(ModalShell, { onClose: onClose, title: "\u09B9\u09BF\u09B8\u09BE\u09AC \u0996\u09BE\u09A4\u09BE" },
-        React.createElement("div", { style: styles.loginTagline }, "\u0986\u09AA\u09A8\u09BE\u09B0 \u099C\u09C0\u09AC\u09A8, \u0986\u09AA\u09A8\u09BE\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC"),
+        React.createElement("div", { style: styles.loginTagline }, APP_TAGLINE),
         !fbReady && (React.createElement("div", { style: styles.formHint }, "\u0995\u09CD\u09B2\u09BE\u0989\u09A1 \u09B8\u0982\u09AF\u09CB\u0997 \u09B2\u09CB\u09A1 \u09B9\u099A\u09CD\u099B\u09C7 \u09AC\u09BE \u0987\u09A8\u09CD\u099F\u09BE\u09B0\u09A8\u09C7\u099F \u09A8\u09C7\u0987 \u2014 \u098F\u0995\u099F\u09C1 \u09AA\u09B0 \u0986\u09AC\u09BE\u09B0 \u099A\u09C7\u09B7\u09CD\u099F\u09BE \u0995\u09B0\u09C1\u09A8\u0964 \u098F\u09A6\u09BF\u0995\u09C7 \u0985\u09CD\u09AF\u09BE\u09AA \u09B8\u09CD\u09AC\u09BE\u09AD\u09BE\u09AC\u09BF\u0995\u09AD\u09BE\u09AC\u09C7\u0987 \u09B8\u09CD\u09A5\u09BE\u09A8\u09C0\u09AF\u09BC\u09AD\u09BE\u09AC\u09C7 (\u098F\u0987 \u09A1\u09BF\u09AD\u09BE\u0987\u09B8\u09C7) \u0995\u09BE\u099C \u0995\u09B0\u09AC\u09C7\u0964")),
         React.createElement("button", { style: styles.googleBtn, onClick: runGoogle, disabled: !fbReady || busy },
             React.createElement("span", { style: styles.googleG }, "G"),
@@ -1293,7 +1313,7 @@ function friendlyAuthError(e) {
     };
     return map[code] || "কিছু একটা সমস্যা হয়েছে, আবার চেষ্টা করুন";
 }
-function LockScreen({ pin, onUnlock }) {
+function LockScreen({ pin, onUnlock, profileName }) {
     const [entry, setEntry] = useState("");
     const [err, setErr] = useState(false);
     const press = (d) => {
@@ -1315,7 +1335,9 @@ function LockScreen({ pin, onUnlock }) {
     return (React.createElement("div", { style: styles.lockScreen },
         React.createElement("div", { style: styles.lockTitle },
             React.createElement(Icon, { name: "security", size: 17, style: { verticalAlign: "-3px", marginRight: 5 } }),
-            " \u09B0\u09BE\u0995\u09BF\u09AC\u09C7\u09B0 \u0996\u09BE\u09A4\u09BE \u09B2\u0995 \u0995\u09B0\u09BE \u0986\u099B\u09C7"),
+            " ",
+            dashboardTitle(profileName),
+            " \u09B2\u0995 \u0995\u09B0\u09BE \u0986\u099B\u09C7"),
         React.createElement("div", { style: styles.lockSub }, err ? "ভুল পিন, আবার চেষ্টা করুন" : "৪ সংখ্যার পিন দিন"),
         React.createElement("div", { style: styles.lockDotsRow }, [0, 1, 2, 3].map((i) => (React.createElement("div", { key: i, style: Object.assign(Object.assign({}, styles.lockDot), { background: i < entry.length ? "var(--hk-gold)" : "transparent" }) })))),
         React.createElement("div", { style: styles.lockPad }, ["১", "২", "৩", "৪", "৫", "৬", "৭", "৮", "৯", "", "০", "⌫"].map((d, i) => (React.createElement("button", { key: i, style: Object.assign(Object.assign({}, styles.lockKey), { visibility: d === "" ? "hidden" : "visible" }), onClick: () => {
@@ -1326,7 +1348,7 @@ function LockScreen({ pin, onUnlock }) {
             } }, d))))));
 }
 /* ---------------- header ---------------- */
-function Header({ transactions, onSettings, tasks, onAddTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar }) {
+function Header({ transactions, onSettings, tasks, onAddTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName }) {
     const [showTasks, setShowTasks] = useState(false);
     const [newTask, setNewTask] = useState("");
     const [reminderEditId, setReminderEditId] = useState(null);
@@ -1356,7 +1378,7 @@ function Header({ transactions, onSettings, tasks, onAddTask, onToggleTask, onDe
         React.createElement("div", { style: styles.headerPerf }, Array.from({ length: 14 }).map((_, i) => (React.createElement("span", { key: i, style: styles.perfDot })))),
         React.createElement("div", { style: styles.headerContent },
             React.createElement("div", null,
-                React.createElement("div", { style: styles.headerEyebrow }, "\u09B0\u09BE\u0995\u09BF\u09AC\u09C7\u09B0 \u0996\u09BE\u09A4\u09BE"),
+                React.createElement("div", { style: styles.headerEyebrow }, dashboardTitle(profileName)),
                 React.createElement("div", { style: styles.headerBalanceLabel }, "\u09AC\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09B8"),
                 React.createElement("div", { style: Object.assign(Object.assign({}, styles.headerBalance), { color: balance < 0 ? "#E38477" : balance > 0 ? "#7FCB9D" : "var(--hk-text-on-dark)" }) }, formatTaka(balance, { sign: true, symbol: false }))),
             React.createElement("div", { style: { position: "relative", display: "flex", gap: 8 } },
@@ -1405,7 +1427,7 @@ function Header({ transactions, onSettings, tasks, onAddTask, onToggleTask, onDe
                             React.createElement("button", { style: styles.taskAddBtn, onClick: submitTask }, "+"))))))))));
 }
 /* ---------------- dashboard ---------------- */
-function Dashboard({ transactions, budget, categoryBudgets, debts, accounts, onEditBudget, onOpenTx, onGoDebts, onGoReports, onQuickAdd, onTransfer, onTransferHistory }) {
+function Dashboard({ transactions, budget, categoryBudgets, debts, accounts, onEditBudget, onOpenTx, onGoDebts, onGoReports, onQuickAdd, onTransfer, onTransferHistory, profileName }) {
     const cats = useCategories();
     const today = todayStr();
     const thisMonthKey = monthKeyOf(today);
@@ -1473,16 +1495,9 @@ function Dashboard({ transactions, budget, categoryBudgets, debts, accounts, onE
     const recent = useMemo(() => [...transactions]
         .sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : b.createdAt - a.createdAt))
         .slice(0, 5), [transactions]);
-    const greeting = useMemo(() => {
-        const h = now.getHours();
-        if (h >= 4 && h < 12)
-            return { text: "সুপ্রভাত", icon: "🌿" };
-        if (h >= 12 && h < 16)
-            return { text: "শুভ অপরাহ্ন", icon: "☀️" };
-        if (h >= 16 && h < 19)
-            return { text: "শুভ সন্ধ্যা", icon: "🌇" };
-        return { text: "শুভ রাত্রি", icon: "🌙" };
-    }, []);
+    // fixed greeting (no time-of-day variants) — always the same Islamic
+    // greeting with the person's own name, per their explicit preference
+    const greeting = useMemo(() => ({ text: `আসসালামু আলাইকুম। 😊 ${(profileName || "").trim() || "স্বাগতম"}`, icon: "" }), [profileName]);
     const dateInfo = formatDateBn(today);
     const bangla = gregorianToBangla(now);
     const hijri = gregorianToHijri(islamicEffectiveDate(now));
@@ -1613,10 +1628,7 @@ function Dashboard({ transactions, budget, categoryBudgets, debts, accounts, onE
     if (isNewUser) {
         return (React.createElement("div", { style: styles.pageLedger },
             React.createElement("div", { style: styles.onboardCard },
-                React.createElement("div", { style: styles.onboardTitle },
-                    greeting.icon,
-                    " ",
-                    greeting.text),
+                React.createElement("div", { style: styles.onboardTitle }, greeting.text),
                 React.createElement("div", { style: styles.onboardSub }, "\u0986\u09AA\u09A8\u09BE\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC\u09C7\u09B0 \u09AF\u09BE\u09A4\u09CD\u09B0\u09BE \u0986\u099C \u09A5\u09C7\u0995\u09C7\u0987 \u09B6\u09C1\u09B0\u09C1 \u0995\u09B0\u09C1\u09A8\u0964"),
                 React.createElement("button", { style: styles.onboardBtn, onClick: () => onQuickAdd("income") },
                     React.createElement("span", null, "\u09AA\u09CD\u09B0\u09A5\u09AE \u0986\u09AF\u09BC \u09AF\u09CB\u0997 \u0995\u09B0\u09C1\u09A8"),
@@ -1630,10 +1642,7 @@ function Dashboard({ transactions, budget, categoryBudgets, debts, accounts, onE
     }
     return (React.createElement("div", { style: styles.pageLedger },
         React.createElement("div", { style: styles.todayStrip },
-            React.createElement("div", null,
-                greeting.icon,
-                " ",
-                greeting.text),
+            React.createElement("div", null, greeting.text),
             React.createElement("div", { style: styles.todayStripSub },
                 dateInfo.weekday,
                 ", ",
@@ -3021,6 +3030,9 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
     const cats = useCategories();
     const [confirmClear, setConfirmClear] = useState(false);
     const [confirmRestore, setConfirmRestore] = useState(false);
+    const [confirmLogout, setConfirmLogout] = useState(false);
+    const [showAccountSection, setShowAccountSection] = useState(false);
+    const [showSecuritySection, setShowSecuritySection] = useState(false);
     const [jsonImportMsg, setJsonImportMsg] = useState("");
     const jsonFileInputRef = useRef(null);
     const [editingName, setEditingName] = useState(false);
@@ -3132,66 +3144,70 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
         }
     };
     return (React.createElement(ModalShell, { onClose: onClose, title: "\u09B8\u09C7\u099F\u09BF\u0982\u09B8" },
-        React.createElement(SettingsSection, { title: "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F" }, user ? (React.createElement("div", { style: styles.accountCard },
-            React.createElement("div", { style: styles.accountTopRow },
-                user.photoURL ? (React.createElement("img", { src: user.photoURL, alt: "", style: styles.accountAvatar })) : (React.createElement("div", { style: styles.accountAvatarFallback }, (profileName || user.displayName || user.email || "?")[0].toUpperCase())),
-                React.createElement("div", { style: { flex: 1, minWidth: 0 } },
-                    editingName ? (React.createElement("div", { style: styles.nameEditRow },
-                        React.createElement("input", { style: styles.nameEditInput, value: nameDraft, onChange: (e) => setNameDraft(e.target.value), placeholder: "\u0986\u09AA\u09A8\u09BE\u09B0 \u09A8\u09BE\u09AE", autoFocus: true }),
-                        React.createElement("button", { style: styles.nameEditSaveBtn, onClick: () => {
-                                onSaveProfileName(nameDraft);
-                                setEditingName(false);
-                            } }, "\u2713"))) : (React.createElement("button", { style: styles.accountNameBtn, onClick: () => {
-                            setNameDraft(profileName || user.displayName || "");
-                            setEditingName(true);
-                        } },
-                        React.createElement("span", { style: styles.accountName }, profileName || user.displayName || "ব্যবহারকারী"),
-                        React.createElement(Icon, { name: "edit", size: 12, style: { opacity: 0.55, flexShrink: 0 } }))),
-                    React.createElement("div", { style: styles.accountEmail }, user.email))),
-            React.createElement("div", { style: styles.syncStatusRow },
-                React.createElement(Icon, { name: "sync", size: 13, style: { verticalAlign: "-2px", marginRight: 4 } }),
-                !isOnline
-                    ? "📴 অফলাইন — ইন্টারনেট এলে স্বয়ংক্রিয়ভাবে সিঙ্ক হবে"
-                    : syncStatus === "syncing"
-                        ? "সিঙ্ক হচ্ছে…"
-                        : syncStatus === "error"
-                            ? "⚠ সিঙ্ক করা যায়নি"
-                            : lastSyncedAt
-                                ? `শেষ সিঙ্ক: ${formatSyncTime(lastSyncedAt)}`
-                                : "এখনো সিঙ্ক হয়নি",
-                pendingChanges > 0 && React.createElement("span", { style: styles.pendingBadge },
-                    toBnDigits(pendingChanges),
-                    " \u09AA\u09C7\u09A8\u09CD\u09A1\u09BF\u0982")),
-            React.createElement("div", { style: styles.autoSyncRow },
-                React.createElement("div", null,
-                    React.createElement("div", { style: styles.autoSyncLabel }, "\u09B8\u09CD\u09AC\u09AF\u09BC\u0982\u0995\u09CD\u09B0\u09BF\u09AF\u09BC Sync"),
-                    React.createElement("div", { style: styles.autoSyncHint }, "\u09A1\u09C7\u099F\u09BE \u09AA\u09B0\u09BF\u09AC\u09B0\u09CD\u09A4\u09A8 \u09B9\u09B2\u09C7 \u09B8\u09CD\u09AC\u09AF\u09BC\u0982\u0995\u09CD\u09B0\u09BF\u09AF\u09BC\u09AD\u09BE\u09AC\u09C7 Cloud-\u098F \u09B8\u0982\u09B0\u0995\u09CD\u09B7\u09A3 \u0995\u09B0\u09BE \u09B9\u09AC\u09C7")),
-                React.createElement("button", { style: Object.assign(Object.assign({}, styles.toggleSwitch), (autoSync ? styles.toggleSwitchOn : {})), onClick: () => onSaveAutoSync(!autoSync), "aria-label": "\u09B8\u09CD\u09AC\u09AF\u09BC\u0982\u0995\u09CD\u09B0\u09BF\u09AF\u09BC \u09B8\u09BF\u0999\u09CD\u0995 \u099A\u09BE\u09B2\u09C1/\u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8" },
-                    React.createElement("span", { style: Object.assign(Object.assign({}, styles.toggleKnob), (autoSync ? styles.toggleKnobOn : {})) }))),
-            React.createElement("div", { style: styles.formActions },
-                React.createElement("button", { style: styles.saveBtn, onClick: onManualSync, disabled: !isOnline }, "\u098F\u0996\u09A8\u0987 Sync \u0995\u09B0\u09C1\u09A8")),
-            React.createElement("button", { style: styles.settingsRow, onClick: () => {
-                    if (pendingChanges > 0) {
-                        setConfirmRestore(true);
-                    }
-                    else {
-                        onRestoreFromCloud();
-                    }
-                } },
-                React.createElement("span", null, "\u0995\u09CD\u09B2\u09BE\u0989\u09A1 \u09A5\u09C7\u0995\u09C7 Restore \u0995\u09B0\u09C1\u09A8"),
-                React.createElement("span", { style: styles.settingsRowValue }, "\u203A")),
-            confirmRestore && (React.createElement("div", { style: styles.confirmBox },
-                React.createElement("div", { style: { marginBottom: 8 } },
-                    "\u0986\u09AA\u09A8\u09BE\u09B0 \u0995\u09BF\u099B\u09C1 \u09AA\u09B0\u09BF\u09AC\u09B0\u09CD\u09A4\u09A8 \u098F\u0996\u09A8\u09CB \u0995\u09CD\u09B2\u09BE\u0989\u09A1\u09C7 \u09B8\u09BF\u0999\u09CD\u0995 \u09B9\u09AF\u09BC\u09A8\u09BF (",
-                    toBnDigits(pendingChanges),
-                    "\u099F\u09BF) \u2014 Restore \u0995\u09B0\u09B2\u09C7 \u09B8\u09C7\u0997\u09C1\u09B2\u09CB \u09B9\u09BE\u09B0\u09BF\u09AF\u09BC\u09C7 \u09AF\u09BE\u09AC\u09C7\u0964 \u09A4\u09AC\u09C1 Restore \u0995\u09B0\u09AC\u09C7\u09A8?"),
+        React.createElement(SettingsSection, { title: "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F" }, user ? (React.createElement(React.Fragment, null,
+            React.createElement("button", { style: styles.settingsRow, onClick: () => setShowAccountSection((v) => !v) },
+                React.createElement("span", null, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u0993 \u09AA\u09CD\u09B0\u09CB\u09AB\u09BE\u0987\u09B2"),
+                React.createElement("span", { style: styles.settingsRowValue },
+                    showAccountSection ? "লুকান" : "দেখুন",
+                    " \u203A")),
+            showAccountSection && (React.createElement("div", { style: styles.accountCard },
+                React.createElement("div", { style: styles.accountTopRow },
+                    user.photoURL ? (React.createElement("img", { src: user.photoURL, alt: "", style: styles.accountAvatar })) : (React.createElement("div", { style: styles.accountAvatarFallback }, (profileName || user.displayName || user.email || "?")[0].toUpperCase())),
+                    React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                        editingName ? (React.createElement("div", { style: styles.nameEditRow },
+                            React.createElement("input", { style: styles.nameEditInput, value: nameDraft, onChange: (e) => setNameDraft(e.target.value), placeholder: "\u0986\u09AA\u09A8\u09BE\u09B0 \u09A8\u09BE\u09AE", autoFocus: true }),
+                            React.createElement("button", { style: styles.nameEditSaveBtn, onClick: () => {
+                                    onSaveProfileName(nameDraft);
+                                    setEditingName(false);
+                                } }, "\u2713"))) : (React.createElement("button", { style: styles.accountNameBtn, onClick: () => {
+                                setNameDraft(profileName || user.displayName || "");
+                                setEditingName(true);
+                            } },
+                            React.createElement("span", { style: styles.accountName }, profileName || user.displayName || "ব্যবহারকারী"),
+                            React.createElement(Icon, { name: "edit", size: 12, style: { opacity: 0.55, flexShrink: 0 } }))),
+                        React.createElement("div", { style: styles.accountEmail }, user.email))),
+                React.createElement("div", { style: styles.syncStatusRow },
+                    React.createElement(Icon, { name: "sync", size: 13, style: { verticalAlign: "-2px", marginRight: 4 } }),
+                    !isOnline
+                        ? "📴 অফলাইন — ইন্টারনেট এলে স্বয়ংক্রিয়ভাবে সিঙ্ক হবে"
+                        : syncStatus === "syncing"
+                            ? "সিঙ্ক হচ্ছে…"
+                            : syncStatus === "error"
+                                ? "⚠ সিঙ্ক করা যায়নি"
+                                : lastSyncedAt
+                                    ? `শেষ সিঙ্ক: ${formatSyncTime(lastSyncedAt)}`
+                                    : "এখনো সিঙ্ক হয়নি",
+                    pendingChanges > 0 && React.createElement("span", { style: styles.pendingBadge },
+                        toBnDigits(pendingChanges),
+                        " \u09AA\u09C7\u09A8\u09CD\u09A1\u09BF\u0982")),
                 React.createElement("div", { style: styles.formActions },
-                    React.createElement("button", { style: styles.deleteBtn, onClick: () => { onRestoreFromCloud(); setConfirmRestore(false); } }, "\u09B9\u09CD\u09AF\u09BE\u0981, Restore \u0995\u09B0\u09C1\u09A8"),
-                    React.createElement("button", { style: styles.saveBtn, onClick: () => setConfirmRestore(false) }, "\u09AC\u09BE\u09A4\u09BF\u09B2")))),
-            React.createElement("div", { style: styles.securityNote },
-                React.createElement(Icon, { name: "security", size: 12, style: { verticalAlign: "-1px", marginRight: 4 } }),
-                "\u0986\u09AA\u09A8\u09BE\u09B0 \u09A1\u09C7\u099F\u09BE \u0986\u09AA\u09A8\u09BE\u09B0 Google \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u09C7\u09B0 \u09B8\u09BE\u09A5\u09C7 \u09A8\u09BF\u09B0\u09BE\u09AA\u09A6\u09AD\u09BE\u09AC\u09C7 \u09B8\u0982\u09AF\u09C1\u0995\u09CD\u09A4"),
-            React.createElement("button", { style: styles.dangerLink, onClick: onLogout }, "\u09B2\u0997\u0986\u0989\u099F \u0995\u09B0\u09C1\u09A8"))) : (React.createElement("button", { style: styles.settingsRow, onClick: onShowLogin },
+                    React.createElement("button", { style: styles.saveBtn, onClick: onManualSync, disabled: !isOnline }, "\u098F\u0996\u09A8\u0987 Sync \u0995\u09B0\u09C1\u09A8")),
+                React.createElement("button", { style: styles.settingsRow, onClick: () => {
+                        if (pendingChanges > 0) {
+                            setConfirmRestore(true);
+                        }
+                        else {
+                            onRestoreFromCloud();
+                        }
+                    } },
+                    React.createElement("span", null, "\u0995\u09CD\u09B2\u09BE\u0989\u09A1 \u09A5\u09C7\u0995\u09C7 Restore \u0995\u09B0\u09C1\u09A8"),
+                    React.createElement("span", { style: styles.settingsRowValue }, "\u203A")),
+                confirmRestore && (React.createElement("div", { style: styles.confirmBox },
+                    React.createElement("div", { style: { marginBottom: 8 } },
+                        "\u0986\u09AA\u09A8\u09BE\u09B0 \u0995\u09BF\u099B\u09C1 \u09AA\u09B0\u09BF\u09AC\u09B0\u09CD\u09A4\u09A8 \u098F\u0996\u09A8\u09CB \u0995\u09CD\u09B2\u09BE\u0989\u09A1\u09C7 \u09B8\u09BF\u0999\u09CD\u0995 \u09B9\u09AF\u09BC\u09A8\u09BF (",
+                        toBnDigits(pendingChanges),
+                        "\u099F\u09BF) \u2014 Restore \u0995\u09B0\u09B2\u09C7 \u09B8\u09C7\u0997\u09C1\u09B2\u09CB \u09B9\u09BE\u09B0\u09BF\u09AF\u09BC\u09C7 \u09AF\u09BE\u09AC\u09C7\u0964 \u09A4\u09AC\u09C1 Restore \u0995\u09B0\u09AC\u09C7\u09A8?"),
+                    React.createElement("div", { style: styles.formActions },
+                        React.createElement("button", { style: styles.deleteBtn, onClick: () => { onRestoreFromCloud(); setConfirmRestore(false); } }, "\u09B9\u09CD\u09AF\u09BE\u0981, Restore \u0995\u09B0\u09C1\u09A8"),
+                        React.createElement("button", { style: styles.saveBtn, onClick: () => setConfirmRestore(false) }, "\u09AC\u09BE\u09A4\u09BF\u09B2")))),
+                React.createElement("div", { style: styles.securityNote },
+                    React.createElement(Icon, { name: "security", size: 12, style: { verticalAlign: "-1px", marginRight: 4 } }),
+                    "\u0986\u09AA\u09A8\u09BE\u09B0 \u09A1\u09C7\u099F\u09BE \u0986\u09AA\u09A8\u09BE\u09B0 Google \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u09C7\u09B0 \u09B8\u09BE\u09A5\u09C7 \u09A8\u09BF\u09B0\u09BE\u09AA\u09A6\u09AD\u09BE\u09AC\u09C7 \u09B8\u0982\u09AF\u09C1\u0995\u09CD\u09A4"),
+                !confirmLogout ? (React.createElement("button", { style: styles.dangerLink, onClick: () => setConfirmLogout(true) }, "\u09B2\u0997\u0986\u0989\u099F \u0995\u09B0\u09C1\u09A8")) : (React.createElement("div", { style: styles.confirmBox },
+                    React.createElement("div", { style: { marginBottom: 8 } }, "Log out \u0995\u09B0\u09AC\u09C7\u09A8?"),
+                    React.createElement("div", { style: styles.formActions },
+                        React.createElement("button", { style: styles.saveBtn, onClick: () => setConfirmLogout(false) }, "\u09AC\u09BE\u09A4\u09BF\u09B2"),
+                        React.createElement("button", { style: styles.deleteBtn, onClick: () => { setConfirmLogout(false); onLogout(); } }, "Log Out")))))))) : (React.createElement("button", { style: styles.settingsRow, onClick: onShowLogin },
             React.createElement("span", null, "\u09B2\u0997\u0987\u09A8 / \u09A8\u09A4\u09C1\u09A8 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F"),
             React.createElement("span", { style: styles.settingsRowValue }, "\u203A")))),
         React.createElement(SettingsSection, { title: "\u0985\u09CD\u09AF\u09BE\u09AA\u09BF\u09AF\u09BC\u09BE\u09B0\u09C7\u09A8\u09CD\u09B8" },
@@ -3305,32 +3321,39 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
                 importMsg ? React.createElement("div", { style: styles.formHint }, importMsg) : null,
                 React.createElement("button", { style: styles.saveBtn, onClick: runImport }, "\u09AF\u09CB\u0997 \u0995\u09B0\u09C1\u09A8"),
                 React.createElement("div", { style: { height: 10 } })))),
-        React.createElement(SettingsSection, { title: "\u09A8\u09BF\u09B0\u09BE\u09AA\u09A4\u09CD\u09A4\u09BE" },
-            React.createElement("button", { style: styles.settingsRow, onClick: () => { setShowPin((v) => !v); setPinStep1(""); setPinErr(""); } },
-                React.createElement("span", null,
-                    React.createElement(Icon, { name: "security", size: 14, style: { verticalAlign: "-3px", marginRight: 5 } }),
-                    " \u09AA\u09BF\u09A8 \u09B2\u0995 ",
-                    pin ? "(চালু আছে)" : "(বন্ধ)"),
+        React.createElement(SettingsSection, { title: "\uD83D\uDD10 \u09A8\u09BF\u09B0\u09BE\u09AA\u09A4\u09CD\u09A4\u09BE" },
+            React.createElement("button", { style: styles.settingsRow, onClick: () => setShowSecuritySection((v) => !v) },
+                React.createElement("span", null, "\u09A8\u09BF\u09B0\u09BE\u09AA\u09A4\u09CD\u09A4\u09BE \u09B8\u09C7\u099F\u09BF\u0982\u09B8"),
                 React.createElement("span", { style: styles.settingsRowValue },
-                    showPin ? "লুকান" : "দেখুন",
+                    showSecuritySection ? "লুকান" : "দেখুন",
                     " \u203A")),
-            showPin && (React.createElement("div", null,
-                React.createElement("div", { style: styles.formHint }, pin
-                    ? "নতুন ৪-সংখ্যার পিন দুইবার দিন — এটি আগের পিন পরিবর্তন করবে। বায়োমেট্রিক/ফিঙ্গারপ্রিন্ট লক ব্রাউজার-ভিত্তিক এই অ্যাপে নির্ভরযোগ্যভাবে দেওয়া সম্ভব হয়নি, তাই আপাতত শুধু পিন লক দেওয়া হয়েছে।"
-                    : "৪-সংখ্যার একটি পিন দুইবার দিন। অ্যাপ খুললে প্রতিবার এই পিন চাওয়া হবে।"),
-                React.createElement("input", { key: pinStep1, style: styles.textInput, type: "password", inputMode: "numeric", maxLength: 4, placeholder: pinStep1 === "" ? "নতুন পিন" : "আবার লিখুন", onChange: (e) => {
-                        const v = e.target.value.replace(/\D/g, "").slice(0, 4);
-                        if (v.length === 4)
-                            submitPin(v);
-                    } }),
-                pinErr ? React.createElement("div", { style: styles.formErr }, pinErr) : null,
-                pin && (React.createElement("button", { style: styles.dangerLink, onClick: () => { onSavePin(null); setShowPin(false); } }, "\u09AA\u09BF\u09A8 \u09B2\u0995 \u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8")),
-                React.createElement("div", { style: { height: 10 } })))),
-        React.createElement(SettingsSection, { title: "\u09A1\u09C7\u099F\u09BE" }, !confirmClear ? (React.createElement("button", { style: styles.dangerLink, onClick: () => setConfirmClear(true) }, "\u09B8\u09AC \u09A1\u09C7\u099F\u09BE \u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8")) : (React.createElement("div", { style: styles.confirmBox },
-            React.createElement("div", { style: { marginBottom: 8 } }, "\u09A8\u09BF\u09B6\u09CD\u099A\u09BF\u09A4? \u098F\u099F\u09BF \u09AB\u09BF\u09B0\u09BF\u09AF\u09BC\u09C7 \u0986\u09A8\u09BE \u09AF\u09BE\u09AC\u09C7 \u09A8\u09BE\u0964"),
-            React.createElement("div", { style: styles.formActions },
-                React.createElement("button", { style: styles.deleteBtn, onClick: onClearAll }, "\u09B9\u09CD\u09AF\u09BE\u0981, \u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8"),
-                React.createElement("button", { style: styles.saveBtn, onClick: () => setConfirmClear(false) }, "\u09AC\u09BE\u09A4\u09BF\u09B2")))))));
+            showSecuritySection && (React.createElement("div", null,
+                React.createElement("button", { style: styles.settingsRow, onClick: () => { setShowPin((v) => !v); setPinStep1(""); setPinErr(""); } },
+                    React.createElement("span", null,
+                        React.createElement(Icon, { name: "security", size: 14, style: { verticalAlign: "-3px", marginRight: 5 } }),
+                        " \u09AA\u09BF\u09A8 \u09B2\u0995 ",
+                        pin ? "(চালু আছে)" : "(বন্ধ)"),
+                    React.createElement("span", { style: styles.settingsRowValue },
+                        showPin ? "লুকান" : "দেখুন",
+                        " \u203A")),
+                showPin && (React.createElement("div", null,
+                    React.createElement("div", { style: styles.formHint }, pin
+                        ? "নতুন ৪-সংখ্যার পিন দুইবার দিন — এটি আগের পিন পরিবর্তন করবে। বায়োমেট্রিক/ফিঙ্গারপ্রিন্ট লক ব্রাউজার-ভিত্তিক এই অ্যাপে নির্ভরযোগ্যভাবে দেওয়া সম্ভব হয়নি, তাই আপাতত শুধু পিন লক দেওয়া হয়েছে।"
+                        : "৪-সংখ্যার একটি পিন দুইবার দিন। অ্যাপ খুললে প্রতিবার এই পিন চাওয়া হবে।"),
+                    React.createElement("input", { key: pinStep1, style: styles.textInput, type: "password", inputMode: "numeric", maxLength: 4, placeholder: pinStep1 === "" ? "নতুন পিন" : "আবার লিখুন", onChange: (e) => {
+                            const v = e.target.value.replace(/\D/g, "").slice(0, 4);
+                            if (v.length === 4)
+                                submitPin(v);
+                        } }),
+                    pinErr ? React.createElement("div", { style: styles.formErr }, pinErr) : null,
+                    pin && (React.createElement("button", { style: styles.dangerLink, onClick: () => { onSavePin(null); setShowPin(false); } }, "\u09AA\u09BF\u09A8 \u09B2\u0995 \u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8")),
+                    React.createElement("div", { style: { height: 10 } }))),
+                React.createElement("div", { style: { height: 6 } }),
+                !confirmClear ? (React.createElement("button", { style: styles.dangerLink, onClick: () => setConfirmClear(true) }, "\u09A1\u09C7\u099F\u09BE \u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8")) : (React.createElement("div", { style: styles.confirmBox },
+                    React.createElement("div", { style: { marginBottom: 8 } }, "\u09A8\u09BF\u09B6\u09CD\u099A\u09BF\u09A4? \u098F\u099F\u09BF \u09AB\u09BF\u09B0\u09BF\u09AF\u09BC\u09C7 \u0986\u09A8\u09BE \u09AF\u09BE\u09AC\u09C7 \u09A8\u09BE\u0964"),
+                    React.createElement("div", { style: styles.formActions },
+                        React.createElement("button", { style: styles.deleteBtn, onClick: onClearAll }, "\u09B9\u09CD\u09AF\u09BE\u0981, \u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8"),
+                        React.createElement("button", { style: styles.saveBtn, onClick: () => setConfirmClear(false) }, "\u09AC\u09BE\u09A4\u09BF\u09B2")))))))));
 }
 /* ---------------- modal shell ---------------- */
 function ModalShell({ title, onClose, children }) {
