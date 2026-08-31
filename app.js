@@ -287,6 +287,17 @@ function formatTimeBn(time) {
 // "রাকিব" -> "রাকিবের খাতা", "শেখ আশরাফুল" -> "শেখ আশরাফুলের খাতা" —
 // falls back to a neutral title when no profile name is set yet
 const APP_TAGLINE = "জীবনের হিসাব থেকে আখিরাতের হিসাব";
+// primary admin — UI-level convenience only (e.g. to decide whether to
+// render admin buttons at all). It is NOT the security boundary: the real
+// enforcement lives in firestore.rules, which independently checks this
+// same UID server-side on every write to the admin-only collections
+// (notices, dailyMessages, adminSpecialDays). Even if this constant or any
+// other frontend code were tampered with, Firestore itself still rejects
+// writes from any other account.
+const ADMIN_UID = "gjObYYXi66eHmqIhtlDuvq29cJ42";
+function isAdmin(user) {
+    return !!user && user.uid === ADMIN_UID;
+}
 function dashboardTitle(name) {
     const trimmed = (name || "").trim();
     if (!trimmed)
@@ -600,6 +611,90 @@ function App() {
             window.removeEventListener("offline", goOffline);
         };
     }, []);
+    // Android back button / browser back gesture — closes only the topmost
+    // open overlay and stays on the current screen, instead of exiting the
+    // app or jumping to the dashboard. We push exactly one history entry the
+    // moment any top-level modal opens, and consume it again if the modal is
+    // instead closed via its own X/outside-tap, so the back button never
+    // needs pressing twice.
+    const anyTopModalOpen = showAdd || showBudget || showSettings || !!editingTx || showCalendar ||
+        !!editingDebt || showAddDebt || showTransfer || showTransferHistory || showLogin;
+    const modalHistoryPushedRef = useRef(false);
+    // lets CalendarModal register a "did I consume this back-press myself?"
+    // function for its own nested special-day view — see the popstate
+    // handler below for why this is needed
+    const calendarBackConsumedRef = useRef(null);
+    const debtDetailBackConsumedRef = useRef(null); // same pattern, for DebtDetail's edit-form view
+    useEffect(() => {
+        if (anyTopModalOpen && !modalHistoryPushedRef.current) {
+            window.history.pushState({ hkModal: true }, "");
+            modalHistoryPushedRef.current = true;
+        }
+        else if (!anyTopModalOpen && modalHistoryPushedRef.current) {
+            modalHistoryPushedRef.current = false;
+            if (window.history.state && window.history.state.hkModal) {
+                window.history.back();
+            }
+        }
+    }, [anyTopModalOpen]);
+    useEffect(() => {
+        const onPopState = () => {
+            if (showLogin) {
+                setShowLogin(false);
+                return;
+            }
+            if (showTransferHistory) {
+                setShowTransferHistory(false);
+                return;
+            }
+            if (showTransfer) {
+                setShowTransfer(false);
+                return;
+            }
+            if (showAddDebt) {
+                setShowAddDebt(false);
+                return;
+            }
+            if (editingDebt) {
+                if (debtDetailBackConsumedRef.current && debtDetailBackConsumedRef.current()) {
+                    window.history.pushState({ hkModal: true }, "");
+                    return;
+                }
+                setEditingDebt(null);
+                return;
+            }
+            if (showCalendar) {
+                // CalendarModal may itself be showing a nested special-day detail
+                // view — if so, let IT consume this back-press (closing just that
+                // detail, not the whole calendar), then restore the one history
+                // entry the calendar relies on so the next back-press still works
+                if (calendarBackConsumedRef.current && calendarBackConsumedRef.current()) {
+                    window.history.pushState({ hkModal: true }, "");
+                    return;
+                }
+                setShowCalendar(false);
+                return;
+            }
+            if (editingTx) {
+                setEditingTx(null);
+                return;
+            }
+            if (showSettings) {
+                setShowSettings(false);
+                return;
+            }
+            if (showBudget) {
+                setShowBudget(false);
+                return;
+            }
+            if (showAdd) {
+                setShowAdd(false);
+                return;
+            }
+        };
+        window.addEventListener("popstate", onPopState);
+        return () => window.removeEventListener("popstate", onPopState);
+    }, [showAdd, showBudget, showSettings, editingTx, showCalendar, editingDebt, showAddDebt, showTransfer, showTransferHistory, showLogin]);
     const loadIdentityData = useCallback(async (identity) => {
         try {
             const res = await window.storage.get(userDataKey(identity));
@@ -828,6 +923,29 @@ function App() {
         catch (e) {
             setSyncStatus("error");
         }
+    };
+    // fetches the cloud document WITHOUT applying it, purely so the Settings
+    // screen can show "local vs cloud" counts before the user confirms an
+    // overwrite. Local counts are read straight from current state.
+    const previewCloudVsLocal = async () => {
+        if (!user || !window.FB || !isOnline)
+            return null;
+        const cloud = await window.FB.loadCloudData(user.uid);
+        return {
+            local: {
+                transactions: transactions.length,
+                debts: debts.length,
+                transfers: transfers.length,
+            },
+            cloud: cloud
+                ? {
+                    transactions: (cloud.transactions || []).length,
+                    debts: (cloud.debts || []).length,
+                    transfers: (cloud.transfers || []).length,
+                    updatedAt: cloud.updatedAt || null,
+                }
+                : null,
+        };
     };
     const logOut = async () => {
         if (window.FB) {
@@ -1173,7 +1291,7 @@ function App() {
                     saveBudget(v);
                     setShowBudget(false);
                 }, onSaveCategoryBudgets: saveCategoryBudgets })),
-            showCalendar && (React.createElement(CalendarModal, { specialDays: specialDays, onSaveSpecialDays: saveSpecialDays, onClose: () => setShowCalendar(false) })),
+            showCalendar && (React.createElement(CalendarModal, { specialDays: specialDays, onSaveSpecialDays: saveSpecialDays, onClose: () => setShowCalendar(false), onRegisterBackHandler: (fn) => { calendarBackConsumedRef.current = fn; } })),
             showAddDebt && (React.createElement(DebtForm, { onClose: () => setShowAddDebt(false), onSave: (d) => {
                     addDebt(d);
                     setShowAddDebt(false);
@@ -1181,7 +1299,7 @@ function App() {
             editingDebt && (React.createElement(DebtDetail, { debt: debts.find((d) => d.id === editingDebt.id) || editingDebt, onClose: () => setEditingDebt(null), onUpdate: (patch) => updateDebt(editingDebt.id, patch), onDelete: () => {
                     deleteDebt(editingDebt.id);
                     setEditingDebt(null);
-                }, onAddRepayment: (r) => addRepayment(editingDebt.id, r), onDeleteRepayment: (rid) => deleteRepayment(editingDebt.id, rid) })),
+                }, onAddRepayment: (r) => addRepayment(editingDebt.id, r), onDeleteRepayment: (rid) => deleteRepayment(editingDebt.id, rid), onRegisterBackHandler: (fn) => { debtDetailBackConsumedRef.current = fn; } })),
             showSettings && (React.createElement(SettingsModal, { transactions: transactions, budget: budget, specialDays: specialDays, onSaveSpecialDays: saveSpecialDays, onClose: () => setShowSettings(false), onEditBudget: () => {
                     setShowSettings(false);
                     setShowBudget(true);
@@ -1195,7 +1313,7 @@ function App() {
                 }, theme: theme, onSaveTheme: saveTheme, user: user, syncStatus: syncStatus, lastSyncedAt: lastSyncedAt, onShowLogin: () => {
                     setShowSettings(false);
                     setShowLogin(true);
-                }, onLogout: logOut, onManualSync: manualSync, onRestoreFromCloud: restoreFromCloud, isOnline: isOnline, pendingChanges: pendingChanges, onExportJSON: exportBackupJSON, onImportJSON: importBackupJSON, profileName: profileName, onSaveProfileName: saveProfileName, autoSync: autoSync, onSaveAutoSync: saveAutoSync })),
+                }, onLogout: logOut, onManualSync: manualSync, onRestoreFromCloud: restoreFromCloud, onPreviewCloudVsLocal: previewCloudVsLocal, isOnline: isOnline, pendingChanges: pendingChanges, onExportJSON: exportBackupJSON, onImportJSON: importBackupJSON, profileName: profileName, onSaveProfileName: saveProfileName, autoSync: autoSync, onSaveAutoSync: saveAutoSync })),
             showLogin && (React.createElement(LoginScreen, { onClose: () => setShowLogin(false), onSignedIn: () => setShowLogin(false) })),
             saveErr && (React.createElement("div", { style: styles.saveErrBanner }, "\u09B8\u0982\u09B0\u0995\u09CD\u09B7\u09A3\u09C7 \u09B8\u09AE\u09B8\u09CD\u09AF\u09BE \u09B9\u09AF\u09BC\u09C7\u099B\u09C7, \u0986\u09AC\u09BE\u09B0 \u099A\u09C7\u09B7\u09CD\u099F\u09BE \u0995\u09B0\u09C1\u09A8")),
             activeReminder && (React.createElement("div", { style: styles.reminderBanner, onClick: () => setActiveReminder(null) },
@@ -2361,13 +2479,28 @@ function isAyyamAlBid(date) {
     const h = gregorianToHijri(date);
     return h.day === 13 || h.day === 14 || h.day === 15;
 }
-function CalendarModal({ specialDays, onSaveSpecialDays, onClose }) {
+function CalendarModal({ specialDays, onSaveSpecialDays, onClose, onRegisterBackHandler }) {
     const [viewDate, setViewDate] = useState(() => {
         const n = new Date();
         return new Date(n.getFullYear(), n.getMonth(), 1);
     });
     const [selectedDate, setSelectedDate] = useState(null); // dateStr or null
     const [newLabel, setNewLabel] = useState("");
+    // let App's hardware-back handler know: if the nested special-day detail
+    // view is open, a back-press should close just that (return to the
+    // calendar grid, same month/selection) — not the whole calendar
+    useEffect(() => {
+        if (!onRegisterBackHandler)
+            return;
+        onRegisterBackHandler(() => {
+            if (selectedDate) {
+                setSelectedDate(null);
+                return true;
+            }
+            return false;
+        });
+        return () => onRegisterBackHandler(null);
+    }, [selectedDate, onRegisterBackHandler]);
     const y = viewDate.getFullYear();
     const m = viewDate.getMonth();
     const firstDay = new Date(y, m, 1);
@@ -2413,7 +2546,7 @@ function CalendarModal({ specialDays, onSaveSpecialDays, onClose }) {
         const bangla = gregorianToBangla(d);
         const hijri = gregorianToHijri(d);
         const labels = specialDays[selectedDate] || [];
-        return (React.createElement(ModalShell, { title: "\u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09A8", onClose: onClose },
+        return (React.createElement(ModalShell, { title: "\u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09A8", onClose: () => setSelectedDate(null) },
             React.createElement("button", { style: styles.calBackBtn, onClick: () => setSelectedDate(null) }, "\u2039 \u0995\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0\u09C7 \u09AB\u09BF\u09B0\u09C1\u09A8"),
             React.createElement("div", { style: styles.calDayDetailCard },
                 React.createElement("div", { style: styles.calDayDetailDate },
@@ -2667,7 +2800,7 @@ function DebtForm({ initial, onClose, onSave, onDelete }) {
             onDelete ? React.createElement("button", { style: styles.deleteBtn, onClick: onDelete }, "\u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8") : null,
             React.createElement("button", { style: styles.saveBtn, onClick: handleSave }, "\u09B8\u0982\u09B0\u0995\u09CD\u09B7\u09A3 \u0995\u09B0\u09C1\u09A8"))));
 }
-function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDeleteRepayment }) {
+function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDeleteRepayment, onRegisterBackHandler }) {
     const [showEdit, setShowEdit] = useState(false);
     const [showRepay, setShowRepay] = useState(false);
     const [repayAmount, setRepayAmount] = useState("");
@@ -2676,6 +2809,21 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
     const [repayNote, setRepayNote] = useState("");
     const [repayErr, setRepayErr] = useState("");
     const [showStatement, setShowStatement] = useState(false);
+    // let App's hardware-back handler know: if the edit-form view has
+    // replaced this detail view, a back-press should return to the detail
+    // view (not close the whole debt entry)
+    useEffect(() => {
+        if (!onRegisterBackHandler)
+            return;
+        onRegisterBackHandler(() => {
+            if (showEdit) {
+                setShowEdit(false);
+                return true;
+            }
+            return false;
+        });
+        return () => onRegisterBackHandler(null);
+    }, [showEdit, onRegisterBackHandler]);
     const remaining = debtRemaining(debt);
     const status = debtStatus(debt);
     const paidTotal = debt.amount - remaining;
@@ -3026,10 +3174,10 @@ function CategoryManager({ type, list, onAdd, onUpdate, onDelete }) {
                     setNewLabel("");
                 } }, "+"))));
 }
-function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, onClose, onEditBudget, onClearAll, accounts, accountOpening, onSaveAccountOpening, onAddCategory, onUpdateCategory, onDeleteCategory, pin, onSavePin, onImportTransactions, theme, onSaveTheme, user, syncStatus, lastSyncedAt, onShowLogin, onLogout, onManualSync, onRestoreFromCloud, isOnline, pendingChanges, onExportJSON, onImportJSON, profileName, onSaveProfileName, autoSync, onSaveAutoSync, }) {
+function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, onClose, onEditBudget, onClearAll, accounts, accountOpening, onSaveAccountOpening, onAddCategory, onUpdateCategory, onDeleteCategory, pin, onSavePin, onImportTransactions, theme, onSaveTheme, user, syncStatus, lastSyncedAt, onShowLogin, onLogout, onManualSync, onRestoreFromCloud, onPreviewCloudVsLocal, isOnline, pendingChanges, onExportJSON, onImportJSON, profileName, onSaveProfileName, autoSync, onSaveAutoSync, }) {
     const cats = useCategories();
     const [confirmClear, setConfirmClear] = useState(false);
-    const [confirmRestore, setConfirmRestore] = useState(false);
+    const [restorePreview, setRestorePreview] = useState(null); // null | "loading" | "error" | { local, cloud }
     const [confirmLogout, setConfirmLogout] = useState(false);
     const [showAccountSection, setShowAccountSection] = useState(false);
     const [showSecuritySection, setShowSecuritySection] = useState(false);
@@ -3182,24 +3330,49 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
                         " \u09AA\u09C7\u09A8\u09CD\u09A1\u09BF\u0982")),
                 React.createElement("div", { style: styles.formActions },
                     React.createElement("button", { style: styles.saveBtn, onClick: onManualSync, disabled: !isOnline }, "\u098F\u0996\u09A8\u0987 Sync \u0995\u09B0\u09C1\u09A8")),
-                React.createElement("button", { style: styles.settingsRow, onClick: () => {
-                        if (pendingChanges > 0) {
-                            setConfirmRestore(true);
+                React.createElement("button", { style: styles.settingsRow, onClick: async () => {
+                        setRestorePreview("loading");
+                        try {
+                            const preview = await onPreviewCloudVsLocal();
+                            setRestorePreview(preview || "error");
                         }
-                        else {
-                            onRestoreFromCloud();
+                        catch (e) {
+                            setRestorePreview("error");
                         }
                     } },
                     React.createElement("span", null, "\u0995\u09CD\u09B2\u09BE\u0989\u09A1 \u09A5\u09C7\u0995\u09C7 Restore \u0995\u09B0\u09C1\u09A8"),
                     React.createElement("span", { style: styles.settingsRowValue }, "\u203A")),
-                confirmRestore && (React.createElement("div", { style: styles.confirmBox },
-                    React.createElement("div", { style: { marginBottom: 8 } },
-                        "\u0986\u09AA\u09A8\u09BE\u09B0 \u0995\u09BF\u099B\u09C1 \u09AA\u09B0\u09BF\u09AC\u09B0\u09CD\u09A4\u09A8 \u098F\u0996\u09A8\u09CB \u0995\u09CD\u09B2\u09BE\u0989\u09A1\u09C7 \u09B8\u09BF\u0999\u09CD\u0995 \u09B9\u09AF\u09BC\u09A8\u09BF (",
+                restorePreview === "loading" && (React.createElement("div", { style: styles.formHint }, "\u09A4\u09C1\u09B2\u09A8\u09BE \u0995\u09B0\u09BE \u09B9\u099A\u09CD\u099B\u09C7\u2026")),
+                restorePreview === "error" && (React.createElement("div", { style: styles.formErr }, "\u09A4\u09C1\u09B2\u09A8\u09BE \u0995\u09B0\u09BE \u09AF\u09BE\u09AF\u09BC\u09A8\u09BF \u2014 \u0987\u09A8\u09CD\u099F\u09BE\u09B0\u09A8\u09C7\u099F \u09B8\u0982\u09AF\u09CB\u0997 \u0986\u099B\u09C7 \u0995\u09BF\u09A8\u09BE \u09A6\u09C7\u0996\u09C1\u09A8")),
+                restorePreview && restorePreview !== "loading" && restorePreview !== "error" && (React.createElement("div", { style: styles.confirmBox },
+                    React.createElement("div", { style: { marginBottom: 8, fontWeight: 700 } }, "Local Data \u09AC\u09A8\u09BE\u09AE Cloud Data"),
+                    React.createElement("div", { style: styles.restoreCompareRow },
+                        React.createElement("span", null),
+                        React.createElement("span", { style: styles.restoreCompareHead }, "\u09B8\u09CD\u09A5\u09BE\u09A8\u09C0\u09AF\u09BC"),
+                        React.createElement("span", { style: styles.restoreCompareHead }, "\u0995\u09CD\u09B2\u09BE\u0989\u09A1")),
+                    React.createElement("div", { style: styles.restoreCompareRow },
+                        React.createElement("span", null, "\u09B2\u09C7\u09A8\u09A6\u09C7\u09A8"),
+                        React.createElement("span", null, toBnDigits(restorePreview.local.transactions)),
+                        React.createElement("span", null, restorePreview.cloud ? toBnDigits(restorePreview.cloud.transactions) : "—")),
+                    React.createElement("div", { style: styles.restoreCompareRow },
+                        React.createElement("span", null, "\u09A6\u09C7\u09A8\u09BE-\u09AA\u09BE\u0993\u09A8\u09BE"),
+                        React.createElement("span", null, toBnDigits(restorePreview.local.debts)),
+                        React.createElement("span", null, restorePreview.cloud ? toBnDigits(restorePreview.cloud.debts) : "—")),
+                    React.createElement("div", { style: styles.restoreCompareRow },
+                        React.createElement("span", null, "\u09B8\u09CD\u09A5\u09BE\u09A8\u09BE\u09A8\u09CD\u09A4\u09B0"),
+                        React.createElement("span", null, toBnDigits(restorePreview.local.transfers)),
+                        React.createElement("span", null, restorePreview.cloud ? toBnDigits(restorePreview.cloud.transfers) : "—")),
+                    restorePreview.cloud && restorePreview.cloud.updatedAt && (React.createElement("div", { style: styles.formHint },
+                        "\u0995\u09CD\u09B2\u09BE\u0989\u09A1\u09C7 \u09B8\u09B0\u09CD\u09AC\u09B6\u09C7\u09B7 \u0986\u09AA\u09A1\u09C7\u099F: ",
+                        formatSyncTime(restorePreview.cloud.updatedAt))),
+                    !restorePreview.cloud && (React.createElement("div", { style: styles.formHint }, "\u098F\u0987 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u09C7 \u098F\u0996\u09A8\u09CB \u0995\u09CB\u09A8\u09CB cloud data \u09A8\u09C7\u0987\u0964")),
+                    pendingChanges > 0 && (React.createElement("div", { style: Object.assign(Object.assign({}, styles.formHint), { color: "var(--hk-danger)" }) },
+                        "\u26A0\uFE0F \u0986\u09AA\u09A8\u09BE\u09B0 ",
                         toBnDigits(pendingChanges),
-                        "\u099F\u09BF) \u2014 Restore \u0995\u09B0\u09B2\u09C7 \u09B8\u09C7\u0997\u09C1\u09B2\u09CB \u09B9\u09BE\u09B0\u09BF\u09AF\u09BC\u09C7 \u09AF\u09BE\u09AC\u09C7\u0964 \u09A4\u09AC\u09C1 Restore \u0995\u09B0\u09AC\u09C7\u09A8?"),
+                        "\u099F\u09BF \u09AA\u09B0\u09BF\u09AC\u09B0\u09CD\u09A4\u09A8 \u098F\u0996\u09A8\u09CB cloud-\u098F \u09B8\u09BF\u0999\u09CD\u0995 \u09B9\u09AF\u09BC\u09A8\u09BF \u2014 Restore \u0995\u09B0\u09B2\u09C7 \u09B8\u09C7\u0997\u09C1\u09B2\u09CB \u09B9\u09BE\u09B0\u09BF\u09AF\u09BC\u09C7 \u09AF\u09BE\u09AC\u09C7\u0964")),
                     React.createElement("div", { style: styles.formActions },
-                        React.createElement("button", { style: styles.deleteBtn, onClick: () => { onRestoreFromCloud(); setConfirmRestore(false); } }, "\u09B9\u09CD\u09AF\u09BE\u0981, Restore \u0995\u09B0\u09C1\u09A8"),
-                        React.createElement("button", { style: styles.saveBtn, onClick: () => setConfirmRestore(false) }, "\u09AC\u09BE\u09A4\u09BF\u09B2")))),
+                        React.createElement("button", { style: styles.deleteBtn, onClick: () => { onRestoreFromCloud(); setRestorePreview(null); }, disabled: !restorePreview.cloud }, "\u09B9\u09CD\u09AF\u09BE\u0981, Cloud \u09A5\u09C7\u0995\u09C7 Restore \u0995\u09B0\u09C1\u09A8"),
+                        React.createElement("button", { style: styles.saveBtn, onClick: () => setRestorePreview(null) }, "\u09AC\u09BE\u09A4\u09BF\u09B2")))),
                 React.createElement("div", { style: styles.securityNote },
                     React.createElement(Icon, { name: "security", size: 12, style: { verticalAlign: "-1px", marginRight: 4 } }),
                     "\u0986\u09AA\u09A8\u09BE\u09B0 \u09A1\u09C7\u099F\u09BE \u0986\u09AA\u09A8\u09BE\u09B0 Google \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u09C7\u09B0 \u09B8\u09BE\u09A5\u09C7 \u09A8\u09BF\u09B0\u09BE\u09AA\u09A6\u09AD\u09BE\u09AC\u09C7 \u09B8\u0982\u09AF\u09C1\u0995\u09CD\u09A4"),
@@ -4549,6 +4722,19 @@ const styles = {
         padding: 12,
         fontSize: 13,
         color: "var(--hk-text-muted-2)",
+    },
+    restoreCompareRow: {
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr 1fr",
+        gap: 6,
+        fontSize: 12.5,
+        padding: "4px 0",
+        borderBottom: "1px solid var(--hk-border)",
+    },
+    restoreCompareHead: {
+        fontWeight: 700,
+        color: "var(--hk-text-muted)",
+        fontSize: 11,
     },
     saveErrBanner: {
         position: "fixed",

@@ -2,19 +2,50 @@ rules_version = '2';
 
 // হিসাব-খাতা — Firestore security rules.
 //
-// Data model: one document per user at /users/{uid}, containing their
-// entire app state (transactions, budget, tasks, debts, categories,
-// accounts, transfers). A user may only read or write their OWN document —
-// this is enforced here, server-side, not just by the app's UI.
+// PERSONAL DATA
+// One document per user at /users/{uid}, containing their entire app state
+// (transactions, budget, tasks, debts, categories, accounts, transfers). A
+// user may only read or write their OWN document — enforced here,
+// server-side, never just by the app's UI.
+//
+// ADMIN-ONLY GLOBAL CONTENT (foundation for the upcoming Notice / Daily
+// Message / global Special Day features)
+// Three top-level collections — notices/{id}, dailyMessages/{id},
+// adminSpecialDays/{id} — are readable by any signed-in user but writable
+// ONLY by the single primary admin UID below. This is the actual security
+// boundary: even if someone edits frontend JavaScript or calls Firestore
+// directly, a write from any other account is rejected here, at the
+// database level.
 //
 // HOW TO APPLY: Firebase console → Build → Firestore Database → Rules tab
 // → paste this entire file, replacing whatever is there → Publish.
 
 service cloud.firestore {
   match /databases/{database}/documents {
+
     match /users/{uid} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
+
+    function isAdmin() {
+      return request.auth != null && request.auth.uid == "gjObYYXi66eHmqIhtlDuvq29cJ42";
+    }
+
+    match /notices/{id} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
+    match /dailyMessages/{id} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
+    match /adminSpecialDays/{id} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
     // everything else is denied by default (no wildcard match below this)
   }
 }
