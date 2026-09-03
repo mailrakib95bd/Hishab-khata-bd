@@ -574,6 +574,13 @@ function App() {
     const [profileName, setProfileName] = useState(null); // app-local display name, separate from Google's
     const [familyMembers, setFamilyMembers] = useState([]); // { id, name, relation, note, createdAt }
     const [bazarItems, setBazarItems] = useState([]); // family bazar / shopping-list items, see BAZAR_CATS
+    // per-user read-tracking for admin-managed notices/daily messages (the
+    // notices/messages themselves are fetched from Firestore separately,
+    // further down — these three only need to exist before applyUserData
+    // and persistAll, which both reference them)
+    const [readNoticeIds, setReadNoticeIds] = useState([]);
+    const [readDailyMessageIds, setReadDailyMessageIds] = useState([]);
+    const [dismissedDailyMessageIds, setDismissedDailyMessageIds] = useState([]);
     useEffect(() => {
         const id = setInterval(() => forceTick((n) => n + 1), 60 * 1000);
         return () => clearInterval(id);
@@ -959,9 +966,6 @@ function App() {
     const [adminSpecialDaysCloud, setAdminSpecialDaysCloud] = useState([]);
     const [adminContentLoading, setAdminContentLoading] = useState(false);
     const [adminContentError, setAdminContentError] = useState(false);
-    const [readNoticeIds, setReadNoticeIds] = useState([]);
-    const [readDailyMessageIds, setReadDailyMessageIds] = useState([]);
-    const [dismissedDailyMessageIds, setDismissedDailyMessageIds] = useState([]);
     const fetchAdminContent = useCallback(async () => {
         if (!window.FB || !user)
             return;
@@ -1789,6 +1793,7 @@ function LockScreen({ pin, onUnlock, profileName }) {
 /* ---------------- header ---------------- */
 function Header({ transactions, onSettings, tasks, onAddTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount }) {
     const [showTasks, setShowTasks] = useState(false);
+    useBackOverlay(showTasks, () => setShowTasks(false));
     const [newTask, setNewTask] = useState("");
     const [reminderEditId, setReminderEditId] = useState(null);
     const [reminderDateVal, setReminderDateVal] = useState("");
@@ -2412,6 +2417,7 @@ function Reports({ transactions, categoryBudgets, budget }) {
     const [range, setRange] = useState(monthOptions[0].key);
     const [start, end] = rangeToDates(range);
     const [showReview, setShowReview] = useState(false);
+    useBackOverlay(showReview, () => setShowReview(false));
     const filtered = useMemo(() => transactions.filter((t) => t.date >= start && t.date <= end), [transactions, start, end]);
     const income = filtered.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
     const expense = filtered.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
@@ -3644,13 +3650,21 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
     const [repayNote, setRepayNote] = useState("");
     const [repayErr, setRepayErr] = useState("");
     const [showStatement, setShowStatement] = useState(false);
-    // let App's hardware-back handler know: if the edit-form view has
-    // replaced this detail view, a back-press should return to the detail
-    // view (not close the whole debt entry)
+    // let App's hardware-back handler know: if the edit-form, repayment
+    // form, or statement view has replaced this detail view, a back-press
+    // should return to the detail view (not close the whole debt entry)
     useEffect(() => {
         if (!onRegisterBackHandler)
             return;
         onRegisterBackHandler(() => {
+            if (showStatement) {
+                setShowStatement(false);
+                return true;
+            }
+            if (showRepay) {
+                setShowRepay(false);
+                return true;
+            }
             if (showEdit) {
                 setShowEdit(false);
                 return true;
@@ -3658,7 +3672,7 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
             return false;
         });
         return () => onRegisterBackHandler(null);
-    }, [showEdit, onRegisterBackHandler]);
+    }, [showEdit, showRepay, showStatement, onRegisterBackHandler]);
     const remaining = debtRemaining(debt);
     const status = debtStatus(debt);
     const paidTotal = debt.amount - remaining;
