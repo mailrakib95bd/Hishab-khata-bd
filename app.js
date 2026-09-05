@@ -263,9 +263,16 @@ function computeAccountBalances(transactions, accountOpening, transfers, debts) 
         const key = t.method || "cash";
         sums[key] = (sums[key] || 0) + (t.type === "income" ? t.amount : -t.amount);
     }
+    // each side is resolved independently — a transfer can freely mix a
+    // dynamic account on one side and a legacy method on the other (e.g.
+    // Dynamic DBBL → Legacy Bank). Only touch this legacy sum when that
+    // side actually used a legacy method; the dynamic side of the same
+    // transfer is picked up separately by computeDynamicAccountBalances.
     for (const tr of transfers || []) {
-        sums[tr.fromMethod] = (sums[tr.fromMethod] || 0) - tr.amount;
-        sums[tr.toMethod] = (sums[tr.toMethod] || 0) + tr.amount;
+        if (tr.fromMethod)
+            sums[tr.fromMethod] = (sums[tr.fromMethod] || 0) - tr.amount;
+        if (tr.toMethod)
+            sums[tr.toMethod] = (sums[tr.toMethod] || 0) + tr.amount;
     }
     // debt repayments move real money too: paying off something you owe
     // (payable) leaves an account the same way an expense would; collecting
@@ -602,6 +609,7 @@ function App() {
     const [showBudget, setShowBudget] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [editingTx, setEditingTx] = useState(null);
+    const [editingTransfer, setEditingTransfer] = useState(null);
     const [showCalendar, setShowCalendar] = useState(false);
     const [editingDebt, setEditingDebt] = useState(null);
     const [showAddDebt, setShowAddDebt] = useState(false);
@@ -921,6 +929,10 @@ function App() {
     useBackOverlay(showAdminPanel, () => setShowAdminPanel(false));
     useBackOverlay(showFAQ, () => setShowFAQ(false));
     useBackOverlay(showTaxPanel, () => setShowTaxPanel(false));
+    // editingTransfer opens ON TOP of TransferHistoryModal (a nested
+    // overlay, same shape as DebtDetail's repay/statement views) — back
+    // must close just the edit form and return to the history list
+    useBackOverlay(!!editingTransfer, () => setEditingTransfer(null));
     useBackOverlay(showAccountPanel, () => setShowAccountPanel(false));
     const loadIdentityData = useCallback(async (identity) => {
         try {
@@ -1477,8 +1489,23 @@ function App() {
     const checkTransferBalance = (fromMethod, amount, excludeTransferId) => {
         return accountBalanceExcluding(fromMethod, null, excludeTransferId) - amount >= 0;
     };
+    // dynamic-account equivalent of checkTransferBalance — reuses
+    // computeDynamicAccountBalances exactly as-is (no second balance
+    // engine), just called with the being-edited transfer filtered out
+    // first so editing never double-subtracts its own old effect
+    const checkDynamicTransferBalance = (accountId, amount, excludeTransferId) => {
+        const filtered = excludeTransferId ? transfers.filter((t) => t.id !== excludeTransferId) : transfers;
+        const balances = computeDynamicAccountBalances(transactions, userAccounts, filtered, debts);
+        const acc = balances.find((a) => a.id === accountId);
+        return (acc ? acc.balance : 0) - amount >= 0;
+    };
     const addTransfer = (transfer) => {
         const next = [...transfers, Object.assign(Object.assign({}, transfer), { id: uid(), createdAt: Date.now() })];
+        setTransfers(next);
+        persistAll({ transfers: next });
+    };
+    const updateTransfer = (id, patch) => {
+        const next = transfers.map((t) => (t.id === id ? Object.assign(Object.assign({}, t), patch) : t));
         setTransfers(next);
         persistAll({ transfers: next });
     };
@@ -1790,8 +1817,15 @@ function App() {
             showTransfer && (React.createElement(TransferForm, { onClose: () => setShowTransfer(false), onSave: (tr) => {
                     addTransfer(tr);
                     setShowTransfer(false);
-                }, onCheckBalance: checkTransferBalance, userAccounts: userAccounts, dynamicAccountBalances: dynamicAccountBalances })),
-            showTransferHistory && (React.createElement(TransferHistoryModal, { transfers: transfers, onClose: () => setShowTransferHistory(false), onDelete: deleteTransfer, userAccounts: userAccounts })),
+                }, onCheckBalance: checkTransferBalance, onCheckDynamicBalance: checkDynamicTransferBalance, userAccounts: userAccounts })),
+            editingTransfer && (React.createElement(TransferForm, { initial: editingTransfer, onClose: () => setEditingTransfer(null), onSave: (patch) => {
+                    updateTransfer(editingTransfer.id, patch);
+                    setEditingTransfer(null);
+                }, onDelete: () => {
+                    deleteTransfer(editingTransfer.id);
+                    setEditingTransfer(null);
+                }, onCheckBalance: checkTransferBalance, onCheckDynamicBalance: checkDynamicTransferBalance, userAccounts: userAccounts })),
+            showTransferHistory && (React.createElement(TransferHistoryModal, { transfers: transfers, onClose: () => setShowTransferHistory(false), onDelete: deleteTransfer, onEdit: (tr) => setEditingTransfer(tr), userAccounts: userAccounts })),
             showBudget && (React.createElement(BudgetModal, { current: budget, categoryBudgets: categoryBudgets, onClose: () => setShowBudget(false), onSave: (v) => {
                     saveBudget(v);
                     setShowBudget(false);
@@ -1804,7 +1838,7 @@ function App() {
             editingDebt && (React.createElement(DebtDetail, { debt: debts.find((d) => d.id === editingDebt.id) || editingDebt, onClose: () => setEditingDebt(null), onUpdate: (patch) => updateDebt(editingDebt.id, patch), onDelete: () => {
                     deleteDebt(editingDebt.id);
                     setEditingDebt(null);
-                }, onAddRepayment: (r) => addRepayment(editingDebt.id, r), onDeleteRepayment: (rid) => deleteRepayment(editingDebt.id, rid), onRegisterBackHandler: (fn) => { debtDetailBackConsumedRef.current = fn; } })),
+                }, onAddRepayment: (r) => addRepayment(editingDebt.id, r), onDeleteRepayment: (rid) => deleteRepayment(editingDebt.id, rid), onRegisterBackHandler: (fn) => { debtDetailBackConsumedRef.current = fn; }, userAccounts: userAccounts })),
             showSettings && (React.createElement(SettingsModal, { transactions: transactions, budget: budget, specialDays: specialDays, onSaveSpecialDays: saveSpecialDays, onClose: () => setShowSettings(false), onEditBudget: () => {
                     setShowSettings(false);
                     setShowBudget(true);
@@ -4071,14 +4105,14 @@ function DebtForm({ initial, onClose, onSave, onDelete }) {
             onDelete ? React.createElement("button", { style: styles.deleteBtn, onClick: onDelete }, "\u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8") : null,
             React.createElement("button", { style: styles.saveBtn, onClick: handleSave }, "\u09B8\u0982\u09B0\u0995\u09CD\u09B7\u09A3 \u0995\u09B0\u09C1\u09A8"))));
 }
-function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDeleteRepayment, onRegisterBackHandler }) {
+function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDeleteRepayment, onRegisterBackHandler, userAccounts }) {
     const [showEdit, setShowEdit] = useState(false);
     const [showRepay, setShowRepay] = useState(false);
     const [repayAmount, setRepayAmount] = useState("");
     const [repayDate, setRepayDate] = useState(todayStr());
     const [repayTime, setRepayTime] = useState(nowTimeStr());
     const [repayNote, setRepayNote] = useState("");
-    const [repayMethod, setRepayMethod] = useState("cash");
+    const [repayMethod, setRepayMethod] = useState("m:cash");
     const [repayErr, setRepayErr] = useState("");
     const [showStatement, setShowStatement] = useState(false);
     // let App's hardware-back handler know: if the edit-form, repayment
@@ -4117,10 +4151,17 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
             setRepayErr(`অবশিষ্ট (${formatTaka(remaining)}) এর বেশি লেখা যাবে না`);
             return;
         }
-        onAddRepayment({ amount: num, date: repayDate, time: repayTime || null, note: repayNote.trim(), method: repayMethod });
+        // same "m:"/"a:" prefixed-selector convention as TransferForm — one
+        // dropdown, either a legacy method or a dynamic account, never both
+        const isAcct = repayMethod.startsWith("a:");
+        onAddRepayment({
+            amount: num, date: repayDate, time: repayTime || null, note: repayNote.trim(),
+            method: isAcct ? null : repayMethod.slice(2),
+            accountId: isAcct ? repayMethod.slice(2) : null,
+        });
         setRepayAmount("");
         setRepayNote("");
-        setRepayMethod("cash");
+        setRepayMethod("m:cash");
         setShowRepay(false);
     };
     const statementText = useMemo(() => {
@@ -4212,6 +4253,7 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
                         r.time ? `, ${formatTimeBn(r.time)}` : "",
                         " \u2014 ",
                         formatTaka(r.amount),
+                        (r.accountId || r.method) ? ` · ${r.accountId ? ((userAccounts || []).find((a) => a.id === r.accountId) || {}).name || "মুছে ফেলা অ্যাকাউন্ট" : methodLabel(r.method)}` : "",
                         r.note ? ` (${r.note})` : ""),
                     React.createElement("div", { style: { fontSize: 11.5, color: "var(--hk-text-muted)", marginTop: 2 } }, "\u098F\u0987 \u09AA\u09B0\u09BF\u09B6\u09CB\u09A7\u09C7\u09B0 \u09AA\u09B0 \u0985\u09AC\u09B6\u09BF\u09B7\u09CD\u099F: ", formatTaka(r.remainingAfter))),
                 React.createElement("button", { style: styles.taskDelete, onClick: () => onDeleteRepayment(r.id) }, "\u2715"))));
@@ -4226,7 +4268,9 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
                 React.createElement("input", { style: styles.textInput, type: "time", value: repayTime, onChange: (e) => setRepayTime(e.target.value) })),
             React.createElement("input", { style: styles.textInput, type: "text", placeholder: "\u09A8\u09CB\u099F (\u0990\u099A\u09CD\u099B\u09BF\u0995)", value: repayNote, onChange: (e) => setRepayNote(e.target.value) }),
             React.createElement("div", { style: styles.formLabel }, debt.type === "receivable" ? "\u0995\u09CB\u09A8 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u09C7 \u099C\u09AE\u09BE \u09B9\u09B2\u09CB" : "\u0995\u09CB\u09A8 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09A5\u09C7\u0995\u09C7 \u09A6\u09C7\u0993\u09AF\u09BC\u09BE \u09B9\u09B2\u09CB"),
-            React.createElement("select", { style: styles.textInput, value: repayMethod, onChange: (e) => setRepayMethod(e.target.value) }, METHODS.map((m) => React.createElement("option", { key: m.key, value: m.key }, m.label))),
+            React.createElement("select", { style: styles.textInput, value: repayMethod, onChange: (e) => setRepayMethod(e.target.value) },
+                React.createElement("optgroup", { label: "\u09AE\u09BE\u09A7\u09CD\u09AF\u09AE" }, METHODS.map((m) => React.createElement("option", { key: `m:${m.key}`, value: `m:${m.key}` }, m.label))),
+                (userAccounts || []).filter((a) => a.active !== false).length > 0 && React.createElement("optgroup", { label: "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F" }, (userAccounts || []).filter((a) => a.active !== false).map((a) => React.createElement("option", { key: `a:${a.id}`, value: `a:${a.id}` }, a.name)))),
             repayErr ? React.createElement("div", { style: styles.formErr }, repayErr) : null,
             React.createElement("div", { style: styles.formActions },
                 React.createElement("button", { style: styles.deleteBtn, onClick: () => setShowRepay(false) }, "\u09AC\u09BE\u09A4\u09BF\u09B2"),
@@ -4249,18 +4293,22 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
         React.createElement("button", { style: styles.dangerLink, onClick: onDelete }, "\u098F\u0987 \u098F\u09A8\u09CD\u099F\u09CD\u09B0\u09BF\u099F\u09BF \u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8")));
 }
 const QUICK_AMOUNTS = [50, 100, 200, 500, 1000];
-function TransferForm({ onClose, onSave, onCheckBalance, userAccounts, dynamicAccountBalances }) {
+function TransferForm({ initial, onClose, onSave, onDelete, onCheckBalance, onCheckDynamicBalance, userAccounts }) {
     // combined selector values are prefixed so one dropdown can offer both
     // systems without ambiguity: "m:cash" = legacy method, "a:<id>" =
     // dynamic account. Defaults match the old cash→bank default exactly,
     // so anyone not using dynamic accounts sees no behavior change at all.
+    // Editing seeds from whichever side each field actually used —
+    // accountId takes precedence when present, exactly mirroring how
+    // TransferHistoryModal decides which label to show.
     const activeAccounts = (userAccounts || []).filter((a) => a.active !== false);
-    const [fromSel, setFromSel] = useState("m:cash");
-    const [toSel, setToSel] = useState("m:bank");
-    const [amount, setAmount] = useState("");
-    const [date, setDate] = useState(todayStr());
-    const [time, setTime] = useState(nowTimeStr());
-    const [note, setNote] = useState("");
+    const selFor = (accId, method, fallback) => accId ? `a:${accId}` : method ? `m:${method}` : fallback;
+    const [fromSel, setFromSel] = useState(() => selFor(initial === null || initial === void 0 ? void 0 : initial.fromAccountId, initial === null || initial === void 0 ? void 0 : initial.fromMethod, "m:cash"));
+    const [toSel, setToSel] = useState(() => selFor(initial === null || initial === void 0 ? void 0 : initial.toAccountId, initial === null || initial === void 0 ? void 0 : initial.toMethod, "m:bank"));
+    const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
+    const [date, setDate] = useState((initial === null || initial === void 0 ? void 0 : initial.date) || todayStr());
+    const [time, setTime] = useState((initial === null || initial === void 0 ? void 0 : initial.time) || nowTimeStr());
+    const [note, setNote] = useState((initial === null || initial === void 0 ? void 0 : initial.note) || "");
     const [err, setErr] = useState("");
     const parseSel = (sel) => sel.startsWith("a:") ? { accountId: sel.slice(2) } : { method: sel.slice(2) };
     const selLabel = (sel) => {
@@ -4268,18 +4316,6 @@ function TransferForm({ onClose, onSave, onCheckBalance, userAccounts, dynamicAc
         if (p.accountId)
             return ((userAccounts || []).find((a) => a.id === p.accountId) || {}).name || p.accountId;
         return methodLabel(p.method);
-    };
-    // balance for whichever side is selected — reads the SAME already-
-    // computed values the rest of the app uses (checkTransferBalance for
-    // legacy methods, dynamicAccountBalances for dynamic accounts); this
-    // never recomputes balances a second way
-    const availableBalance = (sel) => {
-        const p = parseSel(sel);
-        if (p.accountId) {
-            const acc = (dynamicAccountBalances || []).find((a) => a.id === p.accountId);
-            return acc ? acc.balance : 0;
-        }
-        return null; // legacy path checked via onCheckBalance below, not here
     };
     const handleSave = () => {
         const num = parseFloat(amount);
@@ -4293,14 +4329,17 @@ function TransferForm({ onClose, onSave, onCheckBalance, userAccounts, dynamicAc
         }
         const from = parseSel(fromSel);
         const to = parseSel(toSel);
+        // when editing, exclude THIS transfer's own old effect before
+        // checking whether the (possibly changed) amount still fits —
+        // otherwise its old debit would double-count against the new one
+        const excludeId = (initial === null || initial === void 0 ? void 0 : initial.id) || null;
         if (from.accountId) {
-            const bal = availableBalance(fromSel);
-            if (bal - num < 0) {
+            if (onCheckDynamicBalance && !onCheckDynamicBalance(from.accountId, num, excludeId)) {
                 setErr(`⚠️ ${selLabel(fromSel)}-এ এত টাকা নেই`);
                 return;
             }
         }
-        else if (onCheckBalance && !onCheckBalance(from.method, num, null)) {
+        else if (onCheckBalance && !onCheckBalance(from.method, num, excludeId)) {
             setErr(`⚠️ ${selLabel(fromSel)}-এ এত টাকা নেই`);
             return;
         }
@@ -4315,7 +4354,7 @@ function TransferForm({ onClose, onSave, onCheckBalance, userAccounts, dynamicAc
             amount: num, date, time: time || null, note: note.trim(),
         });
     };
-    return (React.createElement(ModalShell, { onClose: onClose, title: "\u099F\u09BE\u0995\u09BE \u09B8\u09CD\u09A5\u09BE\u09A8\u09BE\u09A8\u09CD\u09A4\u09B0" },
+    return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "\u09B8\u09CD\u09A5\u09BE\u09A8\u09BE\u09A8\u09CD\u09A4\u09B0 \u09B8\u09AE\u09CD\u09AA\u09BE\u09A6\u09A8\u09BE" : "\u099F\u09BE\u0995\u09BE \u09B8\u09CD\u09A5\u09BE\u09A8\u09BE\u09A8\u09CD\u09A4\u09B0" },
         React.createElement("div", { style: styles.transferRow },
             React.createElement("div", { style: { flex: 1 } },
                 React.createElement("div", { style: styles.formLabel }, "\u09A5\u09C7\u0995\u09C7"),
@@ -4339,9 +4378,10 @@ function TransferForm({ onClose, onSave, onCheckBalance, userAccounts, dynamicAc
         React.createElement("input", { style: styles.textInput, type: "text", placeholder: "\u09AF\u09C7\u09AE\u09A8: \u098F\u099F\u09BF\u098F\u09AE \u09A5\u09C7\u0995\u09C7 \u09A4\u09CB\u09B2\u09BE", value: note, onChange: (e) => setNote(e.target.value) }),
         err ? React.createElement("div", { style: styles.formErr }, err) : null,
         React.createElement("div", { style: styles.formActions },
+            onDelete ? React.createElement("button", { style: styles.deleteBtn, onClick: onDelete }, "\u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8") : null,
             React.createElement("button", { style: styles.saveBtn, onClick: handleSave }, "\u09B8\u09CD\u09A5\u09BE\u09A8\u09BE\u09A8\u09CD\u09A4\u09B0 \u0995\u09B0\u09C1\u09A8"))));
 }
-function TransferHistoryModal({ transfers, onClose, onDelete, userAccounts }) {
+function TransferHistoryModal({ transfers, onClose, onDelete, onEdit, userAccounts }) {
     const sorted = useMemo(() => [...transfers].sort((a, b) => (a.date === b.date ? b.createdAt - a.createdAt : b.date < a.date ? -1 : 1)), [transfers]);
     // resolves either side of a transfer to a display label — a dynamic
     // account (by accountId) if the transfer used one, otherwise the
@@ -4369,7 +4409,9 @@ function TransferHistoryModal({ transfers, onClose, onDelete, userAccounts }) {
                 tr.note ? ` · ${tr.note}` : "")),
         React.createElement("div", { style: { textAlign: "right" } },
             React.createElement("div", { style: { fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: "var(--hk-text)" } }, formatTaka(tr.amount)),
-            React.createElement("button", { style: styles.transferDeleteLink, onClick: () => onDelete(tr.id) }, "\u09AE\u09C1\u099B\u09C1\u09A8")))))))));
+            React.createElement("div", { style: { display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 2 } },
+                React.createElement("button", { style: styles.transferDeleteLink, onClick: () => onEdit(tr) }, "\u09B8\u09AE\u09CD\u09AA\u09BE\u09A6\u09A8\u09BE"),
+                React.createElement("button", { style: styles.transferDeleteLink, onClick: () => onDelete(tr.id) }, "\u09AE\u09C1\u099B\u09C1\u09A8"))))))))));
 }
 function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onCheckBalance, userAccounts }) {
     const catCtx = useCategories();
