@@ -1461,7 +1461,13 @@ function App() {
     // wallets (cash/bank/bkash/নগদ/রকেট/card) must never go negative — computes
     // a method's current balance from opening balance + transactions + transfers,
     // optionally excluding one transaction/transfer (used when editing).
-    const accountBalanceExcluding = (method, excludeTxId, excludeTransferId) => {
+    // includes debt repayments in the legacy-method balance check — this
+    // was previously missing here even though computeAccountBalances (the
+    // DISPLAYED balance) already counted them, so a payable repayment
+    // could silently let a later expense overdraw an account. excludeRepaymentId
+    // lets repayment edit/validation exclude its own old effect, the same
+    // way excludeTxId/excludeTransferId already worked for transactions/transfers.
+    const accountBalanceExcluding = (method, excludeTxId, excludeTransferId, excludeRepaymentId) => {
         const opening = accountOpening[method] || 0;
         let sum = 0;
         for (const t of transactions) {
@@ -1479,6 +1485,15 @@ function App() {
             if (tr.toMethod === method)
                 sum += tr.amount;
         }
+        for (const d of debts) {
+            for (const r of d.repayments || []) {
+                if (excludeRepaymentId && r.id === excludeRepaymentId)
+                    continue;
+                if (r.method !== method)
+                    continue;
+                sum += (d.type === "receivable" ? 1 : -1) * r.amount;
+            }
+        }
         return opening + sum;
     };
     const checkAccountBalance = (method, type, amount, excludeId) => {
@@ -1488,6 +1503,26 @@ function App() {
     };
     const checkTransferBalance = (fromMethod, amount, excludeTransferId) => {
         return accountBalanceExcluding(fromMethod, null, excludeTransferId) - amount >= 0;
+    };
+    // repayment balance checks — payable repayments spend real money, so
+    // they're checked the same way an expense/transfer is; receivable
+    // repayments (collecting money owed to you) are never blocked, since
+    // receiving money can't overdraw anything. Reuses the exact same two
+    // engines as everywhere else — no third balance system.
+    const checkRepaymentBalance = (debtType, method, amount, excludeRepaymentId) => {
+        if (debtType === "receivable")
+            return true;
+        return accountBalanceExcluding(method, null, null, excludeRepaymentId) - amount >= 0;
+    };
+    const checkDynamicRepaymentBalance = (debtType, accountId, amount, debtId, excludeRepaymentId) => {
+        if (debtType === "receivable")
+            return true;
+        const debtsForCheck = excludeRepaymentId
+            ? debts.map((d) => d.id === debtId ? Object.assign(Object.assign({}, d), { repayments: (d.repayments || []).filter((r) => r.id !== excludeRepaymentId) }) : d)
+            : debts;
+        const balances = computeDynamicAccountBalances(transactions, userAccounts, transfers, debtsForCheck);
+        const acc = balances.find((a) => a.id === accountId);
+        return (acc ? acc.balance : 0) - amount >= 0;
     };
     // dynamic-account equivalent of checkTransferBalance — reuses
     // computeDynamicAccountBalances exactly as-is (no second balance
@@ -1613,6 +1648,15 @@ function App() {
             setTransfers(next);
             persistAll({ transfers: next });
         }
+        else if (undoBuffer.kind === "repayment") {
+            const next = debts.map((d) => d.id === undoBuffer.debtId ? Object.assign(Object.assign({}, d), { repayments: (() => {
+                    const r = [...d.repayments];
+                    r.splice(undoBuffer.index, 0, undoBuffer.item);
+                    return r;
+                })() }) : d);
+            setDebts(next);
+            persistAll({ debts: next });
+        }
         setUndoBuffer(null);
     };
     useEffect(() => {
@@ -1701,10 +1745,25 @@ function App() {
         setDebts(next);
         persistAll({ debts: next });
     };
+    const updateRepayment = (debtId, repaymentId, patch) => {
+        const next = debts.map((d) => d.id === debtId
+            ? Object.assign(Object.assign({}, d), { repayments: d.repayments.map((r) => (r.id === repaymentId ? Object.assign(Object.assign({}, r), patch) : r)) })
+            : d);
+        setDebts(next);
+        persistAll({ debts: next });
+    };
     const deleteRepayment = (debtId, repaymentId) => {
+        const debt = debts.find((d) => d.id === debtId);
+        if (!debt)
+            return;
+        const idx = debt.repayments.findIndex((r) => r.id === repaymentId);
+        if (idx === -1)
+            return;
+        const removed = debt.repayments[idx];
         const next = debts.map((d) => d.id === debtId ? Object.assign(Object.assign({}, d), { repayments: d.repayments.filter((r) => r.id !== repaymentId) }) : d);
         setDebts(next);
         persistAll({ debts: next });
+        setUndoBuffer({ kind: "repayment", debtId, item: removed, index: idx });
     };
     // in-app reminder check (fires while this tab is open — a web app can't
     // reliably wake up in the background like a real phone alarm)
@@ -1796,7 +1855,7 @@ function App() {
                 tab === "debts" && (React.createElement(DebtsView, { debts: debts, onOpenDebt: (d) => setEditingDebt(d), onAddDebt: () => setShowAddDebt(true) })),
                 tab === "family" && (React.createElement(FamilyView, { familyMembers: familyMembers, bazarItems: bazarItems, transactions: transactions, onAddMember: addFamilyMember, onUpdateMember: updateFamilyMember, onDeleteMember: deleteFamilyMember, onAddBazarItem: addBazarItem, onUpdateBazarItem: updateBazarItem, onDeleteBazarItem: deleteBazarItem, onAddBazarItemAsExpense: addBazarItemAsExpense })),
                 tab === "reports" && React.createElement(Reports, { transactions: transactions, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
-                tab === "search" && (React.createElement(SearchView, { transactions: transactions, accounts: accounts, onOpenTx: (t) => setEditingTx(t), seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts }))),
+                tab === "search" && (React.createElement(SearchView, { transactions: transactions, accounts: accounts, onOpenTx: (t) => setEditingTx(t), seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts, debts: debts }))),
             (tab === "dashboard" || tab === "timeline" || tab === "debts") && (React.createElement("button", { style: styles.fab, onClick: () => (tab === "debts" ? setShowAddDebt(true) : setShowAdd(true)), "aria-label": tab === "debts" ? "নতুন দেনা-পাওনা যোগ করুন" : "নতুন লেনদেন যোগ করুন" }, "+")),
             React.createElement(BottomNav, { tab: tab, setTab: setTab }),
             showAdd && (React.createElement(TransactionForm, { presetType: quickAddType, onClose: () => {
@@ -1838,7 +1897,7 @@ function App() {
             editingDebt && (React.createElement(DebtDetail, { debt: debts.find((d) => d.id === editingDebt.id) || editingDebt, onClose: () => setEditingDebt(null), onUpdate: (patch) => updateDebt(editingDebt.id, patch), onDelete: () => {
                     deleteDebt(editingDebt.id);
                     setEditingDebt(null);
-                }, onAddRepayment: (r) => addRepayment(editingDebt.id, r), onDeleteRepayment: (rid) => deleteRepayment(editingDebt.id, rid), onRegisterBackHandler: (fn) => { debtDetailBackConsumedRef.current = fn; }, userAccounts: userAccounts })),
+                }, onAddRepayment: (r) => addRepayment(editingDebt.id, r), onUpdateRepayment: (rid, patch) => updateRepayment(editingDebt.id, rid, patch), onDeleteRepayment: (rid) => deleteRepayment(editingDebt.id, rid), onRegisterBackHandler: (fn) => { debtDetailBackConsumedRef.current = fn; }, userAccounts: userAccounts, checkRepaymentBalance: checkRepaymentBalance, checkDynamicRepaymentBalance: checkDynamicRepaymentBalance })),
             showSettings && (React.createElement(SettingsModal, { transactions: transactions, budget: budget, specialDays: specialDays, onSaveSpecialDays: saveSpecialDays, onClose: () => setShowSettings(false), onEditBudget: () => {
                     setShowSettings(false);
                     setShowBudget(true);
@@ -1896,7 +1955,9 @@ function App() {
                     ? "এন্ট্রি মুছে ফেলা হয়েছে"
                     : undoBuffer.kind === "transfer"
                         ? "স্থানান্তর মুছে ফেলা হয়েছে"
-                        : "দেনা-পাওনা মুছে ফেলা হয়েছে"),
+                        : undoBuffer.kind === "repayment"
+                            ? "পরিশোধ মুছে ফেলা হয়েছে"
+                            : "দেনা-পাওনা মুছে ফেলা হয়েছে"),
                 React.createElement("button", { style: styles.undoBtn, onClick: undoLastDelete }, "\u09AB\u09BF\u09B0\u09BF\u09AF\u09BC\u09C7 \u0986\u09A8\u09C1\u09A8"))))));
 }
 /* ---------------- fonts ---------------- */
@@ -2832,7 +2893,7 @@ function Reports({ transactions, categoryBudgets, budget, onSearch }) {
                     React.createElement("div", { style: Object.assign(Object.assign({}, styles.budgetBarFill), { width: `${Math.min(100, c.pct)}%`, background: c.pct >= 100 ? "var(--hk-danger)" : c.pct >= 90 ? "var(--hk-danger-mid)" : c.pct >= 70 ? "var(--hk-gold)" : "var(--hk-success-mid)" }) }))))))))));
 }
 /* ---------------- search ---------------- */
-function SearchView({ transactions, onOpenTx, seed, familyMembers, userAccounts }) {
+function SearchView({ transactions, onOpenTx, seed, familyMembers, userAccounts, debts }) {
     const cats = useCategories();
     const [q, setQ] = useState("");
     const [type, setType] = useState("all");
@@ -2891,6 +2952,40 @@ function SearchView({ transactions, onOpenTx, seed, familyMembers, userAccounts 
             .sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : b.createdAt - a.createdAt));
     }, [transactions, q, type, method, category, familyMemberId, accountId, dateFrom, dateTo, amountMin, amountMax, cats]);
     const totalAmount = useMemo(() => results.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0), [results]);
+    // debt repayments shown as their own clearly-labeled, separate section —
+    // never merged into `results`/`totalAmount` above. They are NOT
+    // transactions and must never be counted as income/expense; this is a
+    // read-only derived view over `debts`, nothing is written anywhere.
+    const repaymentResults = useMemo(() => {
+        const query = q.trim().toLowerCase();
+        const min = parseFloat(amountMin);
+        const max = parseFloat(amountMax);
+        const rows = [];
+        (debts || []).forEach((d) => {
+            (d.repayments || []).forEach((r) => {
+                if (method !== "all" && r.method !== method)
+                    return;
+                if (accountId !== "all" && r.accountId !== accountId)
+                    return;
+                if (dateFrom && r.date < dateFrom)
+                    return;
+                if (dateTo && r.date > dateTo)
+                    return;
+                if (!isNaN(min) && r.amount < min)
+                    return;
+                if (!isNaN(max) && r.amount > max)
+                    return;
+                if (query) {
+                    const hay = `${d.person} ${r.note || ""}`.toLowerCase();
+                    if (!hay.includes(query))
+                        return;
+                }
+                rows.push({ id: r.id, debtType: d.type, person: d.person, amount: r.amount, date: r.date, time: r.time, note: r.note, method: r.method, accountId: r.accountId });
+            });
+        });
+        return rows.sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : 0));
+    }, [debts, q, method, accountId, dateFrom, dateTo, amountMin, amountMax]);
+    const repaymentAccountLabel = (r) => r.accountId ? (((userAccounts || []).find((a) => a.id === r.accountId) || {}).name || "মুছে ফেলা অ্যাকাউন্ট") : methodLabel(r.method);
     const applyQuickDate = (range) => {
         const today = todayStr();
         if (range === "today") {
@@ -2948,7 +3043,15 @@ function SearchView({ transactions, onOpenTx, seed, familyMembers, userAccounts 
             toBnDigits(results.length),
             "\u099F\u09BF \u09AB\u09B2\u09BE\u09AB\u09B2",
             results.length > 0 ? ` · নিট ${formatTaka(totalAmount, { sign: true })}` : ""),
-        results.length === 0 ? (React.createElement(EmptyState, { text: "\u0995\u09CB\u09A8\u09CB \u09B2\u09C7\u09A8\u09A6\u09C7\u09A8 \u09AA\u09BE\u0993\u09AF\u09BC\u09BE \u09AF\u09BE\u09AF\u09BC\u09A8\u09BF\u0964" })) : (React.createElement("div", { style: styles.txList }, results.map((t) => (React.createElement(TxRow, { key: t.id, tx: t, onClick: () => onOpenTx(t), showMethod: true, showDate: true })))))));
+        results.length === 0 ? (React.createElement(EmptyState, { text: "\u0995\u09CB\u09A8\u09CB \u09B2\u09C7\u09A8\u09A6\u09C7\u09A8 \u09AA\u09BE\u0993\u09AF\u09BC\u09BE \u09AF\u09BE\u09AF\u09BC\u09A8\u09BF\u0964" })) : (React.createElement("div", { style: styles.txList }, results.map((t) => (React.createElement(TxRow, { key: t.id, tx: t, onClick: () => onOpenTx(t), showMethod: true, showDate: true }))))),
+        repaymentResults.length > 0 && (React.createElement("div", { style: { marginTop: 18 } },
+            React.createElement("div", { style: styles.resultCount }, "\u09A6\u09C7\u09A8\u09BE-\u09AA\u09BE\u0993\u09A8\u09BE\u09B0 \u09AA\u09B0\u09BF\u09B6\u09CB\u09A7 (", toBnDigits(repaymentResults.length), "\u099F\u09BF)"),
+            React.createElement("div", { style: styles.txList }, repaymentResults.map((r) => (React.createElement("div", { key: r.id, style: styles.txRow },
+                React.createElement("div", { style: styles.txMid },
+                    React.createElement("div", { style: styles.txCat }, r.person, " \u2014 ", r.debtType === "receivable" ? "আদায়" : "পরিশোধ"),
+                    r.note ? React.createElement("div", { style: styles.txNote }, r.note) : null,
+                    React.createElement("div", { style: styles.txMeta }, formatDateBn(r.date).full, " \u00B7 ", repaymentAccountLabel(r))),
+                React.createElement("div", { style: Object.assign(Object.assign({}, styles.txAmount), { color: r.debtType === "receivable" ? "var(--hk-success)" : "var(--hk-danger)" }) }, formatTaka(r.amount, { sign: true }))))))))));
 }
 /* ---------------- shared bits ---------------- */
 function TxRow({ tx, onClick, showMethod, showDate, hideSymbol }) {
@@ -4105,7 +4208,7 @@ function DebtForm({ initial, onClose, onSave, onDelete }) {
             onDelete ? React.createElement("button", { style: styles.deleteBtn, onClick: onDelete }, "\u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8") : null,
             React.createElement("button", { style: styles.saveBtn, onClick: handleSave }, "\u09B8\u0982\u09B0\u0995\u09CD\u09B7\u09A3 \u0995\u09B0\u09C1\u09A8"))));
 }
-function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDeleteRepayment, onRegisterBackHandler, userAccounts }) {
+function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onUpdateRepayment, onDeleteRepayment, onRegisterBackHandler, userAccounts, checkRepaymentBalance, checkDynamicRepaymentBalance }) {
     const [showEdit, setShowEdit] = useState(false);
     const [showRepay, setShowRepay] = useState(false);
     const [repayAmount, setRepayAmount] = useState("");
@@ -4114,6 +4217,8 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
     const [repayNote, setRepayNote] = useState("");
     const [repayMethod, setRepayMethod] = useState("m:cash");
     const [repayErr, setRepayErr] = useState("");
+    const [editingRepaymentId, setEditingRepaymentId] = useState(null);
+    const [repayDeleteConfirmId, setRepayDeleteConfirmId] = useState(null);
     const [showStatement, setShowStatement] = useState(false);
     // let App's hardware-back handler know: if the edit-form, repayment
     // form, or statement view has replaced this detail view, a back-press
@@ -4141,28 +4246,66 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
     const remaining = debtRemaining(debt);
     const status = debtStatus(debt);
     const paidTotal = debt.amount - remaining;
+    const startEditRepayment = (r) => {
+        setEditingRepaymentId(r.id);
+        setRepayAmount(String(r.amount));
+        setRepayDate(r.date);
+        setRepayTime(r.time || nowTimeStr());
+        setRepayNote(r.note || "");
+        setRepayMethod(r.accountId ? `a:${r.accountId}` : `m:${r.method || "cash"}`);
+        setShowRepay(true);
+    };
+    const cancelRepayForm = () => {
+        setShowRepay(false);
+        setEditingRepaymentId(null);
+        setRepayAmount("");
+        setRepayNote("");
+        setRepayMethod("m:cash");
+        setRepayErr("");
+    };
     const submitRepay = () => {
         const num = parseFloat(repayAmount);
         if (!num || num <= 0) {
             setRepayErr("সঠিক পরিমাণ লিখুন");
             return;
         }
-        if (num > remaining) {
-            setRepayErr(`অবশিষ্ট (${formatTaka(remaining)}) এর বেশি লেখা যাবে না`);
+        // editing replaces the old repayment rather than adding to it, so
+        // the ceiling is "remaining as if this repayment didn't exist yet" —
+        // otherwise editing a repayment down would wrongly seem to free up
+        // room it already had, and editing it up would wrongly seem blocked
+        // by its own old amount
+        const oldAmount = editingRepaymentId ? ((debt.repayments.find((r) => r.id === editingRepaymentId) || {}).amount || 0) : 0;
+        const ceiling = remaining + oldAmount;
+        if (num > ceiling) {
+            setRepayErr(`অবশিষ্ট (${formatTaka(ceiling)}) এর বেশি লেখা যাবে না`);
             return;
         }
         // same "m:"/"a:" prefixed-selector convention as TransferForm — one
         // dropdown, either a legacy method or a dynamic account, never both
         const isAcct = repayMethod.startsWith("a:");
-        onAddRepayment({
-            amount: num, date: repayDate, time: repayTime || null, note: repayNote.trim(),
-            method: isAcct ? null : repayMethod.slice(2),
-            accountId: isAcct ? repayMethod.slice(2) : null,
-        });
-        setRepayAmount("");
-        setRepayNote("");
-        setRepayMethod("m:cash");
-        setShowRepay(false);
+        const method = isAcct ? null : repayMethod.slice(2);
+        const accountId = isAcct ? repayMethod.slice(2) : null;
+        // payable repayments spend real money — check the source actually
+        // has it, excluding this repayment's own old effect when editing.
+        // receivable repayments (collecting money) are never blocked.
+        if (isAcct) {
+            if (checkDynamicRepaymentBalance && !checkDynamicRepaymentBalance(debt.type, accountId, num, debt.id, editingRepaymentId)) {
+                setRepayErr("⚠️ এই অ্যাকাউন্টে এত টাকা নেই");
+                return;
+            }
+        }
+        else if (checkRepaymentBalance && !checkRepaymentBalance(debt.type, method, num, editingRepaymentId)) {
+            setRepayErr("⚠️ এই মাধ্যমে এত টাকা নেই");
+            return;
+        }
+        const payload = { amount: num, date: repayDate, time: repayTime || null, note: repayNote.trim(), method, accountId };
+        if (editingRepaymentId) {
+            onUpdateRepayment(editingRepaymentId, payload);
+        }
+        else {
+            onAddRepayment(payload);
+        }
+        cancelRepayForm();
     };
     const statementText = useMemo(() => {
         const lines = [];
@@ -4256,10 +4399,15 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
                         (r.accountId || r.method) ? ` · ${r.accountId ? ((userAccounts || []).find((a) => a.id === r.accountId) || {}).name || "মুছে ফেলা অ্যাকাউন্ট" : methodLabel(r.method)}` : "",
                         r.note ? ` (${r.note})` : ""),
                     React.createElement("div", { style: { fontSize: 11.5, color: "var(--hk-text-muted)", marginTop: 2 } }, "\u098F\u0987 \u09AA\u09B0\u09BF\u09B6\u09CB\u09A7\u09C7\u09B0 \u09AA\u09B0 \u0985\u09AC\u09B6\u09BF\u09B7\u09CD\u099F: ", formatTaka(r.remainingAfter))),
-                React.createElement("button", { style: styles.taskDelete, onClick: () => onDeleteRepayment(r.id) }, "\u2715"))));
+                React.createElement("div", { style: { display: "flex", gap: 4 } },
+                    React.createElement("button", { style: styles.taskDelete, onClick: () => startEditRepayment(r) }, React.createElement(Icon, { name: "edit", size: 13 })),
+                    repayDeleteConfirmId === r.id
+                        ? React.createElement("button", { style: Object.assign(Object.assign({}, styles.taskDelete), { color: "var(--hk-danger)", fontWeight: 700 }), onClick: () => { onDeleteRepayment(r.id); setRepayDeleteConfirmId(null); } }, "\u09A8\u09BF\u09B6\u09CD\u099A\u09BF\u09A4?")
+                        : React.createElement("button", { style: styles.taskDelete, onClick: () => setRepayDeleteConfirmId(r.id) }, "\u2715")))));
         })())),
         remaining > 0 && !showRepay && (React.createElement("button", { style: styles.saveBtn, onClick: () => setShowRepay(true) }, "+ \u09AA\u09B0\u09BF\u09B6\u09CB\u09A7 \u09AF\u09CB\u0997 \u0995\u09B0\u09C1\u09A8")),
         showRepay && (React.createElement("div", { style: { marginTop: 8 } },
+            React.createElement("div", { style: { fontWeight: 600, marginBottom: 6 } }, editingRepaymentId ? "\u09AA\u09B0\u09BF\u09B6\u09CB\u09A7 \u09B8\u09AE\u09CD\u09AA\u09BE\u09A6\u09A8\u09BE" : "\u09A8\u09A4\u09C1\u09A8 \u09AA\u09B0\u09BF\u09B6\u09CB\u09A7"),
             React.createElement("div", { style: styles.amountWrap },
                 React.createElement("span", { style: styles.amountSign }, "\u09F3"),
                 React.createElement("input", { style: styles.amountInput, type: "number", inputMode: "decimal", placeholder: "\u09E6", value: repayAmount, onChange: (e) => setRepayAmount(e.target.value) })),
@@ -4273,7 +4421,7 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
                 (userAccounts || []).filter((a) => a.active !== false).length > 0 && React.createElement("optgroup", { label: "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F" }, (userAccounts || []).filter((a) => a.active !== false).map((a) => React.createElement("option", { key: `a:${a.id}`, value: `a:${a.id}` }, a.name)))),
             repayErr ? React.createElement("div", { style: styles.formErr }, repayErr) : null,
             React.createElement("div", { style: styles.formActions },
-                React.createElement("button", { style: styles.deleteBtn, onClick: () => setShowRepay(false) }, "\u09AC\u09BE\u09A4\u09BF\u09B2"),
+                React.createElement("button", { style: styles.deleteBtn, onClick: cancelRepayForm }, "\u09AC\u09BE\u09A4\u09BF\u09B2"),
                 React.createElement("button", { style: styles.saveBtn, onClick: submitRepay }, "\u09B8\u0982\u09B0\u0995\u09CD\u09B7\u09A3 \u0995\u09B0\u09C1\u09A8")))),
         React.createElement("div", { style: { height: 12 } }),
         React.createElement("button", { style: styles.settingsRow, onClick: shareStatement },
