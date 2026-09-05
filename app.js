@@ -257,7 +257,7 @@ const DEFAULT_ACCOUNTS = METHODS.map((m) => ({ key: m.key, label: m.label }));
 // expense recorded against that method, plus/minus any transfers in/out.
 // Only methods with any activity or a non-zero opening balance are
 // returned, richest balance first.
-function computeAccountBalances(transactions, accountOpening, transfers) {
+function computeAccountBalances(transactions, accountOpening, transfers, debts) {
     const sums = {};
     for (const t of transactions) {
         const key = t.method || "cash";
@@ -266,6 +266,20 @@ function computeAccountBalances(transactions, accountOpening, transfers) {
     for (const tr of transfers || []) {
         sums[tr.fromMethod] = (sums[tr.fromMethod] || 0) - tr.amount;
         sums[tr.toMethod] = (sums[tr.toMethod] || 0) + tr.amount;
+    }
+    // debt repayments move real money too: paying off something you owe
+    // (payable) leaves an account the same way an expense would; collecting
+    // on something owed to you (receivable) adds to an account like income.
+    // Only repayments that actually recorded which account are counted here
+    // — older repayments with no method field are left out rather than
+    // guessed, so past balances don't silently shift under existing data.
+    for (const d of debts || []) {
+        for (const r of d.repayments || []) {
+            if (!r.method)
+                continue;
+            const sign = d.type === "receivable" ? 1 : -1;
+            sums[r.method] = (sums[r.method] || 0) + sign * r.amount;
+        }
     }
     return METHODS.map((m) => {
         const opening = (accountOpening && accountOpening[m.key]) || 0;
@@ -473,7 +487,7 @@ function uid() {
 // from anyone whose auth uid isn't PRIMARY_ADMIN_UID, regardless of what
 // the client sends.
 const PRIMARY_ADMIN_UID = "gjObYYXi66eHmqIhtlDuvq29cJ42";
-const PRIMARY_ADMIN_EMAIL = "mail.rakib95@gmail.com";
+const PRIMARY_ADMIN_EMAIL = "mail.rakib95bd@gmail.com";
 function isAdmin(user) {
     return !!user && (user.uid === PRIMARY_ADMIN_UID || (user.email && user.email.toLowerCase() === PRIMARY_ADMIN_EMAIL));
 }
@@ -1624,7 +1638,7 @@ function App() {
         }, 20 * 1000);
         return () => clearInterval(id);
     }, [tasks, debts, transactions, budget, specialDays, persist]);
-    const accounts = useMemo(() => computeAccountBalances(transactions, accountOpening, transfers), [transactions, accountOpening, transfers]);
+    const accounts = useMemo(() => computeAccountBalances(transactions, accountOpening, transfers, debts), [transactions, accountOpening, transfers, debts]);
     if (!loaded) {
         return (React.createElement("div", { style: styles.loadingScreen },
             React.createElement(FontLoader, null),
@@ -3875,6 +3889,7 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
     const [repayDate, setRepayDate] = useState(todayStr());
     const [repayTime, setRepayTime] = useState(nowTimeStr());
     const [repayNote, setRepayNote] = useState("");
+    const [repayMethod, setRepayMethod] = useState("cash");
     const [repayErr, setRepayErr] = useState("");
     const [showStatement, setShowStatement] = useState(false);
     // let App's hardware-back handler know: if the edit-form, repayment
@@ -3913,9 +3928,10 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
             setRepayErr(`অবশিষ্ট (${formatTaka(remaining)}) এর বেশি লেখা যাবে না`);
             return;
         }
-        onAddRepayment({ amount: num, date: repayDate, time: repayTime || null, note: repayNote.trim() });
+        onAddRepayment({ amount: num, date: repayDate, time: repayTime || null, note: repayNote.trim(), method: repayMethod });
         setRepayAmount("");
         setRepayNote("");
+        setRepayMethod("cash");
         setShowRepay(false);
     };
     const statementText = useMemo(() => {
@@ -4020,6 +4036,8 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
                 React.createElement("input", { style: styles.textInput, type: "date", value: repayDate, max: todayStr(), onChange: (e) => setRepayDate(e.target.value) }),
                 React.createElement("input", { style: styles.textInput, type: "time", value: repayTime, onChange: (e) => setRepayTime(e.target.value) })),
             React.createElement("input", { style: styles.textInput, type: "text", placeholder: "\u09A8\u09CB\u099F (\u0990\u099A\u09CD\u099B\u09BF\u0995)", value: repayNote, onChange: (e) => setRepayNote(e.target.value) }),
+            React.createElement("div", { style: styles.formLabel }, debt.type === "receivable" ? "\u0995\u09CB\u09A8 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u09C7 \u099C\u09AE\u09BE \u09B9\u09B2\u09CB" : "\u0995\u09CB\u09A8 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09A5\u09C7\u0995\u09C7 \u09A6\u09C7\u0993\u09AF\u09BC\u09BE \u09B9\u09B2\u09CB"),
+            React.createElement("select", { style: styles.textInput, value: repayMethod, onChange: (e) => setRepayMethod(e.target.value) }, METHODS.map((m) => React.createElement("option", { key: m.key, value: m.key }, m.label))),
             repayErr ? React.createElement("div", { style: styles.formErr }, repayErr) : null,
             React.createElement("div", { style: styles.formActions },
                 React.createElement("button", { style: styles.deleteBtn, onClick: () => setShowRepay(false) }, "\u09AC\u09BE\u09A4\u09BF\u09B2"),
@@ -4338,6 +4356,12 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
     const [showPin, setShowPin] = useState(false);
     const [pinStep1, setPinStep1] = useState("");
     const [pinErr, setPinErr] = useState("");
+    // changing or disabling an existing PIN must prove knowledge of the
+    // current one first — otherwise anyone who catches the app already
+    // unlocked (past LockScreen) could strip the PIN for next time
+    const [currentPinVerified, setCurrentPinVerified] = useState(false);
+    const [currentPinInput, setCurrentPinInput] = useState("");
+    const [currentPinErr, setCurrentPinErr] = useState("");
     const [specialText, setSpecialText] = useState(() => Object.entries(specialDays || {})
         .sort((a, b) => (a[0] < b[0] ? -1 : 1))
         .flatMap(([d, labels]) => labels.map((label) => `${d}: ${label}`))
@@ -4423,6 +4447,7 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
             onSavePin(digits);
             setShowPin(false);
             setPinStep1("");
+            setCurrentPinVerified(false);
         }
         else {
             setPinErr("দুটি পিন মেলেনি, আবার চেষ্টা করুন");
@@ -4665,7 +4690,7 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
                     showSecuritySection ? "লুকান" : "দেখুন",
                     " \u203A")),
             showSecuritySection && (React.createElement("div", null,
-                React.createElement("button", { style: styles.settingsRow, onClick: () => { setShowPin((v) => !v); setPinStep1(""); setPinErr(""); } },
+                React.createElement("button", { style: styles.settingsRow, onClick: () => { setShowPin((v) => !v); setPinStep1(""); setPinErr(""); setCurrentPinVerified(false); setCurrentPinInput(""); setCurrentPinErr(""); } },
                     React.createElement("span", null,
                         React.createElement(Icon, { name: "security", size: 14, style: { verticalAlign: "-3px", marginRight: 5 } }),
                         " \u09AA\u09BF\u09A8 \u09B2\u0995 ",
@@ -4673,7 +4698,25 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
                     React.createElement("span", { style: styles.settingsRowValue },
                         showPin ? "লুকান" : "দেখুন",
                         " \u203A")),
-                showPin && (React.createElement("div", null,
+                showPin && pin && !currentPinVerified && (React.createElement("div", null,
+                    React.createElement("div", { style: styles.formHint }, "\u09AA\u09B0\u09BF\u09AC\u09B0\u09CD\u09A4\u09A8/\u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09BE\u09B0 \u0986\u0997\u09C7 \u09AC\u09B0\u09CD\u09A4\u09AE\u09BE\u09A8 \u09AA\u09BF\u09A8\u099F\u09BF \u09A6\u09BF\u09A8:"),
+                    React.createElement("input", { key: "verify", style: styles.textInput, type: "password", inputMode: "numeric", maxLength: 4, placeholder: "\u09AC\u09B0\u09CD\u09A4\u09AE\u09BE\u09A8 \u09AA\u09BF\u09A8", value: currentPinInput, onChange: (e) => {
+                            const v = e.target.value.replace(/\D/g, "").slice(0, 4);
+                            setCurrentPinInput(v);
+                            if (v.length === 4) {
+                                if (v === pin) {
+                                    setCurrentPinVerified(true);
+                                    setCurrentPinErr("");
+                                }
+                                else {
+                                    setCurrentPinErr("পিন সঠিক নয়");
+                                    setCurrentPinInput("");
+                                }
+                            }
+                        } }),
+                    currentPinErr ? React.createElement("div", { style: styles.formErr }, currentPinErr) : null,
+                    React.createElement("div", { style: { height: 10 } }))),
+                showPin && (!pin || currentPinVerified) && (React.createElement("div", null,
                     React.createElement("div", { style: styles.formHint }, pin
                         ? "নতুন ৪-সংখ্যার পিন দুইবার দিন — এটি আগের পিন পরিবর্তন করবে। বায়োমেট্রিক/ফিঙ্গারপ্রিন্ট লক ব্রাউজার-ভিত্তিক এই অ্যাপে নির্ভরযোগ্যভাবে দেওয়া সম্ভব হয়নি, তাই আপাতত শুধু পিন লক দেওয়া হয়েছে।"
                         : "৪-সংখ্যার একটি পিন দুইবার দিন। অ্যাপ খুললে প্রতিবার এই পিন চাওয়া হবে।"),
@@ -4683,7 +4726,7 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
                                 submitPin(v);
                         } }),
                     pinErr ? React.createElement("div", { style: styles.formErr }, pinErr) : null,
-                    pin && (React.createElement("button", { style: styles.dangerLink, onClick: () => { onSavePin(null); setShowPin(false); } }, "\u09AA\u09BF\u09A8 \u09B2\u0995 \u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8")),
+                    pin && (React.createElement("button", { style: styles.dangerLink, onClick: () => { onSavePin(null); setShowPin(false); setCurrentPinVerified(false); } }, "\u09AA\u09BF\u09A8 \u09B2\u0995 \u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8")),
                     React.createElement("div", { style: { height: 10 } }))),
                 React.createElement("div", { style: { height: 6 } }),
                 !confirmClear ? (React.createElement("button", { style: styles.dangerLink, onClick: () => setConfirmClear(true) }, "\u09A1\u09C7\u099F\u09BE \u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8")) : (React.createElement("div", { style: styles.confirmBox },
