@@ -287,6 +287,37 @@ function computeAccountBalances(transactions, accountOpening, transfers, debts) 
         return { key: m.key, label: m.label, opening, balance, hasActivity: !!sums[m.key] };
     }).sort((a, b) => b.balance - a.balance);
 }
+// balances for the NEW dynamic named accounts (Phase 1) — a completely
+// separate calculation from computeAccountBalances above, keyed by
+// accountId instead of method. Only entries that actually carry an
+// accountId are counted; nothing here is inferred or guessed onto old
+// data, so this coexists safely with the untouched legacy METHODS system.
+function computeDynamicAccountBalances(transactions, userAccounts, transfers, debts) {
+    const sums = {};
+    for (const t of transactions) {
+        if (!t.accountId)
+            continue;
+        sums[t.accountId] = (sums[t.accountId] || 0) + (t.type === "income" ? t.amount : -t.amount);
+    }
+    for (const tr of transfers || []) {
+        if (tr.fromAccountId)
+            sums[tr.fromAccountId] = (sums[tr.fromAccountId] || 0) - tr.amount;
+        if (tr.toAccountId)
+            sums[tr.toAccountId] = (sums[tr.toAccountId] || 0) + tr.amount;
+    }
+    for (const d of debts || []) {
+        for (const r of d.repayments || []) {
+            if (!r.accountId)
+                continue;
+            const sign = d.type === "receivable" ? 1 : -1;
+            sums[r.accountId] = (sums[r.accountId] || 0) + sign * r.amount;
+        }
+    }
+    return (userAccounts || []).map((a) => {
+        const balance = (a.openingBalance || 0) + (sums[a.id] || 0);
+        return Object.assign(Object.assign({}, a), { balance, hasActivity: !!sums[a.id] });
+    }).sort((a, b) => b.balance - a.balance);
+}
 const BN_MONTHS = [
     "জানুয়ারি", "ফেব্রুয়ারি", "মার্চ", "এপ্রিল", "মে", "জুন",
     "জুলাই", "আগস্ট", "সেপ্টেম্বর", "অক্টোবর", "নভেম্বর", "ডিসেম্বর",
@@ -480,6 +511,12 @@ function formatDateBn(dateStr) {
 function uid() {
     return (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
+// appends one audit entry and caps the log at 200 — a rolling record of
+// major changes, not a full undo history
+function appendAudit(log, text) {
+    const next = [...(log || []), { id: uid(), ts: Date.now(), text }];
+    return next.length > 200 ? next.slice(next.length - 200) : next;
+}
 // primary admin identity — mirrors firestore.rules exactly. This check is a
 // UI convenience only (which buttons render); it is NOT the security
 // boundary. The real enforcement lives in firestore.rules, which
@@ -589,6 +626,17 @@ function App() {
     const [familyMembers, setFamilyMembers] = useState([]); // { id, name, relation, note, createdAt }
     const [bazarItems, setBazarItems] = useState([]); // family bazar / shopping-list items, see BAZAR_CATS
     const [taxes, setTaxes] = useState([]); // { id, name, amount, dueDate, paid, note, createdAt }
+    // dynamic named accounts (e.g. "DBBL", "bKash Personal") — ADDITIVE to
+    // the existing fixed METHODS system, never replacing it. A transaction
+    // may optionally carry an accountId tagging which specific account it
+    // belongs to, on top of its required method. Old transactions have no
+    // accountId and are never guessed into one — see computeDynamicAccountBalances.
+    const [userAccounts, setUserAccounts] = useState([]); // { id, name, type, openingBalance, openingBalanceDate, active, createdAt, updatedAt }
+    // record of important changes — transaction/debt/account edits, major
+    // deletions, restore/merge operations. Capped at 200 entries (oldest
+    // dropped first) so it never grows the document unboundedly; this is a
+    // log for "what happened recently", not a full undo history.
+    const [auditLog, setAuditLog] = useState([]);
     // per-user read-tracking for admin-managed notices/daily messages (the
     // notices/messages themselves are fetched from Firestore separately,
     // further down — these three only need to exist before applyUserData
@@ -643,6 +691,8 @@ function App() {
         setFamilyMembers(d.familyMembers || []);
         setBazarItems(d.bazarItems || []);
         setTaxes(d.taxes || []);
+        setUserAccounts(d.userAccounts || []);
+        setAuditLog(d.auditLog || []);
         setReadNoticeIds(d.readNoticeIds || []);
         setReadDailyMessageIds(d.readDailyMessageIds || []);
         setDismissedDailyMessageIds(d.dismissedDailyMessageIds || []);
@@ -674,9 +724,11 @@ function App() {
         familyMembers,
         bazarItems,
         taxes,
+        userAccounts,
+        auditLog,
         readNoticeIds,
         readDailyMessageIds,
-        dismissedDailyMessageIds }, overrides)), [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, familyMembers, bazarItems, taxes, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, persist]);
+        dismissedDailyMessageIds }, overrides)), [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, familyMembers, bazarItems, taxes, userAccounts, auditLog, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, persist]);
     // pin / theme / autoSync only — deliberately NOT part of persistAll, since
     // these belong to the device, not to whichever account is signed in
     const [autoSync, setAutoSync] = useState(true);
@@ -722,6 +774,8 @@ function App() {
         categoryBudgets, accountOpening, transfers, profileName,
         familyMembers, bazarItems,
         taxes,
+        userAccounts,
+        auditLog,
         readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds,
         exportedAt: Date.now(),
     }, null, 2);
@@ -729,7 +783,9 @@ function App() {
         try {
             const data = JSON.parse(jsonText);
             applyUserData(data);
-            persistAll(data);
+            const nextLog = appendAudit(data.auditLog || [], `JSON ব্যাকআপ থেকে পুনরুদ্ধার করা হয়েছে`);
+            setAuditLog(nextLog);
+            persistAll(Object.assign(Object.assign({}, data), { auditLog: nextLog }));
             return true;
         }
         catch (e) {
@@ -756,6 +812,7 @@ function App() {
     const [showAdminPanel, setShowAdminPanel] = useState(false);
     const [showFAQ, setShowFAQ] = useState(false);
     const [showTaxPanel, setShowTaxPanel] = useState(false);
+    const [showAccountPanel, setShowAccountPanel] = useState(false);
     const [searchSeed, setSearchSeed] = useState(null);
     const [isOnline, setIsOnline] = useState(typeof navigator === "undefined" || navigator.onLine !== false);
     const [pendingChanges, setPendingChanges] = useState(0);
@@ -864,6 +921,7 @@ function App() {
     useBackOverlay(showAdminPanel, () => setShowAdminPanel(false));
     useBackOverlay(showFAQ, () => setShowFAQ(false));
     useBackOverlay(showTaxPanel, () => setShowTaxPanel(false));
+    useBackOverlay(showAccountPanel, () => setShowAccountPanel(false));
     const loadIdentityData = useCallback(async (identity) => {
         try {
             const res = await window.storage.get(userDataKey(identity));
@@ -1136,11 +1194,11 @@ function App() {
         scheduleCloudPush({
             transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats,
             categoryBudgets, accountOpening, transfers, profileName,
-            familyMembers, bazarItems, taxes,
+            familyMembers, bazarItems, taxes, userAccounts, auditLog,
             readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds,
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, familyMembers, bazarItems, taxes, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, user, loaded, autoSync]);
+    }, [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, familyMembers, bazarItems, taxes, userAccounts, auditLog, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, user, loaded, autoSync]);
     // the moment the connection comes back, automatically flush any changes
     // that piled up while offline — the person never has to remember to sync
     const manualSyncRef = useRef(null);
@@ -1161,7 +1219,7 @@ function App() {
             await window.FB.saveCloudData(user.uid, {
                 transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats,
                 categoryBudgets, accountOpening, transfers, profileName,
-                familyMembers, bazarItems, taxes,
+                familyMembers, bazarItems, taxes, userAccounts, auditLog,
                 readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds,
             });
             setSyncStatus("synced");
@@ -1190,8 +1248,9 @@ function App() {
             const cloudData = await window.FB.loadCloudData(user.uid);
             if (cloudData) {
                 suppressNextPush.current = true;
-                applyUserData(cloudData);
-                window.storage.set(userDataKey(user.uid), JSON.stringify(cloudData)).catch(() => { });
+                const nextLog = appendAudit(cloudData.auditLog || [], `ক্লাউড থেকে পুনরুদ্ধার করা হয়েছে`);
+                applyUserData(Object.assign(Object.assign({}, cloudData), { auditLog: nextLog }));
+                window.storage.set(userDataKey(user.uid), JSON.stringify(Object.assign(Object.assign({}, cloudData), { auditLog: nextLog }))).catch(() => { });
                 setPendingChanges(0);
             }
             setSyncStatus("synced");
@@ -1259,8 +1318,10 @@ function App() {
             return;
         const removed = transactions[idx];
         const next = transactions.filter((t) => t.id !== id);
+        const nextLog = appendAudit(auditLog, `লেনদেন মুছে ফেলা হয়েছে: ${removed.type === "income" ? "আয়" : "ব্যয়"} ${formatTaka(removed.amount)} (${removed.date})`);
         setTransactions(next);
-        persistAll({ transactions: next });
+        setAuditLog(nextLog);
+        persistAll({ transactions: next, auditLog: nextLog });
         setUndoBuffer({ kind: "transaction", item: removed, index: idx });
     };
     /* ---------------- family management ---------------- */
@@ -1348,6 +1409,43 @@ function App() {
         setTaxes(next);
         persistAll({ taxes: next });
     };
+    /* ---------------- dynamic accounts (Phase 1 — additive, alongside METHODS) ---------------- */
+    const addUserAccount = (acc) => {
+        const next = [...userAccounts, Object.assign(Object.assign({}, acc), { id: uid(), active: true, createdAt: Date.now(), updatedAt: Date.now() })];
+        const nextLog = appendAudit(auditLog, `নতুন অ্যাকাউন্ট যোগ করা হয়েছে: ${acc.name}`);
+        setUserAccounts(next);
+        setAuditLog(nextLog);
+        persistAll({ userAccounts: next, auditLog: nextLog });
+    };
+    const updateUserAccount = (id, patch) => {
+        const next = userAccounts.map((a) => (a.id === id ? Object.assign(Object.assign(Object.assign({}, a), patch), { updatedAt: Date.now() }) : a));
+        setUserAccounts(next);
+        persistAll({ userAccounts: next });
+    };
+    // delete is only allowed once nothing references the account anymore —
+    // otherwise historical transactions would point at a vanished account.
+    // Deactivating (hiding it from pickers for new entries, keeping history
+    // intact) is always available regardless of usage.
+    const accountUsageCount = (id) => transactions.filter((t) => t.accountId === id).length
+        + transfers.filter((tr) => tr.fromAccountId === id || tr.toAccountId === id).length
+        + debts.reduce((s, d) => s + (d.repayments || []).filter((r) => r.accountId === id).length, 0);
+    const deleteUserAccount = (id) => {
+        if (accountUsageCount(id) > 0)
+            return false; // caller should show the usage warning instead
+        const removed = userAccounts.find((a) => a.id === id);
+        const next = userAccounts.filter((a) => a.id !== id);
+        const nextLog = removed ? appendAudit(auditLog, `অ্যাকাউন্ট মুছে ফেলা হয়েছে: ${removed.name}`) : auditLog;
+        setUserAccounts(next);
+        setAuditLog(nextLog);
+        persistAll({ userAccounts: next, auditLog: nextLog });
+        return true;
+    };
+    const toggleUserAccountActive = (id) => {
+        const next = userAccounts.map((a) => (a.id === id ? Object.assign(Object.assign({}, a), { active: !a.active, updatedAt: Date.now() }) : a));
+        setUserAccounts(next);
+        persistAll({ userAccounts: next });
+    };
+    const dynamicAccountBalances = useMemo(() => computeDynamicAccountBalances(transactions, userAccounts, transfers, debts), [transactions, userAccounts, transfers, debts]);
     // wallets (cash/bank/bkash/নগদ/রকেট/card) must never go negative — computes
     // a method's current balance from opening balance + transactions + transfers,
     // optionally excluding one transaction/transfer (used when editing).
@@ -1409,6 +1507,9 @@ function App() {
             transactions: [], budget: 0, tasks: [], specialDays: {}, debts: [],
             expenseCats: EXPENSE_CATS, incomeCats: INCOME_CATS, categoryBudgets: {},
             accountOpening: {}, transfers: [], profileName: null,
+            familyMembers: [], bazarItems: [], taxes: [], auditLog: [],
+            userAccounts: [],
+            readNoticeIds: [], readDailyMessageIds: [], dismissedDailyMessageIds: [],
         };
         persistAll(cleared);
         if (user && window.FB) {
@@ -1458,8 +1559,10 @@ function App() {
             return;
         const removed = debts[idx];
         const next = debts.filter((d) => d.id !== id);
+        const nextLog = appendAudit(auditLog, `${removed.type === "receivable" ? "পাওনা" : "দেনা"} মুছে ফেলা হয়েছে: ${removed.person} — ${formatTaka(removed.amount)}`);
         setDebts(next);
-        persistAll({ debts: next });
+        setAuditLog(nextLog);
+        persistAll({ debts: next, auditLog: nextLog });
         setUndoBuffer({ kind: "debt", item: removed, index: idx });
     };
     const undoLastDelete = () => {
@@ -1666,7 +1769,7 @@ function App() {
                 tab === "debts" && (React.createElement(DebtsView, { debts: debts, onOpenDebt: (d) => setEditingDebt(d), onAddDebt: () => setShowAddDebt(true) })),
                 tab === "family" && (React.createElement(FamilyView, { familyMembers: familyMembers, bazarItems: bazarItems, transactions: transactions, onAddMember: addFamilyMember, onUpdateMember: updateFamilyMember, onDeleteMember: deleteFamilyMember, onAddBazarItem: addBazarItem, onUpdateBazarItem: updateBazarItem, onDeleteBazarItem: deleteBazarItem, onAddBazarItemAsExpense: addBazarItemAsExpense })),
                 tab === "reports" && React.createElement(Reports, { transactions: transactions, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
-                tab === "search" && (React.createElement(SearchView, { transactions: transactions, accounts: accounts, onOpenTx: (t) => setEditingTx(t), seed: searchSeed, familyMembers: familyMembers }))),
+                tab === "search" && (React.createElement(SearchView, { transactions: transactions, accounts: accounts, onOpenTx: (t) => setEditingTx(t), seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts }))),
             (tab === "dashboard" || tab === "timeline" || tab === "debts") && (React.createElement("button", { style: styles.fab, onClick: () => (tab === "debts" ? setShowAddDebt(true) : setShowAdd(true)), "aria-label": tab === "debts" ? "নতুন দেনা-পাওনা যোগ করুন" : "নতুন লেনদেন যোগ করুন" }, "+")),
             React.createElement(BottomNav, { tab: tab, setTab: setTab }),
             showAdd && (React.createElement(TransactionForm, { presetType: quickAddType, onClose: () => {
@@ -1676,19 +1779,19 @@ function App() {
                     addTransaction(tx);
                     setShowAdd(false);
                     setQuickAddType(null);
-                }, onCheckBalance: checkAccountBalance })),
+                }, onCheckBalance: checkAccountBalance, userAccounts: userAccounts })),
             editingTx && (React.createElement(TransactionForm, { initial: editingTx, onClose: () => setEditingTx(null), onSave: (patch) => {
                     updateTransaction(editingTx.id, patch);
                     setEditingTx(null);
                 }, onDelete: () => {
                     deleteTransaction(editingTx.id);
                     setEditingTx(null);
-                }, onCheckBalance: checkAccountBalance })),
+                }, onCheckBalance: checkAccountBalance, userAccounts: userAccounts })),
             showTransfer && (React.createElement(TransferForm, { onClose: () => setShowTransfer(false), onSave: (tr) => {
                     addTransfer(tr);
                     setShowTransfer(false);
-                }, onCheckBalance: checkTransferBalance })),
-            showTransferHistory && (React.createElement(TransferHistoryModal, { transfers: transfers, onClose: () => setShowTransferHistory(false), onDelete: deleteTransfer })),
+                }, onCheckBalance: checkTransferBalance, userAccounts: userAccounts, dynamicAccountBalances: dynamicAccountBalances })),
+            showTransferHistory && (React.createElement(TransferHistoryModal, { transfers: transfers, onClose: () => setShowTransferHistory(false), onDelete: deleteTransfer, userAccounts: userAccounts })),
             showBudget && (React.createElement(BudgetModal, { current: budget, categoryBudgets: categoryBudgets, onClose: () => setShowBudget(false), onSave: (v) => {
                     saveBudget(v);
                     setShowBudget(false);
@@ -1715,7 +1818,7 @@ function App() {
                 }, theme: theme, onSaveTheme: saveTheme, user: user, syncStatus: syncStatus, lastSyncedAt: lastSyncedAt, onShowLogin: () => {
                     setShowSettings(false);
                     setShowLogin(true);
-                }, onLogout: logOut, onManualSync: manualSync, onRestoreFromCloud: restoreFromCloud, onPreviewCloudVsLocal: previewCloudVsLocal, isOnline: isOnline, pendingChanges: pendingChanges, onExportJSON: exportBackupJSON, onImportJSON: importBackupJSON, profileName: profileName, onSaveProfileName: saveProfileName, autoSync: autoSync, onSaveAutoSync: saveAutoSync, notificationPermission: notificationPermission, onRequestNotificationPermission: requestNotificationPermission })),
+                }, onLogout: logOut, onManualSync: manualSync, onRestoreFromCloud: restoreFromCloud, onPreviewCloudVsLocal: previewCloudVsLocal, isOnline: isOnline, pendingChanges: pendingChanges, onExportJSON: exportBackupJSON, onImportJSON: importBackupJSON, profileName: profileName, onSaveProfileName: saveProfileName, autoSync: autoSync, onSaveAutoSync: saveAutoSync, notificationPermission: notificationPermission, onRequestNotificationPermission: requestNotificationPermission, auditLog: auditLog })),
             showLogin && (React.createElement(LoginScreen, { onClose: () => setShowLogin(false), onSignedIn: () => setShowLogin(false) })),
             showHamburgerMenu && (React.createElement(HamburgerMenu, {
                 onClose: () => setShowHamburgerMenu(false),
@@ -1724,12 +1827,14 @@ function App() {
                 onOpenCalendar: () => { setShowHamburgerMenu(false); setShowCalendar(true); },
                 onOpenFAQ: () => { setShowHamburgerMenu(false); setShowFAQ(true); },
                 onOpenTax: () => { setShowHamburgerMenu(false); setShowTaxPanel(true); },
+                onOpenAccounts: () => { setShowHamburgerMenu(false); setShowAccountPanel(true); },
                 isAdminUser: isAdmin(user),
                 onOpenAdmin: () => { setShowHamburgerMenu(false); setShowAdminPanel(true); },
                 unreadCount: totalUnreadCount,
             })),
             showFAQ && React.createElement(FAQModal, { onClose: () => setShowFAQ(false) }),
             showTaxPanel && (React.createElement(TaxPanel, { onClose: () => setShowTaxPanel(false), taxes: taxes, onAdd: addTax, onUpdate: updateTax, onDelete: deleteTax, onTogglePaid: toggleTaxPaid })),
+            showAccountPanel && (React.createElement(AccountPanel, { onClose: () => setShowAccountPanel(false), dynamicAccountBalances: dynamicAccountBalances, onAdd: addUserAccount, onUpdate: updateUserAccount, onDelete: deleteUserAccount, onToggleActive: toggleUserAccountActive, onViewTransactions: (id) => { setShowAccountPanel(false); setSearchSeed({ accountId: id, ts: Date.now() }); setTab("search"); } })),
             showNotificationCenter && (React.createElement(NotificationCenter, {
                 onClose: () => setShowNotificationCenter(false),
                 notices: notices, dailyMessages: dailyMessages, tasks: tasks, debts: debts,
@@ -2693,25 +2798,28 @@ function Reports({ transactions, categoryBudgets, budget, onSearch }) {
                     React.createElement("div", { style: Object.assign(Object.assign({}, styles.budgetBarFill), { width: `${Math.min(100, c.pct)}%`, background: c.pct >= 100 ? "var(--hk-danger)" : c.pct >= 90 ? "var(--hk-danger-mid)" : c.pct >= 70 ? "var(--hk-gold)" : "var(--hk-success-mid)" }) }))))))))));
 }
 /* ---------------- search ---------------- */
-function SearchView({ transactions, onOpenTx, seed, familyMembers }) {
+function SearchView({ transactions, onOpenTx, seed, familyMembers, userAccounts }) {
     const cats = useCategories();
     const [q, setQ] = useState("");
     const [type, setType] = useState("all");
     const [method, setMethod] = useState("all");
     const [category, setCategory] = useState("all");
     const [familyMemberId, setFamilyMemberId] = useState("all");
+    const [accountId, setAccountId] = useState("all");
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
     const [amountMin, setAmountMin] = useState("");
     const [amountMax, setAmountMax] = useState("");
-    // seeded from Reports' "🔍 খুঁজুন" button — applies that range once per
-    // seed (keyed on seed.ts) without clobbering filters the person then
-    // edits by hand afterward
+    // seeded from Reports' "🔍 খুঁজুন" button, or an account card's "লেনদেন
+    // দেখুন" — applies that range/account once per seed (keyed on seed.ts)
+    // without clobbering filters the person then edits by hand afterward
     useEffect(() => {
         if (seed && seed.ts) {
             setDateFrom(seed.dateFrom || "");
             setDateTo(seed.dateTo || "");
+            if (seed.accountId)
+                setAccountId(seed.accountId);
             setShowAdvanced(true);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2730,6 +2838,8 @@ function SearchView({ transactions, onOpenTx, seed, familyMembers }) {
                 return false;
             if (familyMemberId !== "all" && t.familyMemberId !== familyMemberId)
                 return false;
+            if (accountId !== "all" && t.accountId !== accountId)
+                return false;
             if (dateFrom && t.date < dateFrom)
                 return false;
             if (dateTo && t.date > dateTo)
@@ -2745,7 +2855,7 @@ function SearchView({ transactions, onOpenTx, seed, familyMembers }) {
             return cat.includes(query) || note.includes(query);
         })
             .sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : b.createdAt - a.createdAt));
-    }, [transactions, q, type, method, category, familyMemberId, dateFrom, dateTo, amountMin, amountMax, cats]);
+    }, [transactions, q, type, method, category, familyMemberId, accountId, dateFrom, dateTo, amountMin, amountMax, cats]);
     const totalAmount = useMemo(() => results.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0), [results]);
     const applyQuickDate = (range) => {
         const today = todayStr();
@@ -2785,7 +2895,10 @@ function SearchView({ transactions, onOpenTx, seed, familyMembers }) {
                 (type !== "expense" ? cats.incomeCats : []).map((c) => React.createElement("option", { key: `i-${c.key}`, value: c.key }, c.label))),
             familyMembers && familyMembers.length > 0 && (React.createElement("select", { style: styles.filterSelect, value: familyMemberId, onChange: (e) => setFamilyMemberId(e.target.value) },
                 React.createElement("option", { value: "all" }, "\u09B8\u09AC \u09B8\u09A6\u09B8\u09CD\u09AF"),
-                familyMembers.map((m) => React.createElement("option", { key: m.id, value: m.id }, m.name))))),
+                familyMembers.map((m) => React.createElement("option", { key: m.id, value: m.id }, m.name)))),
+            userAccounts && userAccounts.length > 0 && (React.createElement("select", { style: styles.filterSelect, value: accountId, onChange: (e) => setAccountId(e.target.value) },
+                React.createElement("option", { value: "all" }, "\u09B8\u09AC \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F"),
+                userAccounts.map((a) => React.createElement("option", { key: a.id, value: a.id }, a.name))))),
         React.createElement("button", { style: styles.advToggle, onClick: () => setShowAdvanced((v) => !v) }, showAdvanced ? "সাধারণ ফিল্টার ▲" : "অ্যাডভান্সড ফিল্টার (তারিখ ও পরিমাণ) ▼"),
         showAdvanced && (React.createElement("div", { style: styles.advPanel },
             React.createElement("div", { style: styles.formLabel }, "\u09A4\u09BE\u09B0\u09BF\u0996 \u09B8\u09C0\u09AE\u09BE"),
@@ -3423,7 +3536,7 @@ function NotificationCenter({ onClose, notices, dailyMessages, tasks, debts, spe
         ...body);
 }
 /* ---------------- hamburger menu ---------------- */
-function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, isAdminUser, onOpenAdmin, unreadCount, }) {
+function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, onOpenAccounts, isAdminUser, onOpenAdmin, unreadCount, }) {
     useBackOverlay(true, onClose);
     const menuItemStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "13px 4px", background: "none", border: "none", borderBottom: "1px solid var(--hk-border-light)", fontSize: 14.5, color: "var(--hk-text)" };
     return React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 200, display: "flex" } },
@@ -3433,6 +3546,7 @@ function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCal
             isAdminUser && React.createElement("button", { style: Object.assign(Object.assign({}, menuItemStyle), { color: "var(--hk-gold)", fontWeight: 700 }), onClick: onOpenAdmin }, "\u2699\uFE0F \u098F\u09A1\u09AE\u09BF\u09A8 \u09AA\u09CD\u09AF\u09BE\u09A8\u09C7\u09B2"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenFAQ }, "\u09AA\u09CD\u09B0\u09B6\u09CD\u09A8 \u0993 \u0989\u09A4\u09CD\u09A4\u09B0"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenTax }, "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
+            React.createElement("button", { style: menuItemStyle, onClick: onOpenAccounts }, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenCalendar }, "\u09B9\u09BF\u099C\u09B0\u09BF \u0995\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenNotifications },
                 React.createElement("span", null, "\u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8"),
@@ -3519,6 +3633,81 @@ function TaxPanel({ onClose, taxes, onAdd, onUpdate, onDelete, onTogglePaid }) {
         body.push(React.createElement(TaxForm, { key: "form", initial: editing, onClose: () => setShowForm(false), onSave: (data) => { editing ? onUpdate(editing.id, data) : onAdd(data); setShowForm(false); } }));
     }
     return React.createElement(ModalShell, { onClose: onClose, title: "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE" }, ...body);
+}
+/* ---------------- dynamic accounts (Phase 1) ---------------- */
+const ACCOUNT_TYPES = [
+    { key: "cash", label: "\u0995\u09CD\u09AF\u09BE\u09B6" },
+    { key: "bank", label: "\u09AC\u09CD\u09AF\u09BE\u0982\u0995" },
+    { key: "mfs", label: "MFS/\u0993\u09AF\u09BC\u09BE\u09B2\u09C7\u099F" },
+    { key: "card", label: "\u0995\u09BE\u09B0\u09CD\u09A1" },
+    { key: "other", label: "\u0985\u09A8\u09CD\u09AF\u09BE\u09A8\u09CD\u09AF" },
+];
+function AccountForm({ initial, onClose, onSave }) {
+    const [name, setName] = useState((initial === null || initial === void 0 ? void 0 : initial.name) || "");
+    const [type, setType] = useState((initial === null || initial === void 0 ? void 0 : initial.type) || "bank");
+    const [openingBalance, setOpeningBalance] = useState(initial ? String(initial.openingBalance) : "0");
+    const [openingBalanceDate, setOpeningBalanceDate] = useState((initial === null || initial === void 0 ? void 0 : initial.openingBalanceDate) || todayStr());
+    const [err, setErr] = useState("");
+    return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09B8\u09AE\u09CD\u09AA\u09BE\u09A6\u09A8\u09BE" : "\u09A8\u09A4\u09C1\u09A8 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F" },
+        React.createElement("label", { style: admStyles.label }, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u09C7\u09B0 \u09A8\u09BE\u09AE * (\u09AF\u09C7\u09AE\u09A8: DBBL, bKash Personal)"),
+        React.createElement("input", { style: admStyles.input, value: name, onChange: (e) => setName(e.target.value) }),
+        React.createElement("label", { style: admStyles.label }, "\u09A7\u09B0\u09A8"),
+        React.createElement("select", { style: admStyles.input, value: type, onChange: (e) => setType(e.target.value) }, ACCOUNT_TYPES.map((t) => React.createElement("option", { key: t.key, value: t.key }, t.label))),
+        React.createElement("label", { style: admStyles.label }, "\u09B6\u09C1\u09B0\u09C1\u09B0 \u09AC\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09B8"),
+        React.createElement("input", { style: admStyles.input, type: "number", inputMode: "decimal", value: openingBalance, onChange: (e) => setOpeningBalance(e.target.value) }),
+        React.createElement("label", { style: admStyles.label }, "\u09B6\u09C1\u09B0\u09C1\u09B0 \u09A4\u09BE\u09B0\u09BF\u0996"),
+        React.createElement("input", { style: admStyles.input, type: "date", value: openingBalanceDate, onChange: (e) => setOpeningBalanceDate(e.target.value) }),
+        err && React.createElement("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginBottom: 8 } }, err),
+        React.createElement("button", { style: admStyles.addBtn, onClick: () => {
+                if (!name.trim()) {
+                    setErr("অ্যাকাউন্টের নাম লিখুন");
+                    return;
+                }
+                onSave({ name: name.trim(), type, openingBalance: parseFloat(openingBalance) || 0, openingBalanceDate });
+            } }, "সংরক্ষণ করুন")));
+}
+function AccountPanel({ onClose, dynamicAccountBalances, onAdd, onUpdate, onDelete, onToggleActive, onViewTransactions }) {
+    const [showForm, setShowForm] = useState(false);
+    const [editing, setEditing] = useState(null);
+    const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+    const [blockedMsg, setBlockedMsg] = useState(null);
+    useBackOverlay(showForm, () => setShowForm(false));
+    const attemptDelete = (a) => {
+        const ok = onDelete(a.id);
+        if (!ok) {
+            setBlockedMsg(a.id);
+            setDeleteConfirmId(null);
+        }
+    };
+    const body = [
+        React.createElement("button", { key: "add", style: admStyles.addBtn, onClick: () => { setEditing(null); setShowForm(true); } }, "+ নতুন অ্যাকাউন্ট যোগ করুন"),
+        React.createElement("div", { key: "note", style: Object.assign(Object.assign({}, admStyles.muted), { marginBottom: 10 }) }, "এগুলো ক্যাশ/ব্যাংক/বিকাশ ইত্যাদির পাশাপাশি অতিরিক্ত, সুনির্দিষ্ট নামের অ্যাকাউন্ট — যেমন \"DBBL\" বা \"bKash Personal\"। লেনদেন যোগ করার সময় ঐচ্ছিকভাবে বেছে নেওয়া যাবে।"),
+    ];
+    if (dynamicAccountBalances.length === 0) {
+        body.push(React.createElement(EmptyState, { key: "empty", text: "এখনও কোনো অ্যাকাউন্ট যোগ করা হয়নি।" }));
+    }
+    else {
+        dynamicAccountBalances.forEach((a) => {
+            body.push(React.createElement("div", { key: a.id, style: Object.assign(Object.assign({}, admStyles.card), { opacity: a.active === false ? 0.55 : 1 }) },
+                React.createElement("div", { style: admStyles.row },
+                    React.createElement("div", null,
+                        React.createElement("div", { style: { fontWeight: 600 } }, a.name, a.active === false && React.createElement("span", { style: { fontSize: 10.5, marginLeft: 6 } }, "(নিষ্ক্রিয়)")),
+                        React.createElement("div", { style: admStyles.muted }, (ACCOUNT_TYPES.find((t) => t.key === a.type) || {}).label || a.type)),
+                    React.createElement("div", { style: { fontWeight: 700 } }, formatTaka(a.balance))),
+                blockedMsg === a.id && (React.createElement("div", { style: { fontSize: 12, color: "var(--hk-danger)", marginTop: 6 } }, "এই অ্যাকাউন্টে লেনদেন/লেনদেনের ইতিহাস আছে বলে মুছে ফেলা যাবে না — বরং নিষ্ক্রিয় করুন।")),
+                React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" } },
+                    React.createElement("button", { style: admStyles.chip(false), onClick: () => onViewTransactions(a.id) }, "\u09B2\u09C7\u09A8\u09A6\u09C7\u09A8 \u09A6\u09C7\u0996\u09C1\u09A8"),
+                    React.createElement("button", { style: admStyles.chip(false), onClick: () => onToggleActive(a.id) }, a.active === false ? "সক্রিয় করুন" : "নিষ্ক্রিয় করুন"),
+                    React.createElement("button", { style: admStyles.chip(false), onClick: () => { setEditing(a); setShowForm(true); } }, "সম্পাদনা"),
+                    deleteConfirmId === a.id
+                        ? React.createElement("button", { style: admStyles.confirmBtn, onClick: () => attemptDelete(a) }, "নিশ্চিত?")
+                        : React.createElement("button", { style: admStyles.chip(false), onClick: () => { setDeleteConfirmId(a.id); setBlockedMsg(null); } }, "মুছুন"))));
+        });
+    }
+    if (showForm) {
+        body.push(React.createElement(AccountForm, { key: "form", initial: editing, onClose: () => setShowForm(false), onSave: (data) => { editing ? onUpdate(editing.id, data) : onAdd(data); setShowForm(false); } }));
+    }
+    return React.createElement(ModalShell, { onClose: onClose, title: "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE" }, ...body);
 }
 /* ---------------- calendar modal ---------------- */
 function isAyyamAlBid(date) {
@@ -4060,39 +4249,85 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onDelet
         React.createElement("button", { style: styles.dangerLink, onClick: onDelete }, "\u098F\u0987 \u098F\u09A8\u09CD\u099F\u09CD\u09B0\u09BF\u099F\u09BF \u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8")));
 }
 const QUICK_AMOUNTS = [50, 100, 200, 500, 1000];
-function TransferForm({ onClose, onSave, onCheckBalance }) {
-    const [fromMethod, setFromMethod] = useState("cash");
-    const [toMethod, setToMethod] = useState("bank");
+function TransferForm({ onClose, onSave, onCheckBalance, userAccounts, dynamicAccountBalances }) {
+    // combined selector values are prefixed so one dropdown can offer both
+    // systems without ambiguity: "m:cash" = legacy method, "a:<id>" =
+    // dynamic account. Defaults match the old cash→bank default exactly,
+    // so anyone not using dynamic accounts sees no behavior change at all.
+    const activeAccounts = (userAccounts || []).filter((a) => a.active !== false);
+    const [fromSel, setFromSel] = useState("m:cash");
+    const [toSel, setToSel] = useState("m:bank");
     const [amount, setAmount] = useState("");
     const [date, setDate] = useState(todayStr());
     const [time, setTime] = useState(nowTimeStr());
     const [note, setNote] = useState("");
     const [err, setErr] = useState("");
+    const parseSel = (sel) => sel.startsWith("a:") ? { accountId: sel.slice(2) } : { method: sel.slice(2) };
+    const selLabel = (sel) => {
+        const p = parseSel(sel);
+        if (p.accountId)
+            return ((userAccounts || []).find((a) => a.id === p.accountId) || {}).name || p.accountId;
+        return methodLabel(p.method);
+    };
+    // balance for whichever side is selected — reads the SAME already-
+    // computed values the rest of the app uses (checkTransferBalance for
+    // legacy methods, dynamicAccountBalances for dynamic accounts); this
+    // never recomputes balances a second way
+    const availableBalance = (sel) => {
+        const p = parseSel(sel);
+        if (p.accountId) {
+            const acc = (dynamicAccountBalances || []).find((a) => a.id === p.accountId);
+            return acc ? acc.balance : 0;
+        }
+        return null; // legacy path checked via onCheckBalance below, not here
+    };
     const handleSave = () => {
         const num = parseFloat(amount);
         if (!num || num <= 0) {
             setErr("সঠিক পরিমাণ লিখুন");
             return;
         }
-        if (fromMethod === toMethod) {
-            setErr("উৎস ও গন্তব্য মাধ্যম একই হতে পারবে না");
+        if (fromSel === toSel) {
+            setErr("উৎস ও গন্তব্য একই হতে পারবে না");
             return;
         }
-        if (onCheckBalance && !onCheckBalance(fromMethod, num, null)) {
-            setErr(`⚠️ আয় করুন — ${methodLabel(fromMethod)}-এ এত টাকা নেই`);
+        const from = parseSel(fromSel);
+        const to = parseSel(toSel);
+        if (from.accountId) {
+            const bal = availableBalance(fromSel);
+            if (bal - num < 0) {
+                setErr(`⚠️ ${selLabel(fromSel)}-এ এত টাকা নেই`);
+                return;
+            }
+        }
+        else if (onCheckBalance && !onCheckBalance(from.method, num, null)) {
+            setErr(`⚠️ ${selLabel(fromSel)}-এ এত টাকা নেই`);
             return;
         }
-        onSave({ fromMethod, toMethod, amount: num, date, time: time || null, note: note.trim() });
+        onSave({
+            // legacy fields — null when that side is a dynamic account, so
+            // computeAccountBalances (legacy) naturally skips it, never
+            // double-counting alongside computeDynamicAccountBalances
+            fromMethod: from.method || null,
+            toMethod: to.method || null,
+            fromAccountId: from.accountId || null,
+            toAccountId: to.accountId || null,
+            amount: num, date, time: time || null, note: note.trim(),
+        });
     };
     return (React.createElement(ModalShell, { onClose: onClose, title: "\u099F\u09BE\u0995\u09BE \u09B8\u09CD\u09A5\u09BE\u09A8\u09BE\u09A8\u09CD\u09A4\u09B0" },
         React.createElement("div", { style: styles.transferRow },
             React.createElement("div", { style: { flex: 1 } },
                 React.createElement("div", { style: styles.formLabel }, "\u09A5\u09C7\u0995\u09C7"),
-                React.createElement("select", { style: styles.methodSelect, value: fromMethod, onChange: (e) => setFromMethod(e.target.value) }, METHODS.map((m) => (React.createElement("option", { key: m.key, value: m.key }, m.label))))),
+                React.createElement("select", { style: styles.methodSelect, value: fromSel, onChange: (e) => setFromSel(e.target.value) },
+                    React.createElement("optgroup", { label: "\u09AE\u09BE\u09A7\u09CD\u09AF\u09AE" }, METHODS.map((m) => (React.createElement("option", { key: `m:${m.key}`, value: `m:${m.key}` }, m.label)))),
+                    activeAccounts.length > 0 && React.createElement("optgroup", { label: "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F" }, activeAccounts.map((a) => (React.createElement("option", { key: `a:${a.id}`, value: `a:${a.id}` }, a.name)))))),
             React.createElement("div", { style: styles.transferArrow }, "\u2192"),
             React.createElement("div", { style: { flex: 1 } },
                 React.createElement("div", { style: styles.formLabel }, "\u098F"),
-                React.createElement("select", { style: styles.methodSelect, value: toMethod, onChange: (e) => setToMethod(e.target.value) }, METHODS.map((m) => (React.createElement("option", { key: m.key, value: m.key }, m.label)))))),
+                React.createElement("select", { style: styles.methodSelect, value: toSel, onChange: (e) => setToSel(e.target.value) },
+                    React.createElement("optgroup", { label: "\u09AE\u09BE\u09A7\u09CD\u09AF\u09AE" }, METHODS.map((m) => (React.createElement("option", { key: `m:${m.key}`, value: `m:${m.key}` }, m.label)))),
+                    activeAccounts.length > 0 && React.createElement("optgroup", { label: "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F" }, activeAccounts.map((a) => (React.createElement("option", { key: `a:${a.id}`, value: `a:${a.id}` }, a.name))))))),
         React.createElement("div", { style: styles.amountWrap },
             React.createElement("span", { style: styles.amountSign }, "\u09F3"),
             React.createElement("input", { style: styles.amountInput, type: "number", inputMode: "decimal", placeholder: "\u09E6", value: amount, onChange: (e) => setAmount(e.target.value) })),
@@ -4106,16 +4341,28 @@ function TransferForm({ onClose, onSave, onCheckBalance }) {
         React.createElement("div", { style: styles.formActions },
             React.createElement("button", { style: styles.saveBtn, onClick: handleSave }, "\u09B8\u09CD\u09A5\u09BE\u09A8\u09BE\u09A8\u09CD\u09A4\u09B0 \u0995\u09B0\u09C1\u09A8"))));
 }
-function TransferHistoryModal({ transfers, onClose, onDelete }) {
+function TransferHistoryModal({ transfers, onClose, onDelete, userAccounts }) {
     const sorted = useMemo(() => [...transfers].sort((a, b) => (a.date === b.date ? b.createdAt - a.createdAt : b.date < a.date ? -1 : 1)), [transfers]);
+    // resolves either side of a transfer to a display label — a dynamic
+    // account (by accountId) if the transfer used one, otherwise the
+    // legacy method label exactly as before. Old transfers (no accountId
+    // field at all) fall straight through to methodLabel, unaffected.
+    const sideLabel = (tr, prefix) => {
+        const accId = tr[`${prefix}AccountId`];
+        if (accId) {
+            const acc = (userAccounts || []).find((a) => a.id === accId);
+            return acc ? acc.name : "মুছে ফেলা অ্যাকাউন্ট";
+        }
+        return methodLabel(tr[`${prefix}Method`]);
+    };
     return (React.createElement(ModalShell, { onClose: onClose, title: "\u09B8\u09CD\u09A5\u09BE\u09A8\u09BE\u09A8\u09CD\u09A4\u09B0\u09C7\u09B0 \u0987\u09A4\u09BF\u09B9\u09BE\u09B8" }, sorted.length === 0 ? (React.createElement(EmptyState, { text: "\u098F\u0996\u09A8\u09CB \u0995\u09CB\u09A8\u09CB \u099F\u09BE\u0995\u09BE \u09B8\u09CD\u09A5\u09BE\u09A8\u09BE\u09A8\u09CD\u09A4\u09B0 \u0995\u09B0\u09BE \u09B9\u09AF\u09BC\u09A8\u09BF\u0964" })) : (React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, sorted.map((tr) => (React.createElement("div", { key: tr.id, style: styles.transferHistoryRow },
         React.createElement("div", { style: styles.transferMid },
             React.createElement("div", { style: styles.txCat },
-                methodLabel(tr.fromMethod),
+                sideLabel(tr, "from"),
                 " ",
                 React.createElement("span", { style: { color: "var(--hk-label)" } }, "\u2192"),
                 " ",
-                methodLabel(tr.toMethod)),
+                sideLabel(tr, "to")),
             React.createElement("div", { style: styles.txMeta },
                 formatDateBn(tr.date).full,
                 tr.time ? `, ${formatTimeBn(tr.time)}` : "",
@@ -4124,7 +4371,7 @@ function TransferHistoryModal({ transfers, onClose, onDelete }) {
             React.createElement("div", { style: { fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, color: "var(--hk-text)" } }, formatTaka(tr.amount)),
             React.createElement("button", { style: styles.transferDeleteLink, onClick: () => onDelete(tr.id) }, "\u09AE\u09C1\u099B\u09C1\u09A8")))))))));
 }
-function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onCheckBalance }) {
+function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onCheckBalance, userAccounts }) {
     const catCtx = useCategories();
     const [type, setType] = useState((initial === null || initial === void 0 ? void 0 : initial.type) || presetType || "expense");
     const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
@@ -4132,6 +4379,7 @@ function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onChe
     const [date, setDate] = useState((initial === null || initial === void 0 ? void 0 : initial.date) || todayStr());
     const [note, setNote] = useState((initial === null || initial === void 0 ? void 0 : initial.note) || "");
     const [method, setMethod] = useState((initial === null || initial === void 0 ? void 0 : initial.method) || "cash");
+    const [accountId, setAccountId] = useState((initial === null || initial === void 0 ? void 0 : initial.accountId) || "");
     const [err, setErr] = useState("");
     // archived categories stay out of the picker for *new* selections, but
     // if the transaction being edited already used one, it stays visible
@@ -4160,7 +4408,7 @@ function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onChe
             setErr(`⚠️ আয় করুন — ${methodLabel(method)}-এ এত টাকা নেই`);
             return;
         }
-        onSave({ type, amount: num, category: category || cats[0].key, date, note: note.trim(), method });
+        onSave({ type, amount: num, category: category || cats[0].key, date, note: note.trim(), method, accountId: accountId || null });
     };
     return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "লেনদেন সম্পাদনা" : "নতুন লেনদেন" },
         React.createElement("div", { style: styles.typeToggle },
@@ -4185,6 +4433,11 @@ function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onChe
         React.createElement("input", { style: styles.textInput, type: "date", value: date, max: todayStr(), onChange: (e) => setDate(e.target.value) }),
         React.createElement("div", { style: styles.formLabel }, "\u09AE\u09BE\u09A7\u09CD\u09AF\u09AE"),
         React.createElement("div", { style: styles.methodRow }, METHODS.map((m) => (React.createElement("button", { key: m.key, onClick: () => setMethod(m.key), style: Object.assign(Object.assign({}, styles.methodChip), (method === m.key ? styles.methodChipActive : {})) }, m.label)))),
+        (userAccounts || []).filter((a) => a.active !== false).length > 0 && (React.createElement("div", null,
+            React.createElement("div", { style: styles.formLabel }, "\u09A8\u09BF\u09B0\u09CD\u09A6\u09BF\u09B7\u09CD\u099F \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F (\u0990\u099A\u09CD\u099B\u09BF\u0995)"),
+            React.createElement("select", { style: styles.textInput, value: accountId, onChange: (e) => setAccountId(e.target.value) },
+                React.createElement("option", { value: "" }, "\u2014 \u09A8\u09BF\u09B0\u09CD\u09AC\u09BE\u099A\u09A8 \u0995\u09B0\u09C1\u09A8 \u2014"),
+                userAccounts.filter((a) => a.active !== false).map((a) => React.createElement("option", { key: a.id, value: a.id }, a.name))))),
         err ? React.createElement("div", { style: styles.formErr }, err) : null,
         React.createElement("div", { style: styles.formActions },
             onDelete ? (React.createElement("button", { style: styles.deleteBtn, onClick: onDelete }, "\u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8")) : null,
@@ -4330,7 +4583,7 @@ function CategoryManager({ type, list, transactions, onAdd, onUpdate, onDelete, 
                     setNewLabel("");
                 } }, "+"))));
 }
-function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, onClose, onEditBudget, onClearAll, accounts, accountOpening, onSaveAccountOpening, onAddCategory, onUpdateCategory, onDeleteCategory, onMigrateCategory, pin, onSavePin, onImportTransactions, theme, onSaveTheme, user, syncStatus, lastSyncedAt, onShowLogin, onLogout, onManualSync, onRestoreFromCloud, onPreviewCloudVsLocal, isOnline, pendingChanges, onExportJSON, onImportJSON, profileName, onSaveProfileName, autoSync, onSaveAutoSync, notificationPermission, onRequestNotificationPermission, }) {
+function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, onClose, onEditBudget, onClearAll, accounts, accountOpening, onSaveAccountOpening, onAddCategory, onUpdateCategory, onDeleteCategory, onMigrateCategory, pin, onSavePin, onImportTransactions, theme, onSaveTheme, user, syncStatus, lastSyncedAt, onShowLogin, onLogout, onManualSync, onRestoreFromCloud, onPreviewCloudVsLocal, isOnline, pendingChanges, onExportJSON, onImportJSON, profileName, onSaveProfileName, autoSync, onSaveAutoSync, notificationPermission, onRequestNotificationPermission, auditLog, }) {
     const cats = useCategories();
     const [confirmClear, setConfirmClear] = useState(false);
     const [restorePreview, setRestorePreview] = useState(null); // null | "loading" | "error" | { local, cloud }
@@ -4354,6 +4607,7 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
         return init;
     });
     const [showPin, setShowPin] = useState(false);
+    const [showAuditLog, setShowAuditLog] = useState(false);
     const [pinStep1, setPinStep1] = useState("");
     const [pinErr, setPinErr] = useState("");
     // changing or disabling an existing PIN must prove knowledge of the
@@ -4683,6 +4937,15 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
             notificationPermission !== "granted" && notificationPermission !== "unsupported" && (React.createElement("button", { style: styles.saveBtn, onClick: onRequestNotificationPermission }, "\u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u0985\u09A8\u09C1\u09AE\u09A4\u09BF \u09A6\u09BF\u09A8")),
             notificationPermission === "denied" && (React.createElement("div", { style: styles.formHint }, "\u09AC\u09CD\u09B0\u09BE\u0989\u099C\u09BE\u09B0 সেটিংস থেকে অনুমতি চালু করতে হবে — অ্যাপ থেকে আর জিজ্ঞাসা করা যাবে না।")),
             React.createElement("div", { style: Object.assign(Object.assign({}, styles.formHint), { marginTop: 6 }) }, "রিমাইন্ডার শুধু অ্যাপ খোলা বা ব্যাকগ্রাউন্ডে থাকা অবস্থায় কাজ করে — অ্যাপ পুরোপুরি বন্ধ থাকলে নোটিফিকেশন আসবে না (এর জন্য একটি পুশ সার্ভার প্রয়োজন, যা এই ভার্সনে নেই)।")),
+        React.createElement(SettingsSection, { title: "\uD83D\uDCCB \u0995\u09BE\u09B0\u09CD\u09AF\u0995\u09B0\u09AE\u09C7\u09B0 \u0987\u09A4\u09BF\u09B9\u09BE\u09B8" },
+            React.createElement("button", { style: styles.settingsRow, onClick: () => setShowAuditLog((v) => !v) },
+                React.createElement("span", null, "সাম্প্রতিক গুরুত্বপূর্ণ পরিবর্তন"),
+                React.createElement("span", { style: styles.settingsRowValue }, showAuditLog ? "লুকান" : "দেখুন", " \u203A")),
+            showAuditLog && (React.createElement("div", { style: { maxHeight: 260, overflowY: "auto", marginTop: 6 } }, (auditLog || []).length === 0
+                ? React.createElement("div", { style: styles.formHint }, "এখনও কোনো রেকর্ড নেই।")
+                : [...auditLog].reverse().map((e) => React.createElement("div", { key: e.id, style: { padding: "7px 0", borderBottom: "1px solid var(--hk-border-light)", fontSize: 12.5 } },
+                    React.createElement("div", null, e.text),
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--hk-text-muted)" } }, formatSyncTime(e.ts))))))),
         React.createElement(SettingsSection, { title: "\uD83D\uDD10 \u09A8\u09BF\u09B0\u09BE\u09AA\u09A4\u09CD\u09A4\u09BE" },
             React.createElement("button", { style: styles.settingsRow, onClick: () => setShowSecuritySection((v) => !v) },
                 React.createElement("span", null, "\u09A8\u09BF\u09B0\u09BE\u09AA\u09A4\u09CD\u09A4\u09BE \u09B8\u09C7\u099F\u09BF\u0982\u09B8"),
