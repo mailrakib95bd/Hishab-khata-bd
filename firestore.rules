@@ -8,14 +8,13 @@ rules_version = '2';
 // user may only read or write their OWN document — enforced here,
 // server-side, never just by the app's UI.
 //
-// ADMIN-ONLY GLOBAL CONTENT (foundation for the upcoming Notice / Daily
-// Message / global Special Day features)
-// Three top-level collections — notices/{id}, dailyMessages/{id},
-// adminSpecialDays/{id} — are readable by any signed-in user but writable
-// ONLY by the single primary admin UID below. This is the actual security
-// boundary: even if someone edits frontend JavaScript or calls Firestore
-// directly, a write from any other account is rejected here, at the
-// database level.
+// ADMIN-ONLY GLOBAL CONTENT
+// Four top-level collections — notices/{id}, dailyMessages/{id},
+// adminSpecialDays/{id}, adminTasks/{id} — are readable by any signed-in
+// user but writable ONLY by the single primary admin UID below. This is
+// the actual security boundary: even if someone edits frontend JavaScript
+// or calls Firestore directly, a write from any other account is rejected
+// here, at the database level.
 //
 // HOW TO APPLY: Firebase console → Build → Firestore Database → Rules tab
 // → paste this entire file, replacing whatever is there → Publish.
@@ -42,6 +41,11 @@ service cloud.firestore {
     }
 
     match /adminSpecialDays/{id} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
+    match /adminTasks/{id} {
       allow read: if request.auth != null;
       allow write: if isAdmin();
     }

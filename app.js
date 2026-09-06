@@ -387,17 +387,6 @@ function formatTimeBn(time) {
 // "রাকিব" -> "রাকিবের খাতা", "শেখ আশরাফুল" -> "শেখ আশরাফুলের খাতা" —
 // falls back to a neutral title when no profile name is set yet
 const APP_TAGLINE = "জীবনের হিসাব থেকে আখিরাতের হিসাব";
-// primary admin — UI-level convenience only (e.g. to decide whether to
-// render admin buttons at all). It is NOT the security boundary: the real
-// enforcement lives in firestore.rules, which independently checks this
-// same UID server-side on every write to the admin-only collections
-// (notices, dailyMessages, adminSpecialDays). Even if this constant or any
-// other frontend code were tampered with, Firestore itself still rejects
-// writes from any other account.
-const ADMIN_UID = "gjObYYXi66eHmqIhtlDuvq29cJ42";
-function isAdmin(user) {
-    return !!user && user.uid === ADMIN_UID;
-}
 function dashboardTitle(name) {
     const trimmed = (name || "").trim();
     if (!trimmed)
@@ -1075,6 +1064,7 @@ function App() {
     const [notices, setNotices] = useState([]);
     const [dailyMessages, setDailyMessages] = useState([]);
     const [adminSpecialDaysCloud, setAdminSpecialDaysCloud] = useState([]);
+    const [adminTasksCloud, setAdminTasksCloud] = useState([]);
     const [adminContentLoading, setAdminContentLoading] = useState(false);
     const [adminContentError, setAdminContentError] = useState(false);
     const fetchAdminContent = useCallback(async () => {
@@ -1083,14 +1073,16 @@ function App() {
         setAdminContentLoading(true);
         setAdminContentError(false);
         try {
-            const [n, d, s] = await Promise.all([
+            const [n, d, s, t] = await Promise.all([
                 window.FB.listCollection("notices"),
                 window.FB.listCollection("dailyMessages"),
                 window.FB.listCollection("adminSpecialDays"),
+                window.FB.listCollection("adminTasks"),
             ]);
             setNotices(n);
             setDailyMessages(d);
             setAdminSpecialDaysCloud(s);
+            setAdminTasksCloud(t);
         }
         catch (e) {
             setAdminContentError(true);
@@ -1106,6 +1098,7 @@ function App() {
             setNotices([]);
             setDailyMessages([]);
             setAdminSpecialDaysCloud([]);
+            setAdminTasksCloud([]);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [user]);
@@ -1141,28 +1134,56 @@ function App() {
     // even attempts the call; if anyone bypasses the frontend and calls
     // Firestore directly, firestore.rules independently rejects the write
     // server-side unless request.auth.uid is the primary admin UID.
-    const adminAddNotice = async (data) => { if (!isAdmin(user)) return; await window.FB.addDocTo("notices", data); await fetchAdminContent(); };
-    const adminUpdateNotice = async (id, patch) => { if (!isAdmin(user)) return; await window.FB.updateDocIn("notices", id, patch); await fetchAdminContent(); };
-    const adminDeleteNotice = async (id) => { if (!isAdmin(user)) return; await window.FB.deleteDocFrom("notices", id); await fetchAdminContent(); };
-    const adminAddDailyMessage = async (data) => { if (!isAdmin(user)) return; await window.FB.addDocTo("dailyMessages", data); await fetchAdminContent(); };
-    const adminUpdateDailyMessage = async (id, patch) => { if (!isAdmin(user)) return; await window.FB.updateDocIn("dailyMessages", id, patch); await fetchAdminContent(); };
-    const adminDeleteDailyMessage = async (id) => { if (!isAdmin(user)) return; await window.FB.deleteDocFrom("dailyMessages", id); await fetchAdminContent(); };
-    const adminAddSpecialDay = async (data) => { if (!isAdmin(user)) return; await window.FB.addDocTo("adminSpecialDays", data); await fetchAdminContent(); };
-    const adminUpdateSpecialDay = async (id, patch) => { if (!isAdmin(user)) return; await window.FB.updateDocIn("adminSpecialDays", id, patch); await fetchAdminContent(); };
-    const adminDeleteSpecialDay = async (id) => { if (!isAdmin(user)) return; await window.FB.deleteDocFrom("adminSpecialDays", id); await fetchAdminContent(); };
+    // every admin write goes through this — never silently swallows a
+    // Firestore failure (permission-denied, offline, etc.). Returns
+    // { ok: true } or { ok: false, message } so the calling form can show
+    // an actual error instead of just closing as if it worked.
+    const runAdminOp = async (fn, friendlyLabel) => {
+        if (!isAdmin(user))
+            return { ok: false, message: "অ্যাডমিন অনুমতি নেই।" };
+        try {
+            await fn();
+            await fetchAdminContent();
+            return { ok: true };
+        }
+        catch (e) {
+            const code = e && e.code ? String(e.code) : "";
+            const message = code.includes("permission-denied")
+                ? `${friendlyLabel} সংরক্ষণ করা যায়নি — অনুমতি নেই। (Firestore permission denied)`
+                : `${friendlyLabel} সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।`;
+            return { ok: false, message };
+        }
+    };
+    const adminAddNotice = (data) => runAdminOp(() => window.FB.addDocTo("notices", data), "নোটিশ");
+    const adminUpdateNotice = (id, patch) => runAdminOp(() => window.FB.updateDocIn("notices", id, patch), "নোটিশ");
+    const adminDeleteNotice = (id) => runAdminOp(() => window.FB.deleteDocFrom("notices", id), "নোটিশ");
+    const adminAddDailyMessage = (data) => runAdminOp(() => window.FB.addDocTo("dailyMessages", data), "দৈনিক বার্তা");
+    const adminUpdateDailyMessage = (id, patch) => runAdminOp(() => window.FB.updateDocIn("dailyMessages", id, patch), "দৈনিক বার্তা");
+    const adminDeleteDailyMessage = (id) => runAdminOp(() => window.FB.deleteDocFrom("dailyMessages", id), "দৈনিক বার্তা");
+    const adminAddSpecialDay = (data) => runAdminOp(() => window.FB.addDocTo("adminSpecialDays", data), "বিশেষ দিবস");
+    const adminUpdateSpecialDay = (id, patch) => runAdminOp(() => window.FB.updateDocIn("adminSpecialDays", id, patch), "বিশেষ দিবস");
+    const adminDeleteSpecialDay = (id) => runAdminOp(() => window.FB.deleteDocFrom("adminSpecialDays", id), "বিশেষ দিবস");
+    const adminAddTask = (data) => runAdminOp(() => window.FB.addDocTo("adminTasks", data), "টাস্ক");
+    const adminUpdateTask = (id, patch) => runAdminOp(() => window.FB.updateDocIn("adminTasks", id, patch), "টাস্ক");
+    const adminDeleteTask = (id) => runAdminOp(() => window.FB.deleteDocFrom("adminTasks", id), "টাস্ক");
     // bulk import: rows already parsed+validated by the AdminPanel UI as
     // { date, title, description }. Duplicate (date+title already present
     // in adminSpecialDaysCloud) rows are skipped so re-importing the same
     // sheet twice never corrupts the calendar with repeats.
     const adminBulkImportSpecialDays = async (rows) => {
         if (!isAdmin(user))
-            return { added: 0, skipped: 0 };
+            return { added: 0, skipped: 0, ok: false, message: "অ্যাডমিন অনুমতি নেই।" };
         const existingKey = new Set(adminSpecialDaysCloud.map((s) => `${s.date}|${(s.title || "").trim()}`));
         const fresh = rows.filter((r) => !existingKey.has(`${r.date}|${(r.title || "").trim()}`));
-        if (fresh.length)
-            await window.FB.batchAddTo("adminSpecialDays", fresh);
-        await fetchAdminContent();
-        return { added: fresh.length, skipped: rows.length - fresh.length };
+        try {
+            if (fresh.length)
+                await window.FB.batchAddTo("adminSpecialDays", fresh);
+            await fetchAdminContent();
+            return { added: fresh.length, skipped: rows.length - fresh.length, ok: true };
+        }
+        catch (e) {
+            return { added: 0, skipped: 0, ok: false, message: "বাল্ক ইমপোর্ট ব্যর্থ হয়েছে। আবার চেষ্টা করুন।" };
+        }
     };
     const unreadNoticeCount = notices.filter((n) => n.published !== false && !readNoticeIds.includes(n.id)).length;
     const unreadDailyCount = dailyMessages.filter((m) => !dismissedDailyMessageIds.includes(m.id) && !readDailyMessageIds.includes(m.id)).length;
@@ -1845,7 +1866,7 @@ function App() {
     return (React.createElement(CatCtx.Provider, { value: { expenseCats, incomeCats } },
         React.createElement("div", { style: styles.app },
             React.createElement(FontLoader, null),
-            React.createElement(Header, { transactions: transactions, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName, onOpenMenu: () => setShowHamburgerMenu(true), onOpenNotifications: () => setShowNotificationCenter(true), unreadCount: totalUnreadCount }),
+            React.createElement(Header, { transactions: transactions, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName, onOpenMenu: () => setShowHamburgerMenu(true), onOpenNotifications: () => setShowNotificationCenter(true), unreadCount: totalUnreadCount, adminTasksCloud: adminTasksCloud }),
             React.createElement("main", { style: styles.main },
                 tab === "dashboard" && (React.createElement(Dashboard, { transactions: transactions, budget: budget, categoryBudgets: categoryBudgets, debts: debts, accounts: accounts, onEditBudget: () => setShowBudget(true), onOpenTx: (t) => setEditingTx(t), onGoDebts: () => setTab("debts"), onGoReports: () => setTab("reports"), onQuickAdd: (type) => {
                         setQuickAddType(type);
@@ -1931,19 +1952,20 @@ function App() {
             showNotificationCenter && (React.createElement(NotificationCenter, {
                 onClose: () => setShowNotificationCenter(false),
                 notices: notices, dailyMessages: dailyMessages, tasks: tasks, debts: debts,
-                specialDays: specialDays, adminSpecialDaysCloud: adminSpecialDaysCloud, taxes: taxes,
+                specialDays: specialDays, adminSpecialDaysCloud: adminSpecialDaysCloud, adminTasksCloud: adminTasksCloud, taxes: taxes,
                 readNoticeIds: readNoticeIds, readDailyMessageIds: readDailyMessageIds, dismissedDailyMessageIds: dismissedDailyMessageIds,
                 onMarkNoticeRead: markNoticeRead, onMarkDailyMessageRead: markDailyMessageRead,
                 onDismissDailyMessage: dismissDailyMessage, onMarkAllRead: markAllRead,
             })),
             showAdminPanel && isAdmin(user) && (React.createElement(AdminPanel, {
                 onClose: () => setShowAdminPanel(false),
-                notices: notices, dailyMessages: dailyMessages, adminSpecialDaysCloud: adminSpecialDaysCloud,
+                notices: notices, dailyMessages: dailyMessages, adminSpecialDaysCloud: adminSpecialDaysCloud, adminTasksCloud: adminTasksCloud,
                 loading: adminContentLoading, error: adminContentError, onRefresh: fetchAdminContent,
                 onAddNotice: adminAddNotice, onUpdateNotice: adminUpdateNotice, onDeleteNotice: adminDeleteNotice,
                 onAddDailyMessage: adminAddDailyMessage, onUpdateDailyMessage: adminUpdateDailyMessage, onDeleteDailyMessage: adminDeleteDailyMessage,
                 onAddSpecialDay: adminAddSpecialDay, onUpdateSpecialDay: adminUpdateSpecialDay, onDeleteSpecialDay: adminDeleteSpecialDay,
                 onBulkImport: adminBulkImportSpecialDays,
+                onAddTask: adminAddTask, onUpdateTask: adminUpdateTask, onDeleteTask: adminDeleteTask,
             })),
             saveErr && (React.createElement("div", { style: styles.saveErrBanner }, "\u09B8\u0982\u09B0\u0995\u09CD\u09B7\u09A3\u09C7 \u09B8\u09AE\u09B8\u09CD\u09AF\u09BE \u09B9\u09AF\u09BC\u09C7\u099B\u09C7, \u0986\u09AC\u09BE\u09B0 \u099A\u09C7\u09B7\u09CD\u099F\u09BE \u0995\u09B0\u09C1\u09A8")),
             activeReminder && (React.createElement("div", { style: styles.reminderBanner, onClick: () => setActiveReminder(null) },
@@ -2098,7 +2120,7 @@ function LockScreen({ pin, onUnlock, profileName }) {
             } }, d))))));
 }
 /* ---------------- header ---------------- */
-function Header({ transactions, onSettings, tasks, onAddTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount }) {
+function Header({ transactions, onSettings, tasks, onAddTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount, adminTasksCloud }) {
     const [showTasks, setShowTasks] = useState(false);
     useBackOverlay(showTasks, () => setShowTasks(false));
     const [newTask, setNewTask] = useState("");
@@ -2156,6 +2178,7 @@ function Header({ transactions, onSettings, tasks, onAddTask, onToggleTask, onDe
                             "/",
                             toBnDigits(MAX_TASKS),
                             ")"),
+                        React.createElement("div", { style: { fontSize: 11.5, fontWeight: 700, color: "var(--hk-text-muted)", marginBottom: 4 } }, "\uD83D\uDC64 \u0986\u09AE\u09BE\u09B0 \u099F\u09BE\u09B8\u09CD\u0995"),
                         tasks.length === 0 ? (React.createElement("div", { style: styles.taskEmpty }, "\u098F\u0996\u09A8\u09CB \u0995\u09CB\u09A8\u09CB \u0995\u09BE\u099C \u09AF\u09CB\u0997 \u0995\u09B0\u09BE \u09B9\u09AF\u09BC\u09A8\u09BF\u0964")) : (React.createElement("div", { style: styles.taskList }, tasks.map((t) => (React.createElement("div", { key: t.id },
                             React.createElement("div", { style: styles.taskItem },
                                 React.createElement("button", { style: styles.taskCheck, onClick: () => onToggleTask(t.id) }, t.done ? "☑" : "☐"),
@@ -2174,6 +2197,11 @@ function Header({ transactions, onSettings, tasks, onAddTask, onToggleTask, onDe
                                 React.createElement("input", { type: "date", style: styles.reminderTimeInput, value: reminderDateVal, min: todayStr(), onChange: (e) => setReminderDateVal(e.target.value) }),
                                 React.createElement("input", { type: "time", style: styles.reminderTimeInput, value: reminderTimeVal, onChange: (e) => setReminderTimeVal(e.target.value) }),
                                 React.createElement("button", { style: styles.taskAddBtn, onClick: saveReminder }, "\u2713")))))))),
+                        (adminTasksCloud || []).filter((t) => t.published !== false).length > 0 && (React.createElement("div", { style: { marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--hk-border-light)" } },
+                            React.createElement("div", { style: { fontSize: 11.5, fontWeight: 700, color: "var(--hk-gold)", marginBottom: 4 } }, "\u2B50 \u0985\u09CD\u09AF\u09BE\u09A1\u09AE\u09BF\u09A8 \u099F\u09BE\u09B8\u09CD\u0995"),
+                            React.createElement("div", { style: styles.taskList }, (adminTasksCloud || []).filter((t) => t.published !== false).map((t) => (React.createElement("div", { key: t.id, style: styles.taskItem },
+                                React.createElement("span", { style: styles.taskText }, t.title),
+                                t.dueDate && React.createElement("span", { style: { fontSize: 11, color: "var(--hk-text-muted)" } }, formatDateBn(t.dueDate).full))))))),
                         React.createElement("div", { style: styles.reminderHint }, "\u0985\u09CD\u09AF\u09BE\u09AA \u0996\u09CB\u09B2\u09BE \u09A5\u09BE\u0995\u09BE \u0985\u09AC\u09B8\u09CD\u09A5\u09BE\u09AF\u09BC \u09A8\u09BF\u09B0\u09CD\u09A6\u09BF\u09B7\u09CD\u099F \u09B8\u09AE\u09AF\u09BC\u09C7 \u09B8\u09CD\u0995\u09CD\u09B0\u09BF\u09A8\u09C7 \u09B8\u09A4\u09B0\u09CD\u0995\u09A4\u09BE \u09A6\u09C7\u0996\u09BE\u09AC\u09C7\u0964"),
                         tasks.length < MAX_TASKS && (React.createElement("div", { style: styles.taskAddRow },
                             React.createElement("input", { style: styles.taskInput, placeholder: "\u09A8\u09A4\u09C1\u09A8 \u0995\u09BE\u099C \u09B2\u09BF\u0996\u09C1\u09A8\u2026", value: newTask, onChange: (e) => setNewTask(e.target.value), onKeyDown: (e) => e.key === "Enter" && submitTask() }),
@@ -3489,6 +3517,36 @@ function AdminSpecialDayForm({ initial, onClose, onSave }) {
         err && React.createElement("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginBottom: 8 } }, err),
         React.createElement("button", { style: admStyles.addBtn, onClick: () => { if (!date || !title.trim()) { setErr("তারিখ ও শিরোনাম আবশ্যক"); return; } onSave({ date, title: title.trim(), description: description.trim() }); } }, "সংরক্ষণ করুন")));
 }
+const TASK_PRIORITIES = [
+    { key: "low", label: "কম" },
+    { key: "normal", label: "সাধারণ" },
+    { key: "high", label: "জরুরি" },
+];
+function TaskAdminForm({ initial, onClose, onSave }) {
+    const [title, setTitle] = useState((initial === null || initial === void 0 ? void 0 : initial.title) || "");
+    const [description, setDescription] = useState((initial === null || initial === void 0 ? void 0 : initial.description) || "");
+    const [dueDate, setDueDate] = useState((initial === null || initial === void 0 ? void 0 : initial.dueDate) || "");
+    const [reminderDate, setReminderDate] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderDate) || "");
+    const [priority, setPriority] = useState((initial === null || initial === void 0 ? void 0 : initial.priority) || "normal");
+    const [published, setPublished] = useState((initial === null || initial === void 0 ? void 0 : initial.published) !== false);
+    const [err, setErr] = useState("");
+    return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "টাস্ক সম্পাদনা" : "নতুন অ্যাডমিন টাস্ক" },
+        React.createElement("label", { style: admStyles.label }, "শিরোনাম *"),
+        React.createElement("input", { style: admStyles.input, value: title, onChange: (e) => setTitle(e.target.value) }),
+        React.createElement("label", { style: admStyles.label }, "বিস্তারিত"),
+        React.createElement("textarea", { style: Object.assign(Object.assign({}, admStyles.input), { minHeight: 80 }), value: description, onChange: (e) => setDescription(e.target.value) }),
+        React.createElement("label", { style: admStyles.label }, "শেষ তারিখ (\u0990\u099A\u09CD\u099B\u09BF\u0995)"),
+        React.createElement("input", { style: admStyles.input, type: "date", value: dueDate, onChange: (e) => setDueDate(e.target.value) }),
+        React.createElement("label", { style: admStyles.label }, "রিমাইন্ডার তারিখ (\u0990\u099A\u09CD\u099B\u09BF\u0995)"),
+        React.createElement("input", { style: admStyles.input, type: "date", value: reminderDate, onChange: (e) => setReminderDate(e.target.value) }),
+        React.createElement("label", { style: admStyles.label }, "গুরুত্ব"),
+        React.createElement("select", { style: admStyles.input, value: priority, onChange: (e) => setPriority(e.target.value) }, TASK_PRIORITIES.map((p) => React.createElement("option", { key: p.key, value: p.key }, p.label))),
+        React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 12, fontSize: 13.5 } },
+            React.createElement("input", { type: "checkbox", checked: published, onChange: (e) => setPublished(e.target.checked) }),
+            "প্রকাশিত (সবাই দেখতে পাবে)"),
+        err && React.createElement("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginBottom: 8 } }, err),
+        React.createElement("button", { style: admStyles.addBtn, onClick: () => { if (!title.trim()) { setErr("শিরোনাম আবশ্যক"); return; } onSave({ title: title.trim(), description: description.trim(), dueDate: dueDate || null, reminderDate: reminderDate || null, priority, published }); } }, "সংরক্ষণ করুন")));
+}
 // bulk import: "Date | Title | Description" — one row per line. Validates
 // each row (parseable date, non-empty title), separates valid/invalid, and
 // leaves duplicate-detection against the current adminSpecialDaysCloud list
@@ -3533,26 +3591,46 @@ function BulkSpecialDayImport({ onClose, onImport, existing }) {
             result.invalid.length > 0 && (React.createElement("div", { style: { fontSize: 12, color: "var(--hk-danger)", marginTop: 8 } }, "\u09AD\u09C1\u09B2 \u09B2\u09BE\u0987\u09A8: ", result.invalid.join(" · "))),
             React.createElement("button", { style: Object.assign(Object.assign({}, admStyles.addBtn), { marginTop: 12 }), disabled: result.valid.length === 0, onClick: async () => { await onImport(result.valid); onClose(); } }, `\u0986\u09AE\u09A6\u09BE\u09A8\u09BF \u0995\u09B0\u09C1\u09A8 (${result.valid.length})`)))));
 }
-function AdminPanel({ onClose, notices, dailyMessages, adminSpecialDaysCloud, loading, error, onRefresh, onAddNotice, onUpdateNotice, onDeleteNotice, onAddDailyMessage, onUpdateDailyMessage, onDeleteDailyMessage, onAddSpecialDay, onUpdateSpecialDay, onDeleteSpecialDay, onBulkImport, }) {
-    const [tab, setTab] = useState("notices"); // notices | daily | special
+function AdminPanel({ onClose, notices, dailyMessages, adminSpecialDaysCloud, adminTasksCloud, loading, error, onRefresh, onAddNotice, onUpdateNotice, onDeleteNotice, onAddDailyMessage, onUpdateDailyMessage, onDeleteDailyMessage, onAddSpecialDay, onUpdateSpecialDay, onDeleteSpecialDay, onBulkImport, onAddTask, onUpdateTask, onDeleteTask, }) {
+    const [tab, setTab] = useState("notices"); // notices | daily | special | task
     const [editingNotice, setEditingNotice] = useState(null);
     const [showNoticeForm, setShowNoticeForm] = useState(false);
     const [editingMsg, setEditingMsg] = useState(null);
     const [showMsgForm, setShowMsgForm] = useState(false);
     const [editingDay, setEditingDay] = useState(null);
     const [showDayForm, setShowDayForm] = useState(false);
+    const [editingTask, setEditingTask] = useState(null);
+    const [showTaskForm, setShowTaskForm] = useState(false);
     const [showBulk, setShowBulk] = useState(false);
     const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+    // surfaces a real Firestore failure instead of the form just closing as
+    // if the save worked — cleared on every new attempt
+    const [submitError, setSubmitError] = useState("");
     useBackOverlay(showNoticeForm, () => setShowNoticeForm(false));
     useBackOverlay(showMsgForm, () => setShowMsgForm(false));
     useBackOverlay(showDayForm, () => setShowDayForm(false));
+    useBackOverlay(showTaskForm, () => setShowTaskForm(false));
     useBackOverlay(showBulk, () => setShowBulk(false));
+    // every save/delete goes through this: only close the form/clear the
+    // confirm state if Firestore actually confirmed the write
+    const runAndClose = async (opPromise, onSuccess) => {
+        setSubmitError("");
+        const result = await opPromise;
+        if (result && result.ok === false) {
+            setSubmitError(result.message || "সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।");
+            return;
+        }
+        onSuccess();
+    };
     const rowActions = (item, onEdit, onDelete) => React.createElement("div", { style: { display: "flex", gap: 2 } },
         React.createElement("button", { style: admStyles.iconBtn, onClick: onEdit }, React.createElement(Icon, { name: "edit", size: 14 })),
         deleteConfirmId === item.id
-            ? React.createElement("button", { style: admStyles.confirmBtn, onClick: () => { onDelete(item.id); setDeleteConfirmId(null); } }, "নিশ্চিত?")
+            ? React.createElement("button", { style: admStyles.confirmBtn, onClick: () => runAndClose(onDelete(item.id), () => setDeleteConfirmId(null)) }, "নিশ্চিত?")
             : React.createElement("button", { style: admStyles.iconBtn, onClick: () => setDeleteConfirmId(item.id) }, React.createElement(Icon, { name: "delete", size: 14 })));
     const body = [];
+    if (submitError) {
+        body.push(React.createElement("div", { key: "suberr", style: { background: "var(--hk-danger-soft)", color: "var(--hk-danger)", fontSize: 12.5, padding: "8px 10px", borderRadius: 8, marginBottom: 10 } }, submitError));
+    }
     if (loading) {
         body.push(React.createElement("div", { key: "loading", style: admStyles.muted }, "লোড হচ্ছে..."));
     }
@@ -3581,7 +3659,7 @@ function AdminPanel({ onClose, notices, dailyMessages, adminSpecialDaysCloud, lo
                     React.createElement("div", { style: admStyles.muted }, m.date)),
                 rowActions(m, () => { setEditingMsg(m); setShowMsgForm(true); }, onDeleteDailyMessage)))));
     }
-    else {
+    else if (tab === "special") {
         body.push(React.createElement("div", { key: "actions", style: { display: "flex", gap: 8, marginBottom: 14 } },
             React.createElement("button", { style: Object.assign(Object.assign({}, admStyles.addBtn), { marginBottom: 0, flex: 1 }), onClick: () => { setEditingDay(null); setShowDayForm(true); } }, "+ একটি যোগ করুন"),
             React.createElement("button", { style: Object.assign(Object.assign({}, admStyles.addBtn), { marginBottom: 0, flex: 1, background: "var(--hk-card)", color: "var(--hk-text)", border: "1px solid var(--hk-border)" }), onClick: () => setShowBulk(true) }, "বাল্ক ইমপোর্ট")));
@@ -3594,23 +3672,43 @@ function AdminPanel({ onClose, notices, dailyMessages, adminSpecialDaysCloud, lo
                     s.description && React.createElement("div", { style: admStyles.muted }, s.description)),
                 rowActions(s, () => { setEditingDay(s); setShowDayForm(true); }, onDeleteSpecialDay)))));
     }
+    else {
+        body.push(React.createElement("button", { key: "add", style: admStyles.addBtn, onClick: () => { setEditingTask(null); setShowTaskForm(true); } }, "+ নতুন অ্যাডমিন টাস্ক"));
+        if ((adminTasksCloud || []).length === 0)
+            body.push(React.createElement(EmptyState, { key: "empty", text: "এখনও কোনো অ্যাডমিন টাস্ক নেই।" }));
+        (adminTasksCloud || []).forEach((t) => body.push(React.createElement("div", { key: t.id, style: admStyles.card },
+            React.createElement("div", { style: admStyles.row },
+                React.createElement("div", null,
+                    React.createElement("div", { style: { fontWeight: 600 } }, t.title, !t.published && React.createElement("span", { style: { fontSize: 10.5, color: "var(--hk-text-muted)", marginLeft: 6 } }, "(অপ্রকাশিত)")),
+                    t.dueDate && React.createElement("div", { style: admStyles.muted }, "শেষ তারিখ: ", formatDateBn(t.dueDate).full)),
+                rowActions(t, () => { setEditingTask(t); setShowTaskForm(true); }, onDeleteTask)))));
+    }
     if (showNoticeForm)
-        body.push(React.createElement(NoticeForm, { key: "nform", initial: editingNotice, onClose: () => setShowNoticeForm(false), onSave: (data) => { editingNotice ? onUpdateNotice(editingNotice.id, data) : onAddNotice(data); setShowNoticeForm(false); } }));
+        body.push(React.createElement(NoticeForm, { key: "nform", initial: editingNotice, onClose: () => setShowNoticeForm(false), onSave: (data) => runAndClose(editingNotice ? onUpdateNotice(editingNotice.id, data) : onAddNotice(data), () => setShowNoticeForm(false)) }));
     if (showMsgForm)
-        body.push(React.createElement(DailyMessageForm, { key: "mform", initial: editingMsg, onClose: () => setShowMsgForm(false), onSave: (data) => { editingMsg ? onUpdateDailyMessage(editingMsg.id, data) : onAddDailyMessage(data); setShowMsgForm(false); } }));
+        body.push(React.createElement(DailyMessageForm, { key: "mform", initial: editingMsg, onClose: () => setShowMsgForm(false), onSave: (data) => runAndClose(editingMsg ? onUpdateDailyMessage(editingMsg.id, data) : onAddDailyMessage(data), () => setShowMsgForm(false)) }));
     if (showDayForm)
-        body.push(React.createElement(AdminSpecialDayForm, { key: "dform", initial: editingDay, onClose: () => setShowDayForm(false), onSave: (data) => { editingDay ? onUpdateSpecialDay(editingDay.id, data) : onAddSpecialDay(data); setShowDayForm(false); } }));
+        body.push(React.createElement(AdminSpecialDayForm, { key: "dform", initial: editingDay, onClose: () => setShowDayForm(false), onSave: (data) => runAndClose(editingDay ? onUpdateSpecialDay(editingDay.id, data) : onAddSpecialDay(data), () => setShowDayForm(false)) }));
+    if (showTaskForm)
+        body.push(React.createElement(TaskAdminForm, { key: "tform", initial: editingTask, onClose: () => setShowTaskForm(false), onSave: (data) => runAndClose(editingTask ? onUpdateTask(editingTask.id, data) : onAddTask(data), () => setShowTaskForm(false)) }));
     if (showBulk)
-        body.push(React.createElement(BulkSpecialDayImport, { key: "bulk", onClose: () => setShowBulk(false), existing: adminSpecialDaysCloud, onImport: onBulkImport }));
+        body.push(React.createElement(BulkSpecialDayImport, { key: "bulk", onClose: () => setShowBulk(false), existing: adminSpecialDaysCloud, onImport: async (rows) => {
+                const result = await onBulkImport(rows);
+                if (result && result.ok === false) {
+                    setSubmitError(result.message || "বাল্ক ইমপোর্ট ব্যর্থ হয়েছে।");
+                }
+                return result;
+            } }));
     return React.createElement(ModalShell, { onClose: onClose, title: "\u098F\u09A1\u09AE\u09BF\u09A8 \u09AA\u09CD\u09AF\u09BE\u09A8\u09C7\u09B2" },
         React.createElement("div", { style: admStyles.subTabs },
             React.createElement("button", { style: admStyles.subTabBtn(tab === "notices"), onClick: () => setTab("notices") }, "\uD83D\uDCE2 \u09A8\u09CB\u099F\u09BF\u09B6"),
             React.createElement("button", { style: admStyles.subTabBtn(tab === "daily"), onClick: () => setTab("daily") }, "\u2728 \u09A6\u09C8\u09A8\u09BF\u0995 \u09AC\u09BE\u09B0\u09CD\u09A4\u09BE"),
-            React.createElement("button", { style: admStyles.subTabBtn(tab === "special"), onClick: () => setTab("special") }, "\uD83D\uDCC5 \u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09AC\u09B8")),
+            React.createElement("button", { style: admStyles.subTabBtn(tab === "special"), onClick: () => setTab("special") }, "\uD83D\uDCC5 \u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09AC\u09B8"),
+            React.createElement("button", { style: admStyles.subTabBtn(tab === "task"), onClick: () => setTab("task") }, "\uD83D\uDCCB \u099F\u09BE\u09B8\u09CD\u0995")),
         ...body);
 }
 /* ---------------- notification center ---------------- */
-function NotificationCenter({ onClose, notices, dailyMessages, tasks, debts, specialDays, adminSpecialDaysCloud, taxes, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, onMarkNoticeRead, onMarkDailyMessageRead, onDismissDailyMessage, onMarkAllRead, }) {
+function NotificationCenter({ onClose, notices, dailyMessages, tasks, debts, specialDays, adminSpecialDaysCloud, adminTasksCloud, taxes, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, onMarkNoticeRead, onMarkDailyMessageRead, onDismissDailyMessage, onMarkAllRead, }) {
     const [tab, setTab] = useState("notice"); // notice | daily | reminder
     const visibleMessages = dailyMessages.filter((m) => !dismissedDailyMessageIds.includes(m.id));
     // "reminders" pools every source of a dated future obligation the app
@@ -3624,8 +3722,9 @@ function NotificationCenter({ onClose, notices, dailyMessages, tasks, debts, spe
         (tasks || []).forEach((t) => t.reminderDate && t.reminderDate >= today && !t.done && items.push({ id: `tk-${t.id}`, date: t.reminderDate, label: t.title, source: "টাস্ক" }));
         (debts || []).forEach((d) => d.dueDate && d.dueDate >= today && debtRemaining(d) > 0 && items.push({ id: `db-${d.id}`, date: d.dueDate, label: `${d.person} — ${formatTaka(debtRemaining(d))}`, source: "দেনা" }));
         (taxes || []).forEach((t) => !t.paid && t.dueDate && t.dueDate >= today && items.push({ id: `tx-${t.id}`, date: t.dueDate, label: `${t.name} — ${formatTaka(t.amount)}`, source: "ট্যাক্স" }));
+        (adminTasksCloud || []).forEach((t) => t.published !== false && t.reminderDate && t.reminderDate >= today && items.push({ id: `atk-${t.id}`, date: t.reminderDate, label: t.title, source: "অ্যাডমিন টাস্ক" }));
         return items.sort((a, b) => (a.date < b.date ? -1 : 1));
-    }, [specialDays, adminSpecialDaysCloud, tasks, debts, taxes, today]);
+    }, [specialDays, adminSpecialDaysCloud, tasks, debts, taxes, adminTasksCloud, today]);
     const unreadNotices = notices.filter((n) => n.published !== false && !readNoticeIds.includes(n.id));
     const body = [];
     if (tab === "notice") {
