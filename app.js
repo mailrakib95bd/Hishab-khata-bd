@@ -1936,14 +1936,29 @@ function App() {
             showLogin && (React.createElement(LoginScreen, { onClose: () => setShowLogin(false), onSignedIn: () => setShowLogin(false) })),
             showHamburgerMenu && (React.createElement(HamburgerMenu, {
                 onClose: () => setShowHamburgerMenu(false),
-                onOpenNotifications: () => { setShowHamburgerMenu(false); setShowNotificationCenter(true); },
+                // these five open a useBackOverlay-tracked overlay — closing
+                // the hamburger (which pops its own history entry via
+                // history.back()) and pushing a new entry for the next
+                // overlay in the SAME synchronous batch is a real race:
+                // history.back() targets a specific pre-recorded entry, and
+                // if a pushState from the newly-opening overlay lands in
+                // front of it before the browser processes the back
+                // navigation, back() ends up traversing past the new
+                // overlay's entry too, closing it immediately. Deferring
+                // the open by one tick lets the hamburger's close (and its
+                // real, async back-navigation) fully finish first, so the
+                // new overlay's own push always lands cleanly on top.
+                // onOpenSettings/onOpenCalendar are NOT changed — they use
+                // the separate, pre-existing modal-stack system, not
+                // useBackOverlay, and were not reported as affected.
+                onOpenNotifications: () => { setShowHamburgerMenu(false); setTimeout(() => setShowNotificationCenter(true), 0); },
                 onOpenSettings: () => { setShowHamburgerMenu(false); setShowSettings(true); },
                 onOpenCalendar: () => { setShowHamburgerMenu(false); setShowCalendar(true); },
-                onOpenFAQ: () => { setShowHamburgerMenu(false); setShowFAQ(true); },
-                onOpenTax: () => { setShowHamburgerMenu(false); setShowTaxPanel(true); },
-                onOpenAccounts: () => { setShowHamburgerMenu(false); setShowAccountPanel(true); },
+                onOpenFAQ: () => { setShowHamburgerMenu(false); setTimeout(() => setShowFAQ(true), 0); },
+                onOpenTax: () => { setShowHamburgerMenu(false); setTimeout(() => setShowTaxPanel(true), 0); },
+                onOpenAccounts: () => { setShowHamburgerMenu(false); setTimeout(() => setShowAccountPanel(true), 0); },
                 isAdminUser: isAdmin(user),
-                onOpenAdmin: () => { setShowHamburgerMenu(false); setShowAdminPanel(true); },
+                onOpenAdmin: () => { setShowHamburgerMenu(false); setTimeout(() => setShowAdminPanel(true), 0); },
                 unreadCount: totalUnreadCount,
             })),
             showFAQ && React.createElement(FAQModal, { onClose: () => setShowFAQ(false) }),
@@ -3781,7 +3796,6 @@ function NotificationCenter({ onClose, notices, dailyMessages, tasks, debts, spe
 }
 /* ---------------- hamburger menu ---------------- */
 function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, onOpenAccounts, isAdminUser, onOpenAdmin, unreadCount, }) {
-    useBackOverlay(true, onClose);
     const menuItemStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "13px 4px", background: "none", border: "none", borderBottom: "1px solid var(--hk-border-light)", fontSize: 14.5, color: "var(--hk-text)" };
     return React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 200, display: "flex" } },
         React.createElement("div", { style: { flex: 1, background: "rgba(0,0,0,0.4)" }, onClick: onClose }),
