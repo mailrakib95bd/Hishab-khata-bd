@@ -3717,7 +3717,15 @@ function NotificationCenter({ onClose, notices, dailyMessages, tasks, debts, spe
     const today = todayStr();
     const reminders = useMemo(() => {
         const items = [];
-        (specialDays || []).forEach((s) => s.date >= today && items.push({ id: `sd-${s.id}`, date: s.date, label: s.title, source: "ক্যালেন্ডার" }));
+        // specialDays is a plain object keyed by date string, mapping to an
+        // array of label strings ({ "2026-09-10": ["Eid"] }) — NOT an array
+        // of {id,date,title} objects like adminSpecialDaysCloud is. Iterate
+        // with Object.entries and push one reminder per label.
+        Object.entries(specialDays || {}).forEach(([dateStr, labels]) => {
+            if (dateStr >= today) {
+                (labels || []).forEach((label) => items.push({ id: `sd-${dateStr}-${label}`, date: dateStr, label, source: "ক্যালেন্ডার" }));
+            }
+        });
         (adminSpecialDaysCloud || []).forEach((s) => s.date >= today && items.push({ id: `asd-${s.id}`, date: s.date, label: s.title, source: "বিশেষ দিবস" }));
         (tasks || []).forEach((t) => t.reminderDate && t.reminderDate >= today && !t.done && items.push({ id: `tk-${t.id}`, date: t.reminderDate, label: t.title, source: "টাস্ক" }));
         (debts || []).forEach((d) => d.dueDate && d.dueDate >= today && debtRemaining(d) > 0 && items.push({ id: `db-${d.id}`, date: d.dueDate, label: `${d.person} — ${formatTaka(debtRemaining(d))}`, source: "দেনা" }));
