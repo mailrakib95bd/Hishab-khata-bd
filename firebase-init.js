@@ -31,6 +31,14 @@ import {
   doc,
   getDoc,
   setDoc,
+  collection,
+  getDocs,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  query,
+  orderBy,
+  writeBatch,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -85,6 +93,36 @@ window.FB = {
   },
   async saveCloudData(uid, data) {
     await setDoc(doc(db, "users", uid), { ...data, updatedAt: Date.now() });
+  },
+  // ---- admin-managed global collections: notices, dailyMessages,
+  // adminSpecialDays. Reads are allowed for any signed-in user; writes are
+  // rejected server-side by firestore.rules unless request.auth.uid matches
+  // the primary admin UID — the isAdmin() check the UI does before calling
+  // these is only for hiding the buttons, never the actual security
+  // boundary. See firestore.rules for the enforced rule.
+  async listCollection(name) {
+    const snap = await getDocs(query(collection(db, name), orderBy("createdAt", "desc")));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+  async addDocTo(name, data) {
+    const ref = await addDoc(collection(db, name), { ...data, createdAt: Date.now() });
+    return ref.id;
+  },
+  async updateDocIn(name, id, patch) {
+    await updateDoc(doc(db, name, id), { ...patch, updatedAt: Date.now() });
+  },
+  async deleteDocFrom(name, id) {
+    await deleteDoc(doc(db, name, id));
+  },
+  // bulk-import special days in one atomic batch (max 500 per Firestore
+  // batch — the caller chunks larger imports)
+  async batchAddTo(name, items) {
+    const batch = writeBatch(db);
+    items.forEach((item) => {
+      const ref = doc(collection(db, name));
+      batch.set(ref, { ...item, createdAt: Date.now() });
+    });
+    await batch.commit();
   },
 };
 
