@@ -1543,10 +1543,6 @@ function App() {
         persistAll({ userAccounts: next });
     };
     const dynamicAccountBalances = useMemo(() => computeDynamicAccountBalances(transactions, userAccounts, transfers, debts), [transactions, userAccounts, transfers, debts]);
-    // same income-minus-expense total already shown in the main Dashboard
-    // header — reused as-is for the hamburger menu's balance line, not
-    // recomputed a different way
-    const balance = useMemo(() => transactions.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0), [transactions]);
     // wallets (cash/bank/bkash/নগদ/রকেট/card) must never go negative — computes
     // a method's current balance from opening balance + transactions + transfers,
     // optionally excluding one transaction/transfer (used when editing).
@@ -2043,8 +2039,6 @@ function App() {
                 isAdminUser: isAdmin(user),
                 onOpenAdmin: () => { setShowHamburgerMenu(false); setTimeout(() => setShowAdminPanel(true), 0); },
                 unreadCount: totalUnreadCount,
-                profileName: profileName,
-                balance: balance,
             })),
             showFAQ && React.createElement(FAQModal, { onClose: () => setShowFAQ(false), faqCloud: faqCloud }),
             showTaxPanel && (React.createElement(TaxPanel, { onClose: () => setShowTaxPanel(false), taxes: taxes, onAdd: addTax, onUpdate: updateTax, onDelete: deleteTax, onTogglePaid: toggleTaxPaid })),
@@ -2301,7 +2295,7 @@ function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onTo
         React.createElement("div", { style: styles.headerPerf }, Array.from({ length: 14 }).map((_, i) => (React.createElement("span", { key: i, style: styles.perfDot })))),
         React.createElement("button", { onClick: onOpenMenu, "aria-label": "\u09AE\u09C7\u09A8\u09C1", style: { position: "absolute", top: 14, left: 14, zIndex: 2, background: "rgba(255,255,255,0.12)", border: "none", borderRadius: 8, width: 32, height: 32, color: "var(--hk-text-on-dark)", fontSize: 16, lineHeight: "32px" } }, "\u2630"),
         React.createElement("div", { style: styles.headerContent },
-            React.createElement("div", null,
+            React.createElement("div", { style: { marginLeft: 40 } },
                 React.createElement("div", { style: styles.headerEyebrow }, dashboardTitle(profileName)),
                 React.createElement("div", { style: styles.headerBalanceLabel }, "\u09AC\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09B8"),
                 React.createElement("div", { style: Object.assign(Object.assign({}, styles.headerBalance), { color: balance < 0 ? "#E38477" : balance > 0 ? "#7FCB9D" : "var(--hk-text-on-dark)" }) }, formatTaka(balance, { sign: true, symbol: false }))),
@@ -3965,7 +3959,7 @@ function NotificationCenter({ onClose, notices, dailyMessages, tasks, debts, spe
         ...body);
 }
 /* ---------------- hamburger menu ---------------- */
-function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, onOpenAccounts, isAdminUser, onOpenAdmin, unreadCount, profileName, balance, }) {
+function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, onOpenAccounts, isAdminUser, onOpenAdmin, unreadCount, }) {
     useBackgroundScrollLock();
     const menuItemStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "13px 4px", background: "none", border: "none", borderBottom: "1px solid var(--hk-border-light)", fontSize: 14.5, color: "var(--hk-text)" };
     // drawer must render on the LEFT: in this row flex container, the
@@ -3974,10 +3968,7 @@ function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCal
     // second, covering the right side of the screen
     return React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 200, display: "flex" } },
         React.createElement("div", { style: { width: "78%", maxWidth: 320, background: "var(--hk-card)", height: "100%", overflowY: "auto", overscrollBehaviorY: "contain", padding: "20px 18px", boxSizing: "border-box" } },
-            React.createElement("button", { onClick: onClose, "aria-label": "\u09AE\u09C7\u09A8\u09C1 \u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8", style: { background: "none", border: "none", fontSize: 22, padding: 0, marginBottom: 14, color: "var(--hk-text)" } }, "\u2630"),
-            React.createElement("div", { style: { fontWeight: 800, fontSize: 18, color: "var(--hk-text)" } }, dashboardTitle(profileName)),
-            React.createElement("div", { style: { fontSize: 12, color: "var(--hk-text-muted)", marginTop: 8 } }, "\u09AC\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09B8"),
-            React.createElement("div", { style: { fontWeight: 800, fontSize: 22, color: balance < 0 ? "var(--hk-danger)" : "var(--hk-gold)", marginBottom: 18 } }, formatTaka(balance, { sign: true })),
+            React.createElement("button", { onClick: onClose, "aria-label": "\u09AE\u09C7\u09A8\u09C1 \u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8", style: { background: "none", border: "none", fontSize: 22, padding: 0, marginBottom: 18, color: "var(--hk-text)" } }, "\u2630"),
             isAdminUser && React.createElement("button", { style: Object.assign(Object.assign({}, menuItemStyle), { color: "var(--hk-gold)", fontWeight: 700 }), onClick: onOpenAdmin }, "\u2699\uFE0F \u098F\u09A1\u09AE\u09BF\u09A8 \u09AA\u09CD\u09AF\u09BE\u09A8\u09C7\u09B2"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenFAQ }, "\u09AA\u09CD\u09B0\u09B6\u09CD\u09A8 \u0993 \u0989\u09A4\u09CD\u09A4\u09B0"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenTax }, "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
