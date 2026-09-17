@@ -391,7 +391,13 @@ function dashboardTitle(name) {
     const trimmed = (name || "").trim();
     if (!trimmed)
         return "আমার খাতা";
-    return `${trimmed}ের খাতা`;
+    // Bengali possessive suffix "ের" attaches directly to a Bengali word
+    // ("রাকিব" -> "রাকিবের"), but doing that to a Latin-script name reads
+    // wrong ("Rakib Hossenের"). For a name ending in a non-Bengali
+    // character, "এর" is used as its own word instead, with a space.
+    const lastChar = trimmed[trimmed.length - 1];
+    const lastIsBengali = /[\u0980-\u09FF]/.test(lastChar);
+    return lastIsBengali ? `${trimmed}ের খাতা` : `${trimmed} এর খাতা`;
 }
 // formats a JS timestamp (ms) as "আজ, সকাল ১০:৩০" or a full date for older syncs
 function formatSyncTime(ts) {
@@ -1143,9 +1149,11 @@ function App() {
             else {
                 setFaqCloud(f);
             }
+            return s;
         }
         catch (e) {
             setAdminContentError(true);
+            return null;
         }
         finally {
             setAdminContentLoading(false);
@@ -1242,7 +1250,24 @@ function App() {
         try {
             if (fresh.length)
                 await window.FB.batchAddTo("adminSpecialDays", fresh);
-            await fetchAdminContent();
+            let latest = await fetchAdminContent();
+            // defensive re-check: a batch write of many documents can very
+            // briefly lag behind an immediate read (Firestore eventual
+            // consistency), which would otherwise look like "saved fine,
+            // then some rows are missing" right after a large import. If
+            // the freshly-fetched list doesn't yet contain everything we
+            // just wrote, wait a moment and fetch once more before
+            // reporting success. Uses fetchAdminContent's own return
+            // value directly — never a stale closure of local state.
+            const freshKeys = new Set(fresh.map((r) => `${r.date}|${r.title.trim()}`));
+            const missingAfter = (list) => {
+                const currentKeys = new Set((list || []).map((s) => `${s.date}|${(s.title || "").trim()}`));
+                return [...freshKeys].some((k) => !currentKeys.has(k));
+            };
+            if (fresh.length && missingAfter(latest)) {
+                await new Promise((resolve) => setTimeout(resolve, 1200));
+                latest = await fetchAdminContent();
+            }
             return { added: fresh.length, skipped: rows.length - fresh.length, ok: true };
         }
         catch (e) {
@@ -1945,7 +1970,7 @@ function App() {
     return (React.createElement(CatCtx.Provider, { value: { expenseCats, incomeCats } },
         React.createElement("div", { style: styles.app },
             React.createElement(FontLoader, null),
-            React.createElement(Header, { transactions: transactions, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onUpdateTask: updateTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName, onOpenMenu: () => setShowHamburgerMenu(true), onOpenNotifications: () => setShowNotificationCenter(true), unreadCount: totalUnreadCount, adminTasksCloud: adminTasksCloud }),
+            React.createElement(Header, { transactions: transactions, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onUpdateTask: updateTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName, onOpenMenu: () => setShowHamburgerMenu(true), onOpenNotifications: () => setShowNotificationCenter(true), unreadCount: totalUnreadCount, adminTasksCloud: adminTasksCloud, taxes: taxes, onOpenTaxPanel: () => setShowTaxPanel(true) }),
             React.createElement("main", { style: styles.main },
                 tab === "dashboard" && (React.createElement(Dashboard, { transactions: transactions, budget: budget, categoryBudgets: categoryBudgets, debts: debts, accounts: accounts, onEditBudget: () => setShowBudget(true), onOpenTx: (t) => setEditingTx(t), onGoDebts: () => setTab("debts"), onGoReports: () => setTab("reports"), onQuickAdd: (type) => {
                         setQuickAddType(type);
@@ -2260,7 +2285,7 @@ function TaskForm({ initial, onClose, onSave }) {
                 onSave({ text: text.trim(), date: date || null, time: time || null, category: category || null, note: note.trim(), repeat: repeat === "none" ? null : repeat, reminderDate, reminderTime });
             } }, "সংরক্ষণ করুন")));
 }
-function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount, adminTasksCloud }) {
+function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount, adminTasksCloud, taxes, onOpenTaxPanel }) {
     const [showTasks, setShowTasks] = useState(false);
     useBackOverlay(showTasks, () => setShowTasks(false));
     const [showTaskForm, setShowTaskForm] = useState(false);
@@ -2350,6 +2375,13 @@ function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onTo
                             React.createElement("div", { style: styles.taskList }, (adminTasksCloud || []).filter((t) => t.published !== false).map((t) => (React.createElement("div", { key: t.id, style: styles.taskItem },
                                 React.createElement("span", { style: styles.taskText }, t.title),
                                 t.dueDate && React.createElement("span", { style: { fontSize: 11, color: "var(--hk-text-muted)" } }, formatDateBn(t.dueDate).full))))))),
+                        (taxes || []).filter((t) => !t.paid).length > 0 && (React.createElement("div", { style: { marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--hk-border-light)" } },
+                            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } },
+                                React.createElement("div", { style: { fontSize: 11.5, fontWeight: 700, color: "var(--hk-gold)" } }, "\uD83E\uDDFE \u0986\u09AE\u09BE\u09B0 \u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8"),
+                                React.createElement("button", { style: { fontSize: 11, color: "var(--hk-text-muted)", background: "none", border: "none", textDecoration: "underline" }, onClick: () => { setShowTasks(false); onOpenTaxPanel(); } }, "\u09B8\u09AC \u09A6\u09C7\u0996\u09C1\u09A8")),
+                            React.createElement("div", { style: styles.taskList }, (taxes || []).filter((t) => !t.paid).map((t) => (React.createElement("div", { key: t.id, style: styles.taskItem },
+                                React.createElement("span", { style: styles.taskText }, t.name),
+                                React.createElement("span", { style: { fontSize: 11, color: "var(--hk-text-muted)" } }, formatTaka(t.amount)))))))),
                         React.createElement("div", { style: styles.reminderHint }, "\u0985\u09CD\u09AF\u09BE\u09AA \u0996\u09CB\u09B2\u09BE \u09A5\u09BE\u0995\u09BE \u0985\u09AC\u09B8\u09CD\u09A5\u09BE\u09AF\u09BC \u09A8\u09BF\u09B0\u09CD\u09A6\u09BF\u09B7\u09CD\u099F \u09B8\u09AE\u09AF\u09BC\u09C7 \u09B8\u09CD\u0995\u09CD\u09B0\u09BF\u09A8\u09C7 \u09B8\u09A4\u09B0\u09CD\u0995\u09A4\u09BE \u09A6\u09C7\u0996\u09BE\u09AC\u09C7\u0964"),
                         tasks.length < MAX_TASKS && (React.createElement("div", { style: styles.taskAddRow },
                             React.createElement("input", { style: styles.taskInput, placeholder: "\u09A8\u09A4\u09C1\u09A8 \u0995\u09BE\u099C \u09B2\u09BF\u0996\u09C1\u09A8\u2026", value: newTask, onChange: (e) => setNewTask(e.target.value), onKeyDown: (e) => e.key === "Enter" && submitTask() }),
@@ -3967,7 +3999,7 @@ function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCal
     // and the tappable backdrop (which fills the remaining space) comes
     // second, covering the right side of the screen
     return React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 200, display: "flex" } },
-        React.createElement("div", { style: { width: "78%", maxWidth: 320, background: "var(--hk-card)", height: "100%", overflowY: "auto", overscrollBehaviorY: "contain", padding: "20px 18px", boxSizing: "border-box" } },
+        React.createElement("div", { style: { width: "78%", maxWidth: 320, background: "var(--hk-card)", height: "100%", overflowY: "auto", overscrollBehaviorY: "contain", padding: "20px 18px", boxSizing: "border-box", display: "flex", flexDirection: "column" } },
             React.createElement("button", { onClick: onClose, "aria-label": "\u09AE\u09C7\u09A8\u09C1 \u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8", style: { background: "none", border: "none", fontSize: 22, padding: 0, marginBottom: 18, color: "var(--hk-text)" } }, "\u2630"),
             isAdminUser && React.createElement("button", { style: Object.assign(Object.assign({}, menuItemStyle), { color: "var(--hk-gold)", fontWeight: 700 }), onClick: onOpenAdmin }, "\u2699\uFE0F \u098F\u09A1\u09AE\u09BF\u09A8 \u09AA\u09CD\u09AF\u09BE\u09A8\u09C7\u09B2"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenFAQ }, "\u09AA\u09CD\u09B0\u09B6\u09CD\u09A8 \u0993 \u0989\u09A4\u09CD\u09A4\u09B0"),
@@ -3978,7 +4010,10 @@ function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCal
                 React.createElement("span", null, "\u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8"),
                 unreadCount > 0 && React.createElement("span", { style: { background: "var(--hk-danger)", color: "#fff", fontSize: 11, borderRadius: 999, padding: "1px 7px" } }, unreadCount)),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenSettings }, "\u09B8\u09C7\u099F\u09BF\u0982\u09B8"),
-            React.createElement("div", { style: { marginTop: 30, paddingTop: 16, borderTop: "1px solid var(--hk-border-light)", fontSize: 12, color: "var(--hk-text-muted)", lineHeight: 1.8 } },
+            // marginTop: "auto" pins this block to the very bottom of the
+            // flex-column drawer, regardless of how few/many menu items are
+            // above it — the menu items stay naturally at the top
+            React.createElement("div", { style: { marginTop: "auto", paddingTop: 16, borderTop: "1px solid var(--hk-border-light)", fontSize: 12, color: "var(--hk-text-muted)", lineHeight: 1.8 } },
                 React.createElement("div", { style: { fontWeight: 700, fontSize: 13.5, color: "var(--hk-text)" } }, "\u09B9\u09BF\u09B8\u09BE\u09AC \u0996\u09BE\u09A4\u09BE"),
                 React.createElement("div", null, "\u099C\u09C0\u09AC\u09A8\u09C7\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC \u09A5\u09C7\u0995\u09C7 \u0986\u0996\u09BF\u09B0\u09BE\u09A4\u09C7\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC"),
                 React.createElement("div", null, "Version 10.1.2.3"),
@@ -4027,35 +4062,49 @@ function TaxPanel({ onClose, taxes, onAdd, onUpdate, onDelete, onTogglePaid }) {
     const [showForm, setShowForm] = useState(false);
     const [editing, setEditing] = useState(null);
     const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+    const [showPaidSection, setShowPaidSection] = useState(false);
     useBackOverlay(showForm, () => setShowForm(false));
     const today = todayStr();
-    const sorted = [...taxes].sort((a, b) => (a.paid === b.paid ? (a.dueDate || "").localeCompare(b.dueDate || "") : a.paid ? 1 : -1));
-    const totalUnpaid = taxes.filter((t) => !t.paid).reduce((s, t) => s + t.amount, 0);
+    // once a tax is marked paid, it moves out of the active list entirely —
+    // it does not keep sitting there after being completed. It's not
+    // deleted outright though: it collapses into a "পরিশোধিত" section the
+    // user can open if they want to review/undo, so completing one of many
+    // admin-assigned taxes doesn't just pile up forever in the main view.
+    const unpaid = taxes.filter((t) => !t.paid).sort((a, b) => (a.dueDate || "").localeCompare(b.dueDate || ""));
+    const paid = taxes.filter((t) => t.paid);
+    const totalUnpaid = unpaid.reduce((s, t) => s + t.amount, 0);
+    const taxRow = (t) => {
+        const overdue = !t.paid && t.dueDate && t.dueDate < today;
+        return React.createElement("div", { key: t.id, style: admStyles.card },
+            React.createElement("div", { style: admStyles.row },
+                React.createElement("div", null,
+                    React.createElement("div", { style: { fontWeight: 600 } }, t.name, t.paid && React.createElement("span", { style: { fontSize: 11, color: "var(--hk-success)", marginLeft: 6 } }, "\u2713 \u09AA\u09B0\u09BF\u09B6\u09CB\u09A7\u09BF\u09A4")),
+                    t.dueDate && React.createElement("div", { style: Object.assign(Object.assign({}, admStyles.muted), overdue ? { color: "var(--hk-danger)" } : {}) }, "শেষ তারিখ: ", formatDateBn(t.dueDate).full, overdue ? " (মেয়াদোত্তীর্ণ)" : ""),
+                    React.createElement("div", { style: { fontWeight: 600, marginTop: 3 } }, formatTaka(t.amount))),
+                React.createElement("div", { style: { display: "flex", gap: 2, alignItems: "flex-start" } },
+                    React.createElement("button", { style: admStyles.iconBtn, onClick: () => onTogglePaid(t.id) }, t.paid ? "\u21BA" : "\u2713"),
+                    React.createElement("button", { style: admStyles.iconBtn, onClick: () => { setEditing(t); setShowForm(true); } }, React.createElement(Icon, { name: "edit", size: 14 })),
+                    deleteConfirmId === t.id
+                        ? React.createElement("button", { style: admStyles.confirmBtn, onClick: () => { onDelete(t.id); setDeleteConfirmId(null); } }, "নিশ্চিত?")
+                        : React.createElement("button", { style: admStyles.iconBtn, onClick: () => setDeleteConfirmId(t.id) }, React.createElement(Icon, { name: "delete", size: 14 })))));
+    };
     const body = [
         React.createElement("button", { key: "add", style: admStyles.addBtn, onClick: () => { setEditing(null); setShowForm(true); } }, "+ নতুন ট্যাক্স যোগ করুন"),
     ];
-    if (sorted.length === 0) {
-        body.push(React.createElement(EmptyState, { key: "empty", text: "কোনো ট্যাক্স যোগ করা হয়নি।" }));
+    if (unpaid.length === 0) {
+        body.push(React.createElement(EmptyState, { key: "empty", text: "কোনো অপরিশোধিত ট্যাক্স নেই।" }));
     }
     else {
-        sorted.forEach((t) => {
-            const overdue = !t.paid && t.dueDate && t.dueDate < today;
-            body.push(React.createElement("div", { key: t.id, style: admStyles.card },
-                React.createElement("div", { style: admStyles.row },
-                    React.createElement("div", null,
-                        React.createElement("div", { style: { fontWeight: 600 } }, t.name, t.paid && React.createElement("span", { style: { fontSize: 11, color: "var(--hk-success)", marginLeft: 6 } }, "\u2713 \u09AA\u09B0\u09BF\u09B6\u09CB\u09A7\u09BF\u09A4")),
-                        t.dueDate && React.createElement("div", { style: Object.assign(Object.assign({}, admStyles.muted), overdue ? { color: "var(--hk-danger)" } : {}) }, "শেষ তারিখ: ", formatDateBn(t.dueDate).full, overdue ? " (মেয়াদোত্তীর্ণ)" : ""),
-                        React.createElement("div", { style: { fontWeight: 600, marginTop: 3 } }, formatTaka(t.amount))),
-                    React.createElement("div", { style: { display: "flex", gap: 2, alignItems: "flex-start" } },
-                        React.createElement("button", { style: admStyles.iconBtn, onClick: () => onTogglePaid(t.id) }, t.paid ? "\u21BA" : "\u2713"),
-                        React.createElement("button", { style: admStyles.iconBtn, onClick: () => { setEditing(t); setShowForm(true); } }, React.createElement(Icon, { name: "edit", size: 14 })),
-                        deleteConfirmId === t.id
-                            ? React.createElement("button", { style: admStyles.confirmBtn, onClick: () => { onDelete(t.id); setDeleteConfirmId(null); } }, "নিশ্চিত?")
-                            : React.createElement("button", { style: admStyles.iconBtn, onClick: () => setDeleteConfirmId(t.id) }, React.createElement(Icon, { name: "delete", size: 14 }))))));
-        });
+        unpaid.forEach((t) => body.push(taxRow(t)));
         body.push(React.createElement("div", { key: "totals", style: admStyles.totalsBar },
             React.createElement("span", null, "মোট অপরিশোধিত"),
             React.createElement("strong", null, formatTaka(totalUnpaid))));
+    }
+    if (paid.length > 0) {
+        body.push(React.createElement("button", { key: "paidToggle", style: { fontSize: 12, color: "var(--hk-text-muted)", background: "none", border: "none", marginTop: 14, textDecoration: "underline" }, onClick: () => setShowPaidSection((v) => !v) }, `${showPaidSection ? "লুকান" : "দেখুন"} — পরিশোধিত (${toBnDigits(paid.length)})`));
+        if (showPaidSection) {
+            paid.forEach((t) => body.push(taxRow(t)));
+        }
     }
     if (showForm) {
         body.push(React.createElement(TaxForm, { key: "form", initial: editing, onClose: () => setShowForm(false), onSave: (data) => { editing ? onUpdate(editing.id, data) : onAdd(data); setShowForm(false); } }));
@@ -5511,7 +5560,6 @@ function ModalShell({ title, onClose, children }) {
     useBackgroundScrollLock();
     return (React.createElement("div", { style: styles.modalOverlay, onClick: onClose },
         React.createElement("div", { style: styles.modalSheet, onClick: (e) => e.stopPropagation() },
-            React.createElement("div", { style: styles.modalHandle }),
             React.createElement("div", { style: styles.modalHeader },
                 React.createElement("div", { style: styles.modalTitle }, title),
                 React.createElement("button", { style: styles.modalClose, onClick: onClose }, "\u2715")),
@@ -6432,7 +6480,7 @@ const styles = {
         inset: 0,
         background: "rgba(22,50,59,0.5)",
         display: "flex",
-        alignItems: "flex-end",
+        alignItems: "flex-start",
         justifyContent: "center",
         zIndex: 30,
     },
@@ -6443,7 +6491,7 @@ const styles = {
         overflowY: "auto",
         overscrollBehaviorY: "contain",
         background: "var(--hk-surface-soft)",
-        borderRadius: "16px 16px 0 0",
+        borderRadius: "0 0 16px 16px",
         padding: "10px 20px 26px",
         boxSizing: "border-box",
     },
