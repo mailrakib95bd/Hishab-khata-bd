@@ -685,6 +685,13 @@ function App() {
     const [readNoticeIds, setReadNoticeIds] = useState([]);
     const [readDailyMessageIds, setReadDailyMessageIds] = useState([]);
     const [dismissedDailyMessageIds, setDismissedDailyMessageIds] = useState([]);
+    // per-user completion tracking for admin-published tasks ("এডমিন টাস্ক") —
+    // adminTasksCloud is a single shared/global list, so completion can't be
+    // stored on the task itself (that would complete it for every user at
+    // once). Same pattern as readNoticeIds/readDailyMessageIds above: an
+    // array of ids this user has personally checked off, kept in their own
+    // data and never written back to the shared adminTasks collection.
+    const [completedAdminTaskIds, setCompletedAdminTaskIds] = useState([]);
     useEffect(() => {
         const id = setInterval(() => forceTick((n) => n + 1), 60 * 1000);
         return () => clearInterval(id);
@@ -737,6 +744,7 @@ function App() {
         setReadNoticeIds(d.readNoticeIds || []);
         setReadDailyMessageIds(d.readDailyMessageIds || []);
         setDismissedDailyMessageIds(d.dismissedDailyMessageIds || []);
+        setCompletedAdminTaskIds(d.completedAdminTaskIds || []);
     }, []);
     const persist = useCallback(async (key, data) => {
         try {
@@ -769,7 +777,8 @@ function App() {
         auditLog,
         readNoticeIds,
         readDailyMessageIds,
-        dismissedDailyMessageIds }, overrides)), [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, familyMembers, bazarItems, taxes, userAccounts, auditLog, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, persist]);
+        dismissedDailyMessageIds,
+        completedAdminTaskIds }, overrides)), [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, familyMembers, bazarItems, taxes, userAccounts, auditLog, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, completedAdminTaskIds, persist]);
     // pin / theme / autoSync only — deliberately NOT part of persistAll, since
     // these belong to the device, not to whichever account is signed in
     const [autoSync, setAutoSync] = useState(true);
@@ -817,7 +826,7 @@ function App() {
         taxes,
         userAccounts,
         auditLog,
-        readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds,
+        readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, completedAdminTaskIds,
         exportedAt: Date.now(),
     }, null, 2);
     const importBackupJSON = (jsonText) => {
@@ -887,6 +896,21 @@ function App() {
     // handler below for why this is needed
     const calendarBackConsumedRef = useRef(null);
     const debtDetailBackConsumedRef = useRef(null); // same pattern, for DebtDetail's edit-form view
+    // tracks whether the currently-open top-level panel (Admin/Tax/Accounts/
+    // FAQ/Calendar/Notifications/Settings) was reached FROM the 3-dot menu,
+    // so closing it (tap-outside, X, or hardware back) can return to the
+    // menu — the previous layer — instead of falling all the way through to
+    // the Dashboard. Only set when a HamburgerMenu item is tapped; entry
+    // points that bypass the menu (Header's calendar/bell/tax icons) leave
+    // it false, so those keep closing straight to the Dashboard as before.
+    const menuOriginRef = useRef(false);
+    const closeMenuPanel = (setter) => {
+        setter(false);
+        if (menuOriginRef.current) {
+            menuOriginRef.current = false;
+            setShowHamburgerMenu(true);
+        }
+    };
     useEffect(() => {
         if (anyTopModalOpen && !modalHistoryPushedRef.current) {
             window.history.pushState({ hkModal: true }, "");
@@ -934,7 +958,7 @@ function App() {
                     window.history.pushState({ hkModal: true }, "");
                     return;
                 }
-                setShowCalendar(false);
+                closeMenuPanel(setShowCalendar);
                 return;
             }
             if (editingTx) {
@@ -942,7 +966,7 @@ function App() {
                 return;
             }
             if (showSettings) {
-                setShowSettings(false);
+                closeMenuPanel(setShowSettings);
                 return;
             }
             if (showBudget) {
@@ -958,15 +982,15 @@ function App() {
         return () => window.removeEventListener("popstate", onPopState);
     }, [showAdd, showBudget, showSettings, editingTx, showCalendar, editingDebt, showAddDebt, showTransfer, showTransferHistory, showLogin]);
     useBackOverlay(showHamburgerMenu, () => setShowHamburgerMenu(false));
-    useBackOverlay(showNotificationCenter, () => setShowNotificationCenter(false));
-    useBackOverlay(showAdminPanel, () => setShowAdminPanel(false));
-    useBackOverlay(showFAQ, () => setShowFAQ(false));
-    useBackOverlay(showTaxPanel, () => setShowTaxPanel(false));
+    useBackOverlay(showNotificationCenter, () => closeMenuPanel(setShowNotificationCenter));
+    useBackOverlay(showAdminPanel, () => closeMenuPanel(setShowAdminPanel));
+    useBackOverlay(showFAQ, () => closeMenuPanel(setShowFAQ));
+    useBackOverlay(showTaxPanel, () => closeMenuPanel(setShowTaxPanel));
     // editingTransfer opens ON TOP of TransferHistoryModal (a nested
     // overlay, same shape as DebtDetail's repay/statement views) — back
     // must close just the edit form and return to the history list
     useBackOverlay(!!editingTransfer, () => setEditingTransfer(null));
-    useBackOverlay(showAccountPanel, () => setShowAccountPanel(false));
+    useBackOverlay(showAccountPanel, () => closeMenuPanel(setShowAccountPanel));
     const loadIdentityData = useCallback(async (identity) => {
         try {
             const res = await window.storage.get(userDataKey(identity));
@@ -1199,6 +1223,18 @@ function App() {
         setReadDailyMessageIds(allMsgIds);
         persistAll({ readNoticeIds: allNoticeIds, readDailyMessageIds: allMsgIds });
     };
+    // toggles THIS user's own completion mark on a shared admin task —
+    // never mutates adminTasksCloud itself (that's a single shared
+    // document/collection every user reads), only this user's own
+    // completedAdminTaskIds list, exactly mirroring how readNoticeIds
+    // tracks per-user read state on shared notices above.
+    const toggleAdminTaskComplete = (id) => {
+        const next = completedAdminTaskIds.includes(id)
+            ? completedAdminTaskIds.filter((x) => x !== id)
+            : [...completedAdminTaskIds, id];
+        setCompletedAdminTaskIds(next);
+        persistAll({ completedAdminTaskIds: next });
+    };
     // admin CRUD — the isAdmin(user) checks here only decide whether the UI
     // even attempts the call; if anyone bypasses the frontend and calls
     // Firestore directly, firestore.rules independently rejects the write
@@ -1232,7 +1268,22 @@ function App() {
     const adminAddSpecialDay = (data) => runAdminOp(() => window.FB.addDocTo("adminSpecialDays", data), "বিশেষ দিবস");
     const adminUpdateSpecialDay = (id, patch) => runAdminOp(() => window.FB.updateDocIn("adminSpecialDays", id, patch), "বিশেষ দিবস");
     const adminDeleteSpecialDay = (id) => runAdminOp(() => window.FB.deleteDocFrom("adminSpecialDays", id), "বিশেষ দিবস");
-    const adminAddTask = (data) => runAdminOp(() => window.FB.addDocTo("adminTasks", data), "টাস্ক");
+    const adminAddTask = async (data) => {
+        const result = await runAdminOp(() => window.FB.addDocTo("adminTasks", data), "টাস্ক");
+        // Task Management → Add Task should also land in this admin's own
+        // "আমার টাস্ক" list, using the SAME addTask function and the SAME
+        // MAX_TASKS=10 cap as every other personal task — addTask already
+        // silently no-ops past the cap, so that limit is preserved as-is.
+        if (result && result.ok) {
+            addTask({
+                text: data.title, date: data.dueDate || null, time: data.time || null,
+                category: data.category || null, note: data.description || "",
+                repeat: data.repeat || null,
+                reminderDate: data.reminderDate || null, reminderTime: data.reminderTime || null,
+            });
+        }
+        return result;
+    };
     const adminUpdateTask = (id, patch) => runAdminOp(() => window.FB.updateDocIn("adminTasks", id, patch), "টাস্ক");
     const adminDeleteTask = (id) => runAdminOp(() => window.FB.deleteDocFrom("adminTasks", id), "টাস্ক");
     const adminAddFaq = (data) => runAdminOp(() => window.FB.addDocTo("faq", data), "প্রশ্ন-উত্তর");
@@ -1317,10 +1368,10 @@ function App() {
             transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats,
             categoryBudgets, accountOpening, transfers, profileName,
             familyMembers, bazarItems, taxes, userAccounts, auditLog,
-            readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds,
+            readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, completedAdminTaskIds,
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, familyMembers, bazarItems, taxes, userAccounts, auditLog, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, user, loaded, autoSync]);
+    }, [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, familyMembers, bazarItems, taxes, userAccounts, auditLog, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, completedAdminTaskIds, user, loaded, autoSync]);
     // the moment the connection comes back, automatically flush any changes
     // that piled up while offline — the person never has to remember to sync
     const manualSyncRef = useRef(null);
@@ -1342,7 +1393,7 @@ function App() {
                 transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats,
                 categoryBudgets, accountOpening, transfers, profileName,
                 familyMembers, bazarItems, taxes, userAccounts, auditLog,
-                readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds,
+                readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, completedAdminTaskIds,
             });
             setSyncStatus("synced");
             setLastSyncedAt(Date.now());
@@ -1681,7 +1732,7 @@ function App() {
             accountOpening: {}, transfers: [], profileName: null,
             familyMembers: [], bazarItems: [], taxes: [], auditLog: [],
             userAccounts: [],
-            readNoticeIds: [], readDailyMessageIds: [], dismissedDailyMessageIds: [],
+            readNoticeIds: [], readDailyMessageIds: [], dismissedDailyMessageIds: [], completedAdminTaskIds: [],
         };
         persistAll(cleared);
         if (user && window.FB) {
@@ -1970,7 +2021,7 @@ function App() {
     return (React.createElement(CatCtx.Provider, { value: { expenseCats, incomeCats } },
         React.createElement("div", { style: styles.app },
             React.createElement(FontLoader, null),
-            React.createElement(Header, { transactions: transactions, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onUpdateTask: updateTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName, onOpenMenu: () => setShowHamburgerMenu(true), onOpenNotifications: () => setShowNotificationCenter(true), unreadCount: totalUnreadCount, adminTasksCloud: adminTasksCloud, taxes: taxes, onOpenTaxPanel: () => setShowTaxPanel(true) }),
+            React.createElement(Header, { transactions: transactions, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onUpdateTask: updateTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName, onOpenMenu: () => setShowHamburgerMenu(true), onOpenNotifications: () => setShowNotificationCenter(true), unreadCount: totalUnreadCount, adminTasksCloud: adminTasksCloud, taxes: taxes, onOpenTaxPanel: () => setShowTaxPanel(true), completedAdminTaskIds: completedAdminTaskIds, onToggleAdminTaskComplete: toggleAdminTaskComplete }),
             React.createElement("main", { style: styles.main },
                 tab === "dashboard" && (React.createElement(Dashboard, { transactions: transactions, budget: budget, categoryBudgets: categoryBudgets, debts: debts, accounts: accounts, onEditBudget: () => setShowBudget(true), onOpenTx: (t) => setEditingTx(t), onGoDebts: () => setTab("debts"), onGoReports: () => setTab("reports"), onQuickAdd: (type) => {
                         setQuickAddType(type);
@@ -2014,7 +2065,7 @@ function App() {
                     saveBudget(v);
                     setShowBudget(false);
                 }, onSaveCategoryBudgets: saveCategoryBudgets })),
-            showCalendar && (React.createElement(CalendarModal, { specialDays: specialDays, onSaveSpecialDays: saveSpecialDays, onClose: () => setShowCalendar(false), onRegisterBackHandler: (fn) => { calendarBackConsumedRef.current = fn; }, adminSpecialDays: adminSpecialDaysCloud })),
+            showCalendar && (React.createElement(CalendarModal, { specialDays: specialDays, onSaveSpecialDays: saveSpecialDays, onClose: () => closeMenuPanel(setShowCalendar), onRegisterBackHandler: (fn) => { calendarBackConsumedRef.current = fn; }, adminSpecialDays: adminSpecialDaysCloud })),
             showAddDebt && (React.createElement(DebtForm, { onClose: () => setShowAddDebt(false), onSave: (d) => {
                     addDebt(d);
                     setShowAddDebt(false);
@@ -2023,7 +2074,7 @@ function App() {
                     deleteDebt(editingDebt.id);
                     setEditingDebt(null);
                 }, onAddRepayment: (r) => addRepayment(editingDebt.id, r), onUpdateRepayment: (rid, patch) => updateRepayment(editingDebt.id, rid, patch), onDeleteRepayment: (rid) => deleteRepayment(editingDebt.id, rid), onRegisterBackHandler: (fn) => { debtDetailBackConsumedRef.current = fn; }, userAccounts: userAccounts, checkRepaymentBalance: checkRepaymentBalance, checkDynamicRepaymentBalance: checkDynamicRepaymentBalance })),
-            showSettings && (React.createElement(SettingsModal, { transactions: transactions, budget: budget, specialDays: specialDays, onSaveSpecialDays: saveSpecialDays, onClose: () => setShowSettings(false), onEditBudget: () => {
+            showSettings && (React.createElement(SettingsModal, { transactions: transactions, budget: budget, specialDays: specialDays, onSaveSpecialDays: saveSpecialDays, onClose: () => closeMenuPanel(setShowSettings), onEditBudget: () => {
                     setShowSettings(false);
                     setShowBudget(true);
                 }, onClearAll: () => {
@@ -2055,21 +2106,21 @@ function App() {
                 // onOpenSettings/onOpenCalendar are NOT changed — they use
                 // the separate, pre-existing modal-stack system, not
                 // useBackOverlay, and were not reported as affected.
-                onOpenNotifications: () => { setShowHamburgerMenu(false); setTimeout(() => setShowNotificationCenter(true), 0); },
-                onOpenSettings: () => { setShowHamburgerMenu(false); setShowSettings(true); },
-                onOpenCalendar: () => { setShowHamburgerMenu(false); setShowCalendar(true); },
-                onOpenFAQ: () => { setShowHamburgerMenu(false); setTimeout(() => setShowFAQ(true), 0); },
-                onOpenTax: () => { setShowHamburgerMenu(false); setTimeout(() => setShowTaxPanel(true), 0); },
-                onOpenAccounts: () => { setShowHamburgerMenu(false); setTimeout(() => setShowAccountPanel(true), 0); },
+                onOpenNotifications: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowNotificationCenter(true), 0); },
+                onOpenSettings: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setShowSettings(true); },
+                onOpenCalendar: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setShowCalendar(true); },
+                onOpenFAQ: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowFAQ(true), 0); },
+                onOpenTax: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowTaxPanel(true), 0); },
+                onOpenAccounts: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowAccountPanel(true), 0); },
                 isAdminUser: isAdmin(user),
-                onOpenAdmin: () => { setShowHamburgerMenu(false); setTimeout(() => setShowAdminPanel(true), 0); },
+                onOpenAdmin: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowAdminPanel(true), 0); },
                 unreadCount: totalUnreadCount,
             })),
-            showFAQ && React.createElement(FAQModal, { onClose: () => setShowFAQ(false), faqCloud: faqCloud }),
-            showTaxPanel && (React.createElement(TaxPanel, { onClose: () => setShowTaxPanel(false), taxes: taxes, onAdd: addTax, onUpdate: updateTax, onDelete: deleteTax, onTogglePaid: toggleTaxPaid })),
-            showAccountPanel && (React.createElement(AccountPanel, { onClose: () => setShowAccountPanel(false), dynamicAccountBalances: dynamicAccountBalances, onAdd: addUserAccount, onUpdate: updateUserAccount, onDelete: deleteUserAccount, onToggleActive: toggleUserAccountActive, onViewTransactions: (id) => { setShowAccountPanel(false); setSearchSeed({ accountId: id, ts: Date.now() }); setTab("search"); } })),
+            showFAQ && React.createElement(FAQModal, { onClose: () => closeMenuPanel(setShowFAQ), faqCloud: faqCloud }),
+            showTaxPanel && (React.createElement(TaxPanel, { onClose: () => closeMenuPanel(setShowTaxPanel), taxes: taxes, onAdd: addTax, onUpdate: updateTax, onDelete: deleteTax, onTogglePaid: toggleTaxPaid })),
+            showAccountPanel && (React.createElement(AccountPanel, { onClose: () => closeMenuPanel(setShowAccountPanel), dynamicAccountBalances: dynamicAccountBalances, onAdd: addUserAccount, onUpdate: updateUserAccount, onDelete: deleteUserAccount, onToggleActive: toggleUserAccountActive, onViewTransactions: (id) => { setShowAccountPanel(false); setSearchSeed({ accountId: id, ts: Date.now() }); setTab("search"); } })),
             showNotificationCenter && (React.createElement(NotificationCenter, {
-                onClose: () => setShowNotificationCenter(false),
+                onClose: () => closeMenuPanel(setShowNotificationCenter),
                 notices: notices, dailyMessages: dailyMessages, tasks: tasks, debts: debts,
                 specialDays: specialDays, adminSpecialDaysCloud: adminSpecialDaysCloud, adminTasksCloud: adminTasksCloud, taxes: taxes,
                 readNoticeIds: readNoticeIds, readDailyMessageIds: readDailyMessageIds, dismissedDailyMessageIds: dismissedDailyMessageIds,
@@ -2077,7 +2128,7 @@ function App() {
                 onDismissDailyMessage: dismissDailyMessage, onMarkAllRead: markAllRead,
             })),
             showAdminPanel && isAdmin(user) && (React.createElement(AdminPanel, {
-                onClose: () => setShowAdminPanel(false),
+                onClose: () => closeMenuPanel(setShowAdminPanel),
                 notices: notices, dailyMessages: dailyMessages, adminSpecialDaysCloud: adminSpecialDaysCloud, adminTasksCloud: adminTasksCloud, faqCloud: faqCloud,
                 loading: adminContentLoading, error: adminContentError, onRefresh: fetchAdminContent,
                 onAddNotice: adminAddNotice, onUpdateNotice: adminUpdateNotice, onDeleteNotice: adminDeleteNotice,
@@ -2285,7 +2336,7 @@ function TaskForm({ initial, onClose, onSave }) {
                 onSave({ text: text.trim(), date: date || null, time: time || null, category: category || null, note: note.trim(), repeat: repeat === "none" ? null : repeat, reminderDate, reminderTime });
             } }, "সংরক্ষণ করুন")));
 }
-function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount, adminTasksCloud, taxes, onOpenTaxPanel }) {
+function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount, adminTasksCloud, taxes, onOpenTaxPanel, completedAdminTaskIds, onToggleAdminTaskComplete }) {
     const [showTasks, setShowTasks] = useState(false);
     useBackOverlay(showTasks, () => setShowTasks(false));
     const [showTaskForm, setShowTaskForm] = useState(false);
@@ -2296,6 +2347,11 @@ function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onTo
     const [reminderEditId, setReminderEditId] = useState(null);
     const [reminderDateVal, setReminderDateVal] = useState("");
     const [reminderTimeVal, setReminderTimeVal] = useState("");
+    // completing a task (check mark) marks it done but keeps it in `tasks`
+    // (so the existing MAX_TASKS cap and history are unaffected) — it just
+    // drops out of the visible active list immediately.
+    const activeTasks = tasks.filter((t) => !t.done);
+    const activeAdminTasks = (adminTasksCloud || []).filter((t) => t.published !== false && !(completedAdminTaskIds || []).includes(t.id));
     const balance = useMemo(() => transactions.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0), [transactions]);
     const doneCount = tasks.filter((t) => t.done).length;
     const submitTask = () => {
@@ -2348,7 +2404,7 @@ function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onTo
                             toBnDigits(MAX_TASKS),
                             ")"),
                         React.createElement("div", { style: { fontSize: 11.5, fontWeight: 700, color: "var(--hk-text-muted)", marginBottom: 4 } }, "\uD83D\uDC64 \u0986\u09AE\u09BE\u09B0 \u099F\u09BE\u09B8\u09CD\u0995"),
-                        tasks.length === 0 ? (React.createElement("div", { style: styles.taskEmpty }, "\u098F\u0996\u09A8\u09CB \u0995\u09CB\u09A8\u09CB \u0995\u09BE\u099C \u09AF\u09CB\u0997 \u0995\u09B0\u09BE \u09B9\u09AF\u09BC\u09A8\u09BF\u0964")) : (React.createElement("div", { style: styles.taskList }, tasks.map((t) => (React.createElement("div", { key: t.id },
+                        tasks.length === 0 ? (React.createElement("div", { style: styles.taskEmpty }, "\u098F\u0996\u09A8\u09CB \u0995\u09CB\u09A8\u09CB \u0995\u09BE\u099C \u09AF\u09CB\u0997 \u0995\u09B0\u09BE \u09B9\u09AF\u09BC\u09A8\u09BF\u0964")) : activeTasks.length === 0 ? (React.createElement("div", { style: styles.taskEmpty }, "\u09B8\u09AC \u0995\u09BE\u099C \u09B8\u09AE\u09CD\u09AA\u09A8\u09CD\u09A8 \u09B9\u09AF\u09BC\u09C7\u099B\u09C7\u0964")) : (React.createElement("div", { style: styles.taskList }, activeTasks.map((t) => (React.createElement("div", { key: t.id },
                             React.createElement("div", { style: styles.taskItem },
                                 React.createElement("button", { style: styles.taskCheck, onClick: () => onToggleTask(t.id) }, t.done ? "☑" : "☐"),
                                 React.createElement("div", { style: { flex: 1, minWidth: 0 } },
@@ -2370,10 +2426,11 @@ function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onTo
                                 React.createElement("input", { type: "date", style: styles.reminderTimeInput, value: reminderDateVal, min: todayStr(), onChange: (e) => setReminderDateVal(e.target.value) }),
                                 React.createElement("input", { type: "time", style: styles.reminderTimeInput, value: reminderTimeVal, onChange: (e) => setReminderTimeVal(e.target.value) }),
                                 React.createElement("button", { style: styles.taskAddBtn, onClick: saveReminder }, "\u2713")))))))),
-                        (adminTasksCloud || []).filter((t) => t.published !== false).length > 0 && (React.createElement("div", { style: { marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--hk-border-light)" } },
+                        activeAdminTasks.length > 0 && (React.createElement("div", { style: { marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--hk-border-light)" } },
                             React.createElement("div", { style: { fontSize: 11.5, fontWeight: 700, color: "var(--hk-gold)", marginBottom: 4 } }, "\u2B50 \u0985\u09CD\u09AF\u09BE\u09A1\u09AE\u09BF\u09A8 \u099F\u09BE\u09B8\u09CD\u0995"),
-                            React.createElement("div", { style: styles.taskList }, (adminTasksCloud || []).filter((t) => t.published !== false).map((t) => (React.createElement("div", { key: t.id, style: styles.taskItem },
-                                React.createElement("span", { style: styles.taskText }, t.title),
+                            React.createElement("div", { style: styles.taskList }, activeAdminTasks.map((t) => (React.createElement("div", { key: t.id, style: styles.taskItem },
+                                React.createElement("button", { style: styles.taskCheck, onClick: () => onToggleAdminTaskComplete(t.id) }, "\u2610"),
+                                React.createElement("span", { style: Object.assign(Object.assign({}, styles.taskText), { flex: 1 }) }, t.title),
                                 t.dueDate && React.createElement("span", { style: { fontSize: 11, color: "var(--hk-text-muted)" } }, formatDateBn(t.dueDate).full))))))),
                         (taxes || []).filter((t) => !t.paid).length > 0 && (React.createElement("div", { style: { marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--hk-border-light)" } },
                             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } },
@@ -3656,7 +3713,7 @@ function NoticeForm({ initial, onClose, onSave }) {
     const [category, setCategory] = useState((initial === null || initial === void 0 ? void 0 : initial.category) || "সাধারণ");
     const [published, setPublished] = useState((initial === null || initial === void 0 ? void 0 : initial.published) !== false);
     const [err, setErr] = useState("");
-    return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "নোটিশ সম্পাদনা" : "নতুন নোটিশ" },
+    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: initial ? "নোটিশ সম্পাদনা" : "নতুন নোটিশ" },
         React.createElement("label", { style: admStyles.label }, "শিরোনাম *"),
         React.createElement("input", { style: admStyles.input, value: title, onChange: (e) => setTitle(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "বিস্তারিত"),
@@ -3674,7 +3731,7 @@ function DailyMessageForm({ initial, onClose, onSave }) {
     const [content, setContent] = useState((initial === null || initial === void 0 ? void 0 : initial.content) || "");
     const [date, setDate] = useState((initial === null || initial === void 0 ? void 0 : initial.date) || todayStr());
     const [err, setErr] = useState("");
-    return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "বার্তা সম্পাদনা" : "নতুন দৈনিক বার্তা" },
+    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: initial ? "বার্তা সম্পাদনা" : "নতুন দৈনিক বার্তা" },
         React.createElement("label", { style: admStyles.label }, "শিরোনাম *"),
         React.createElement("input", { style: admStyles.input, value: title, onChange: (e) => setTitle(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "বার্তা"),
@@ -3689,7 +3746,7 @@ function AdminSpecialDayForm({ initial, onClose, onSave }) {
     const [title, setTitle] = useState((initial === null || initial === void 0 ? void 0 : initial.title) || "");
     const [description, setDescription] = useState((initial === null || initial === void 0 ? void 0 : initial.description) || "");
     const [err, setErr] = useState("");
-    return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "বিশেষ দিবস সম্পাদনা" : "নতুন বিশেষ দিবস" },
+    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: initial ? "বিশেষ দিবস সম্পাদনা" : "নতুন বিশেষ দিবস" },
         React.createElement("label", { style: admStyles.label }, "তারিখ *"),
         React.createElement("input", { style: admStyles.input, type: "date", value: date, onChange: (e) => setDate(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "শিরোনাম *"),
@@ -3699,41 +3756,65 @@ function AdminSpecialDayForm({ initial, onClose, onSave }) {
         err && React.createElement("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginBottom: 8 } }, err),
         React.createElement("button", { style: admStyles.addBtn, onClick: () => { if (!date || !title.trim()) { setErr("তারিখ ও শিরোনাম আবশ্যক"); return; } onSave({ date, title: title.trim(), description: description.trim() }); } }, "সংরক্ষণ করুন")));
 }
-const TASK_PRIORITIES = [
-    { key: "low", label: "কম" },
-    { key: "normal", label: "সাধারণ" },
-    { key: "high", label: "জরুরি" },
-];
 function TaskAdminForm({ initial, onClose, onSave }) {
+    // same field set and same TASK_REMINDER_PRESETS / TASK_REPEAT_OPTIONS /
+    // computeTaskReminderFields already used by the personal task form
+    // (TaskForm above) — reused as-is, not duplicated, so both task forms
+    // offer identical reminder/repeat choices. No amount/price/টাকা field
+    // here, matching the personal task form.
+    const cats = useCategories();
     const [title, setTitle] = useState((initial === null || initial === void 0 ? void 0 : initial.title) || "");
-    const [description, setDescription] = useState((initial === null || initial === void 0 ? void 0 : initial.description) || "");
-    const [dueDate, setDueDate] = useState((initial === null || initial === void 0 ? void 0 : initial.dueDate) || "");
-    const [reminderDate, setReminderDate] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderDate) || "");
-    const [priority, setPriority] = useState((initial === null || initial === void 0 ? void 0 : initial.priority) || "normal");
+    const [date, setDate] = useState((initial === null || initial === void 0 ? void 0 : initial.dueDate) || "");
+    const [time, setTime] = useState((initial === null || initial === void 0 ? void 0 : initial.time) || "");
+    const [category, setCategory] = useState((initial === null || initial === void 0 ? void 0 : initial.category) || "");
+    const [note, setNote] = useState((initial === null || initial === void 0 ? void 0 : initial.description) || "");
+    const [repeat, setRepeat] = useState((initial === null || initial === void 0 ? void 0 : initial.repeat) || "none");
+    const [reminderPreset, setReminderPreset] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderDate) ? "custom" : "none");
+    const [customReminderDate, setCustomReminderDate] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderDate) || "");
+    const [customReminderTime, setCustomReminderTime] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderTime) || "");
     const [published, setPublished] = useState((initial === null || initial === void 0 ? void 0 : initial.published) !== false);
     const [err, setErr] = useState("");
-    return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "টাস্ক সম্পাদনা" : "নতুন অ্যাডমিন টাস্ক" },
-        React.createElement("label", { style: admStyles.label }, "শিরোনাম *"),
+    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: initial ? "টাস্ক সম্পাদনা" : "নতুন অ্যাডমিন টাস্ক" },
+        React.createElement("label", { style: admStyles.label }, "টাস্কের নাম *"),
         React.createElement("input", { style: admStyles.input, value: title, onChange: (e) => setTitle(e.target.value) }),
-        React.createElement("label", { style: admStyles.label }, "বিস্তারিত"),
-        React.createElement("textarea", { style: Object.assign(Object.assign({}, admStyles.input), { minHeight: 80 }), value: description, onChange: (e) => setDescription(e.target.value) }),
-        React.createElement("label", { style: admStyles.label }, "শেষ তারিখ (\u0990\u099A\u09CD\u099B\u09BF\u0995)"),
-        React.createElement("input", { style: admStyles.input, type: "date", value: dueDate, onChange: (e) => setDueDate(e.target.value) }),
-        React.createElement("label", { style: admStyles.label }, "রিমাইন্ডার তারিখ (\u0990\u099A\u09CD\u099B\u09BF\u0995)"),
-        React.createElement("input", { style: admStyles.input, type: "date", value: reminderDate, onChange: (e) => setReminderDate(e.target.value) }),
-        React.createElement("label", { style: admStyles.label }, "গুরুত্ব"),
-        React.createElement("select", { style: admStyles.input, value: priority, onChange: (e) => setPriority(e.target.value) }, TASK_PRIORITIES.map((p) => React.createElement("option", { key: p.key, value: p.key }, p.label))),
+        React.createElement("div", { style: { display: "flex", gap: 8 } },
+            React.createElement("div", { style: { flex: 1 } },
+                React.createElement("label", { style: admStyles.label }, "তারিখ"),
+                React.createElement("input", { style: admStyles.input, type: "date", value: date, onChange: (e) => setDate(e.target.value) })),
+            React.createElement("div", { style: { flex: 1 } },
+                React.createElement("label", { style: admStyles.label }, "সময়"),
+                React.createElement("input", { style: admStyles.input, type: "time", value: time, onChange: (e) => setTime(e.target.value) }))),
+        React.createElement("label", { style: admStyles.label }, "সাব-ক্যাটেগরি"),
+        React.createElement("select", { style: admStyles.input, value: category, onChange: (e) => setCategory(e.target.value) },
+            React.createElement("option", { value: "" }, "\u2014 \u09A8\u09BF\u09B0\u09CD\u09AC\u09BE\u099A\u09A8 \u0995\u09B0\u09C1\u09A8 \u2014"),
+            (cats.expenseCats || []).map((c) => React.createElement("option", { key: c.key, value: c.key }, c.label))),
+        React.createElement("label", { style: admStyles.label }, "নোট / বিস্তারিত"),
+        React.createElement("textarea", { style: Object.assign(Object.assign({}, admStyles.input), { minHeight: 70 }), value: note, onChange: (e) => setNote(e.target.value) }),
+        React.createElement("label", { style: admStyles.label }, "রিমাইন্ডার"),
+        React.createElement("select", { style: admStyles.input, value: reminderPreset, onChange: (e) => setReminderPreset(e.target.value) }, TASK_REMINDER_PRESETS.map((p) => React.createElement("option", { key: p.key, value: p.key }, p.label))),
+        reminderPreset === "custom" && (React.createElement("div", { style: { display: "flex", gap: 8 } },
+            React.createElement("input", { style: admStyles.input, type: "date", value: customReminderDate, onChange: (e) => setCustomReminderDate(e.target.value) }),
+            React.createElement("input", { style: admStyles.input, type: "time", value: customReminderTime, onChange: (e) => setCustomReminderTime(e.target.value) }))),
+        React.createElement("label", { style: admStyles.label }, "রিপিট"),
+        React.createElement("select", { style: admStyles.input, value: repeat, onChange: (e) => setRepeat(e.target.value) }, TASK_REPEAT_OPTIONS.map((r) => React.createElement("option", { key: r.key, value: r.key }, r.label))),
         React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 12, fontSize: 13.5 } },
             React.createElement("input", { type: "checkbox", checked: published, onChange: (e) => setPublished(e.target.checked) }),
             "প্রকাশিত (সবাই দেখতে পাবে)"),
         err && React.createElement("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginBottom: 8 } }, err),
-        React.createElement("button", { style: admStyles.addBtn, onClick: () => { if (!title.trim()) { setErr("শিরোনাম আবশ্যক"); return; } onSave({ title: title.trim(), description: description.trim(), dueDate: dueDate || null, reminderDate: reminderDate || null, priority, published }); } }, "সংরক্ষণ করুন")));
+        React.createElement("button", { style: admStyles.addBtn, onClick: () => {
+                if (!title.trim()) {
+                    setErr("শিরোনাম আবশ্যক");
+                    return;
+                }
+                const { reminderDate, reminderTime } = computeTaskReminderFields(date, time, reminderPreset, customReminderDate, customReminderTime);
+                onSave({ title: title.trim(), description: note.trim(), category: category || null, dueDate: date || null, time: time || null, repeat: repeat === "none" ? null : repeat, reminderDate, reminderTime, published });
+            } }, "সংরক্ষণ করুন")));
 }
 function FaqAdminForm({ initial, onClose, onSave }) {
     const [question, setQuestion] = useState((initial === null || initial === void 0 ? void 0 : initial.question) || "");
     const [answer, setAnswer] = useState((initial === null || initial === void 0 ? void 0 : initial.answer) || "");
     const [err, setErr] = useState("");
-    return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "প্রশ্ন-উত্তর সম্পাদনা" : "নতুন প্রশ্ন-উত্তর" },
+    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: initial ? "প্রশ্ন-উত্তর সম্পাদনা" : "নতুন প্রশ্ন-উত্তর" },
         React.createElement("label", { style: admStyles.label }, "প্রশ্ন *"),
         React.createElement("input", { style: admStyles.input, value: question, onChange: (e) => setQuestion(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "উত্তর *"),
@@ -3773,7 +3854,7 @@ function BulkSpecialDayImport({ onClose, onImport, existing }) {
         });
         setResult({ valid, invalid, dupCount });
     };
-    return (React.createElement(ModalShell, { onClose: onClose, title: "\u09AC\u09BE\u09B2\u09CD\u0995 \u0987\u09AE\u09CD\u09AA\u09CB\u09B0\u09CD\u099F \u2014 \u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09AC\u09B8" },
+    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "\u09AC\u09BE\u09B2\u09CD\u0995 \u0987\u09AE\u09CD\u09AA\u09CB\u09B0\u09CD\u099F \u2014 \u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09AC\u09B8" },
         React.createElement("div", { style: admStyles.muted }, "\u09AA\u09CD\u09B0\u09A4\u09BF \u09B2\u09BE\u0987\u09A8: Date | Title | Description  (\u09AF\u09C7\u09AE\u09A8: 2026-09-10 | \u09C7\u0987\u09A6 \u09AE\u09BF\u09B2\u09BE\u09A6 | \u099B\u09C1\u099F\u09BF\u09B0 \u09A6\u09BF\u09A8)"),
         React.createElement("textarea", { style: Object.assign(Object.assign({}, admStyles.input), { minHeight: 140, fontFamily: "monospace", fontSize: 12.5, marginTop: 8 }), placeholder: "2026-09-10 | \u09C7\u0987\u09A6 \u09AE\u09BF\u09B2\u09BE\u09A6 | \u099B\u09C1\u099F\u09BF\u09B0 \u09A6\u09BF\u09A8", value: text, onChange: (e) => { setText(e.target.value); setResult(null); } }),
         !result && React.createElement("button", { style: admStyles.addBtn, onClick: parse }, "\u09AF\u09BE\u099A\u09BE\u0987 \u0995\u09B0\u09C1\u09A8"),
@@ -3909,7 +3990,7 @@ function AdminPanel({ onClose, notices, dailyMessages, adminSpecialDaysCloud, ad
                 }
                 return result;
             } }));
-    return React.createElement(ModalShell, { onClose: onClose, title: "\u098F\u09A1\u09AE\u09BF\u09A8 \u09AA\u09CD\u09AF\u09BE\u09A8\u09C7\u09B2" },
+    return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "\u098F\u09A1\u09AE\u09BF\u09A8 \u09AA\u09CD\u09AF\u09BE\u09A8\u09C7\u09B2" },
         React.createElement("div", { style: admStyles.subTabs },
             React.createElement("button", { style: admStyles.subTabBtn(tab === "notices"), onClick: () => setTab("notices") }, "\uD83D\uDCE2 \u09A8\u09CB\u099F\u09BF\u09B6"),
             React.createElement("button", { style: admStyles.subTabBtn(tab === "daily"), onClick: () => setTab("daily") }, "\u2728 \u09A6\u09C8\u09A8\u09BF\u0995 \u09AC\u09BE\u09B0\u09CD\u09A4\u09BE"),
@@ -3983,7 +4064,7 @@ function NotificationCenter({ onClose, notices, dailyMessages, tasks, debts, spe
                     React.createElement("div", { style: { fontSize: 12.5, fontWeight: 600 } }, formatDateBn(r.date).full)))));
         }
     }
-    return React.createElement(ModalShell, { onClose: onClose, title: "\u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8" },
+    return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "\u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8" },
         React.createElement("div", { style: admStyles.subTabs },
             React.createElement("button", { style: admStyles.subTabBtn(tab === "notice"), onClick: () => setTab("notice") }, "\u09A8\u09CB\u099F\u09BF\u09B6", unreadNotices.length > 0 ? ` (${unreadNotices.length})` : ""),
             React.createElement("button", { style: admStyles.subTabBtn(tab === "daily"), onClick: () => setTab("daily") }, "\u09A6\u09C8\u09A8\u09BF\u0995 \u09AC\u09BE\u09B0\u09CD\u09A4\u09BE"),
@@ -3994,39 +4075,37 @@ function NotificationCenter({ onClose, notices, dailyMessages, tasks, debts, spe
 function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, onOpenAccounts, isAdminUser, onOpenAdmin, unreadCount, }) {
     useBackgroundScrollLock();
     const menuItemStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "13px 4px", background: "none", border: "none", borderBottom: "1px solid var(--hk-border-light)", fontSize: 14.5, color: "var(--hk-text)" };
-    // drawer must render on the LEFT: in this row flex container, the
-    // first child is the leftmost — so the drawer itself comes first,
-    // and the tappable backdrop (which fills the remaining space) comes
-    // second, covering the right side of the screen
-    return React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 200, display: "flex" } },
-        React.createElement("div", { style: { width: "78%", maxWidth: 320, background: "var(--hk-card)", height: "100%", overflowY: "auto", overscrollBehaviorY: "contain", padding: "20px 18px", boxSizing: "border-box", display: "flex", flexDirection: "column" } },
-            React.createElement("button", { onClick: onClose, "aria-label": "\u09AE\u09C7\u09A8\u09C1 \u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8", style: { background: "none", border: "none", fontSize: 22, padding: 0, marginBottom: 18, color: "var(--hk-text)" } }, "\u2630"),
-            isAdminUser && React.createElement("button", { style: Object.assign(Object.assign({}, menuItemStyle), { color: "var(--hk-gold)", fontWeight: 700 }), onClick: onOpenAdmin }, "\u2699\uFE0F \u098F\u09A1\u09AE\u09BF\u09A8 \u09AA\u09CD\u09AF\u09BE\u09A8\u09C7\u09B2"),
-            React.createElement("button", { style: menuItemStyle, onClick: onOpenFAQ }, "\u09AA\u09CD\u09B0\u09B6\u09CD\u09A8 \u0993 \u0989\u09A4\u09CD\u09A4\u09B0"),
-            React.createElement("button", { style: menuItemStyle, onClick: onOpenTax }, "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
-            React.createElement("button", { style: menuItemStyle, onClick: onOpenAccounts }, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
-            React.createElement("button", { style: menuItemStyle, onClick: onOpenCalendar }, "\u09B9\u09BF\u099C\u09B0\u09BF \u0995\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0"),
-            React.createElement("button", { style: menuItemStyle, onClick: onOpenNotifications },
-                React.createElement("span", null, "\u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8"),
-                unreadCount > 0 && React.createElement("span", { style: { background: "var(--hk-danger)", color: "#fff", fontSize: 11, borderRadius: 999, padding: "1px 7px" } }, unreadCount)),
-            React.createElement("button", { style: menuItemStyle, onClick: onOpenSettings }, "\u09B8\u09C7\u099F\u09BF\u0982\u09B8"),
-            // marginTop: "auto" pins this block to the very bottom of the
-            // flex-column drawer, regardless of how few/many menu items are
-            // above it — the menu items stay naturally at the top
-            React.createElement("div", { style: { marginTop: "auto", paddingTop: 16, borderTop: "1px solid var(--hk-border-light)", fontSize: 12, color: "var(--hk-text-muted)", lineHeight: 1.8 } },
-                React.createElement("div", { style: { fontWeight: 700, fontSize: 13.5, color: "var(--hk-text)" } }, "\u09B9\u09BF\u09B8\u09BE\u09AC \u0996\u09BE\u09A4\u09BE"),
-                React.createElement("div", null, "\u099C\u09C0\u09AC\u09A8\u09C7\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC \u09A5\u09C7\u0995\u09C7 \u0986\u0996\u09BF\u09B0\u09BE\u09A4\u09C7\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC"),
-                React.createElement("div", null, "Version 10.1.2.3"),
-                React.createElement("div", { style: { marginTop: 6 } }, "\u0993\u09AF\u09BC\u09C7\u09AC\u09B8\u09BE\u0987\u099F: \u098F\u0987 \u0985\u09CD\u09AF\u09BE\u09AA\u09C7\u09B0 \u0993\u09AF\u09BC\u09C7\u09AC \u0985\u09CD\u09AF\u09BE\u09AA"),
-                React.createElement("div", null, "Privacy Policy: \u0986\u09AE\u09BE\u09A6\u09C7\u09B0 \u09B8\u09AE\u09CD\u09AA\u09B0\u09CD\u0995\u09C7 \u099C\u09BE\u09A8\u09C1\u09A8"))),
-        React.createElement("div", { style: { flex: 1, background: "rgba(0,0,0,0.4)" }, onClick: onClose }));
+    // fullscreen page now (not a partial drawer with a tappable backdrop) —
+    // the only way out is the close (☰) button, hardware back, or picking
+    // a menu item; there's no backdrop sliver left to tap since the panel
+    // fills the whole screen.
+    return React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 200, background: "var(--hk-card)", height: "100%", overflowY: "auto", overscrollBehaviorY: "contain", padding: "20px 18px", boxSizing: "border-box", display: "flex", flexDirection: "column" } },
+        React.createElement("button", { onClick: onClose, "aria-label": "\u09AE\u09C7\u09A8\u09C1 \u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8", style: { background: "none", border: "none", fontSize: 22, padding: 0, marginBottom: 18, color: "var(--hk-text)" } }, "\u2630"),
+        isAdminUser && React.createElement("button", { style: Object.assign(Object.assign({}, menuItemStyle), { color: "var(--hk-gold)", fontWeight: 700 }), onClick: onOpenAdmin }, "\u2699\uFE0F \u098F\u09A1\u09AE\u09BF\u09A8 \u09AA\u09CD\u09AF\u09BE\u09A8\u09C7\u09B2"),
+        React.createElement("button", { style: menuItemStyle, onClick: onOpenFAQ }, "\u09AA\u09CD\u09B0\u09B6\u09CD\u09A8 \u0993 \u0989\u09A4\u09CD\u09A4\u09B0"),
+        React.createElement("button", { style: menuItemStyle, onClick: onOpenTax }, "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
+        React.createElement("button", { style: menuItemStyle, onClick: onOpenAccounts }, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
+        React.createElement("button", { style: menuItemStyle, onClick: onOpenCalendar }, "\u09B9\u09BF\u099C\u09B0\u09BF \u0995\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0"),
+        React.createElement("button", { style: menuItemStyle, onClick: onOpenNotifications },
+            React.createElement("span", null, "\u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8"),
+            unreadCount > 0 && React.createElement("span", { style: { background: "var(--hk-danger)", color: "#fff", fontSize: 11, borderRadius: 999, padding: "1px 7px" } }, unreadCount)),
+        React.createElement("button", { style: menuItemStyle, onClick: onOpenSettings }, "\u09B8\u09C7\u099F\u09BF\u0982\u09B8"),
+        // marginTop: "auto" pins this block to the very bottom of the
+        // flex-column page, regardless of how few/many menu items are
+        // above it — the menu items stay naturally at the top
+        React.createElement("div", { style: { marginTop: "auto", paddingTop: 16, borderTop: "1px solid var(--hk-border-light)", fontSize: 12, color: "var(--hk-text-muted)", lineHeight: 1.8 } },
+            React.createElement("div", { style: { fontWeight: 700, fontSize: 13.5, color: "var(--hk-text)" } }, "\u09B9\u09BF\u09B8\u09BE\u09AC \u0996\u09BE\u09A4\u09BE"),
+            React.createElement("div", null, "\u099C\u09C0\u09AC\u09A8\u09C7\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC \u09A5\u09C7\u0995\u09C7 \u0986\u0996\u09BF\u09B0\u09BE\u09A4\u09C7\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC"),
+            React.createElement("div", null, "Version 10.1.2.3"),
+            React.createElement("div", { style: { marginTop: 6 } }, "\u0993\u09AF\u09BC\u09C7\u09AC\u09B8\u09BE\u0987\u099F: \u098F\u0987 \u0985\u09CD\u09AF\u09BE\u09AA\u09C7\u09B0 \u0993\u09AF\u09BC\u09C7\u09AC \u0985\u09CD\u09AF\u09BE\u09AA"),
+            React.createElement("div", null, "Privacy Policy: \u0986\u09AE\u09BE\u09A6\u09C7\u09B0 \u09B8\u09AE\u09CD\u09AA\u09B0\u09CD\u0995\u09C7 \u099C\u09BE\u09A8\u09C1\u09A8")));
 }
 function FAQModal({ onClose, faqCloud }) {
     // read-only for everyone here — admins manage FAQ content exclusively
     // through the Admin Panel's FAQ tab, same pattern as Notice/Daily
     // Message/Special Day/Task
     const faqs = faqCloud || [];
-    return React.createElement(ModalShell, { onClose: onClose, title: "\u09AA\u09CD\u09B0\u09B6\u09CD\u09A8 \u0993 \u0989\u09A4\u09CD\u09A4\u09B0" }, faqs.length === 0
+    return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "\u09AA\u09CD\u09B0\u09B6\u09CD\u09A8 \u0993 \u0989\u09A4\u09CD\u09A4\u09B0" }, faqs.length === 0
         ? React.createElement(EmptyState, { text: "এখনও কোনো প্রশ্ন-উত্তর যোগ করা হয়নি।" })
         : faqs.map((f) => React.createElement("div", { key: f.id, style: admStyles.card },
             React.createElement("div", { style: { fontWeight: 600, marginBottom: 4 } }, f.question),
@@ -4039,7 +4118,7 @@ function TaxForm({ initial, onClose, onSave }) {
     const [dueDate, setDueDate] = useState((initial === null || initial === void 0 ? void 0 : initial.dueDate) || todayStr());
     const [note, setNote] = useState((initial === null || initial === void 0 ? void 0 : initial.note) || "");
     const [err, setErr] = useState("");
-    return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09B8\u09AE\u09CD\u09AA\u09BE\u09A6\u09A8\u09BE" : "\u09A8\u09A4\u09C1\u09A8 \u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8" },
+    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: initial ? "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09B8\u09AE\u09CD\u09AA\u09BE\u09A6\u09A8\u09BE" : "\u09A8\u09A4\u09C1\u09A8 \u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8" },
         React.createElement("label", { style: admStyles.label }, "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8\u09C7\u09B0 \u09A8\u09BE\u09AE *"),
         React.createElement("input", { style: admStyles.input, value: name, onChange: (e) => setName(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "\u09AA\u09B0\u09BF\u09AE\u09BE\u09A3 *"),
@@ -4109,7 +4188,7 @@ function TaxPanel({ onClose, taxes, onAdd, onUpdate, onDelete, onTogglePaid }) {
     if (showForm) {
         body.push(React.createElement(TaxForm, { key: "form", initial: editing, onClose: () => setShowForm(false), onSave: (data) => { editing ? onUpdate(editing.id, data) : onAdd(data); setShowForm(false); } }));
     }
-    return React.createElement(ModalShell, { onClose: onClose, title: "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE" }, ...body);
+    return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE" }, ...body);
 }
 /* ---------------- dynamic accounts (Phase 1) ---------------- */
 const ACCOUNT_TYPES = [
@@ -4125,7 +4204,7 @@ function AccountForm({ initial, onClose, onSave }) {
     const [openingBalance, setOpeningBalance] = useState(initial ? String(initial.openingBalance) : "0");
     const [openingBalanceDate, setOpeningBalanceDate] = useState((initial === null || initial === void 0 ? void 0 : initial.openingBalanceDate) || todayStr());
     const [err, setErr] = useState("");
-    return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09B8\u09AE\u09CD\u09AA\u09BE\u09A6\u09A8\u09BE" : "\u09A8\u09A4\u09C1\u09A8 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F" },
+    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: initial ? "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09B8\u09AE\u09CD\u09AA\u09BE\u09A6\u09A8\u09BE" : "\u09A8\u09A4\u09C1\u09A8 \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F" },
         React.createElement("label", { style: admStyles.label }, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u09C7\u09B0 \u09A8\u09BE\u09AE * (\u09AF\u09C7\u09AE\u09A8: DBBL, bKash Personal)"),
         React.createElement("input", { style: admStyles.input, value: name, onChange: (e) => setName(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "\u09A7\u09B0\u09A8"),
@@ -4184,7 +4263,7 @@ function AccountPanel({ onClose, dynamicAccountBalances, onAdd, onUpdate, onDele
     if (showForm) {
         body.push(React.createElement(AccountForm, { key: "form", initial: editing, onClose: () => setShowForm(false), onSave: (data) => { editing ? onUpdate(editing.id, data) : onAdd(data); setShowForm(false); } }));
     }
-    return React.createElement(ModalShell, { onClose: onClose, title: "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE" }, ...body);
+    return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE" }, ...body);
 }
 /* ---------------- calendar modal ---------------- */
 function isAyyamAlBid(date) {
@@ -4211,6 +4290,22 @@ function CalendarModal({ specialDays, onSaveSpecialDays, onClose, onRegisterBack
         });
         return map;
     }, [adminSpecialDays]);
+    // list of this month's special days shown directly under the calendar
+    // grid — reuses the exact same specialDays/adminByDate data the dot
+    // markers and the tap-a-date detail view already use, just rendered as
+    // a visible list instead of requiring a tap first.
+    const monthSpecialEntries = useMemo(() => {
+        const y2 = viewDate.getFullYear();
+        const m2 = viewDate.getMonth();
+        const daysInM = new Date(y2, m2 + 1, 0).getDate();
+        const entries = [];
+        for (let d = 1; d <= daysInM; d++) {
+            const dateStr = todayStr(new Date(y2, m2, d));
+            (specialDays[dateStr] || []).forEach((label) => entries.push({ dateStr, day: d, title: label, isAdmin: false }));
+            (adminByDate[dateStr] || []).forEach((s) => entries.push({ dateStr, day: d, title: s.title, isAdmin: true }));
+        }
+        return entries;
+    }, [viewDate, specialDays, adminByDate]);
     // let App's hardware-back handler know: if the nested special-day detail
     // view is open, a back-press should close just that (return to the
     // calendar grid, same month/selection) — not the whole calendar
@@ -4272,7 +4367,7 @@ function CalendarModal({ specialDays, onSaveSpecialDays, onClose, onRegisterBack
         const hijri = gregorianToHijri(d);
         const labels = specialDays[selectedDate] || [];
         const adminDays = adminByDate[selectedDate] || [];
-        return (React.createElement(ModalShell, { title: "\u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09A8", onClose: () => setSelectedDate(null) },
+        return (React.createElement(ModalShell, { title: "\u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09A8", fullScreen: true, onClose: () => setSelectedDate(null) },
             React.createElement("button", { style: styles.calBackBtn, onClick: () => setSelectedDate(null) }, "\u2039 \u0995\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0\u09C7 \u09AB\u09BF\u09B0\u09C1\u09A8"),
             React.createElement("div", { style: styles.calDayDetailCard },
                 React.createElement("div", { style: styles.calDayDetailDate },
@@ -4306,7 +4401,7 @@ function CalendarModal({ specialDays, onSaveSpecialDays, onClose, onRegisterBack
                 React.createElement("input", { style: styles.taskInput, placeholder: "\u09AF\u09C7\u09AE\u09A8: \u09AE\u09C1\u09B9\u09BE\u09AE\u09CD\u09AE\u09A6 \u09B8\u09BE\u0983 \u098F\u09B0 \u09AA\u09CD\u09B0\u09A5\u09AE \u09B9\u09BF\u099C\u09B0\u09A4", value: newLabel, onChange: (e) => setNewLabel(e.target.value), onKeyDown: (e) => e.key === "Enter" && addLabel() }),
                 React.createElement("button", { style: styles.taskAddBtn, onClick: addLabel }, "+"))));
     }
-    return (React.createElement(ModalShell, { title: "\u0995\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0", onClose: onClose },
+    return (React.createElement(ModalShell, { title: "\u0995\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0", fullScreen: true, onClose: onClose },
         React.createElement("div", { style: styles.calCard },
             React.createElement("div", { style: styles.calNavRow },
                 React.createElement("button", { style: styles.calNavBtn, onClick: () => setViewDate(new Date(y, m - 1, 1)) }, "\u2039"),
@@ -4365,6 +4460,15 @@ function CalendarModal({ specialDays, onSaveSpecialDays, onClose, onRegisterBack
                         toBnDigits(hijri.day)),
                     labels && labels.length > 0 ? React.createElement("div", { style: styles.calSpecialDot, title: dotTitle }) : (adminDays && adminDays.length > 0 && React.createElement("div", { style: Object.assign(Object.assign({}, styles.calSpecialDot), { background: "#E8C547" }), title: dotTitle }))));
             }))),
+        React.createElement("div", { style: { margin: "12px 0" } },
+            React.createElement("div", { style: styles.formLabel }, "\u098F\u0987 \u09AE\u09BE\u09B8\u09C7\u09B0 \u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09AC\u09B8"),
+            monthSpecialEntries.length === 0
+                ? React.createElement("div", { style: styles.taskEmpty }, "\u098F\u0987 \u09AE\u09BE\u09B8\u09C7 \u0995\u09CB\u09A8\u09CB \u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09A8 \u09AF\u09CB\u0997 \u0995\u09B0\u09BE \u09B9\u09AF\u09BC\u09A8\u09BF\u0964")
+                : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, monthSpecialEntries.map((e, i) => React.createElement("button", { key: i, onClick: () => setSelectedDate(e.dateStr), style: Object.assign(Object.assign({}, styles.calSpecialEditRow), { width: "100%", textAlign: "left", background: "var(--hk-card)", border: "none", cursor: "pointer" }) },
+                    React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 8 } },
+                        React.createElement("i", { style: Object.assign(Object.assign({}, styles.legendDot), { background: e.isAdmin ? "#E8C547" : "var(--hk-gold)" }) }),
+                        e.title),
+                    React.createElement("span", { style: { fontSize: 11.5, color: "var(--hk-text-muted)" } }, toBnDigits(e.day)))))),
         React.createElement("div", { style: styles.calLegend },
             React.createElement("span", null,
                 React.createElement("i", { style: Object.assign(Object.assign({}, styles.legendDot), { background: "var(--hk-success-mid)" }) }),
@@ -5238,7 +5342,7 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
             setPinStep1("");
         }
     };
-    return (React.createElement(ModalShell, { onClose: onClose, title: "\u09B8\u09C7\u099F\u09BF\u0982\u09B8" },
+    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "\u09B8\u09C7\u099F\u09BF\u0982\u09B8" },
         React.createElement(SettingsSection, { title: "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F" }, user ? (React.createElement(React.Fragment, null,
             React.createElement("button", { style: styles.settingsRow, onClick: () => setShowAccountSection((v) => !v) },
                 React.createElement("span", null, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u0993 \u09AA\u09CD\u09B0\u09CB\u09AB\u09BE\u0987\u09B2"),
@@ -5549,7 +5653,7 @@ function useBackgroundScrollLock() {
         };
     }, []);
 }
-function ModalShell({ title, onClose, children }) {
+function ModalShell({ title, onClose, children, fullScreen }) {
     // two complementary fixes, both reusable across every panel that uses
     // this one shared shell: (1) overscroll-behavior on the scrollable
     // sheet stops scroll-chaining — once the sheet hits its own scroll
@@ -5558,8 +5662,12 @@ function ModalShell({ title, onClose, children }) {
     // fallback for browsers/cases where (1) alone isn't enough (e.g.
     // touches that start outside the sheet, on the overlay backdrop).
     useBackgroundScrollLock();
-    return (React.createElement("div", { style: styles.modalOverlay, onClick: onClose },
-        React.createElement("div", { style: styles.modalSheet, onClick: (e) => e.stopPropagation() },
+    // fullScreen is opt-in per usage — it swaps the default "sheet dropped
+    // from the top, dashboard peeking out below/around it" look for a
+    // full-page one (no gap, no rounded corners, opaque background).
+    // Existing callers that don't pass it are completely unaffected.
+    return (React.createElement("div", { style: fullScreen ? styles.modalOverlayFull : styles.modalOverlay, onClick: onClose },
+        React.createElement("div", { style: fullScreen ? styles.modalSheetFull : styles.modalSheet, onClick: (e) => e.stopPropagation() },
             React.createElement("div", { style: styles.modalHeader },
                 React.createElement("div", { style: styles.modalTitle }, title),
                 React.createElement("button", { style: styles.modalClose, onClick: onClose }, "\u2715")),
@@ -6492,6 +6600,32 @@ const styles = {
         overscrollBehaviorY: "contain",
         background: "var(--hk-surface-soft)",
         borderRadius: "0 0 16px 16px",
+        padding: "10px 20px 26px",
+        boxSizing: "border-box",
+    },
+    // fullscreen variants — used by Calendar, Notification Center, the
+    // 3-dot Menu and every panel/step opened from it (Admin Panel, Tax,
+    // Accounts, FAQ, Settings, and their nested add/edit forms). Same
+    // ModalShell, same header/close-button/back-navigation wiring — only
+    // the sizing changes, so nothing about how these panels work is
+    // touched, only how much of the screen they occupy.
+    modalOverlayFull: {
+        position: "fixed",
+        inset: 0,
+        background: "var(--hk-surface-soft)",
+        display: "flex",
+        alignItems: "stretch",
+        justifyContent: "center",
+        zIndex: 30,
+    },
+    modalSheetFull: {
+        width: "100%",
+        maxWidth: 480,
+        height: "100%",
+        overflowY: "auto",
+        overscrollBehaviorY: "contain",
+        background: "var(--hk-surface-soft)",
+        borderRadius: 0,
         padding: "10px 20px 26px",
         boxSizing: "border-box",
     },
