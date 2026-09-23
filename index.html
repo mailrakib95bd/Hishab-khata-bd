@@ -68,9 +68,13 @@
 <!-- optional cloud account / backup layer — native ES module, loads
      straight from Firebase's CDN. If there's no internet this simply never
      runs; the app below is fully functional without it (local-only mode). -->
-<script type="module" src="./firebase-init.js"></script>
+<script type="module" src="./firebase-init.js?v=2"></script>
 
-<!-- app.js is already plain compiled JavaScript (no JSX) -->
-<script src="./app.js"></script>
+<!-- app.js is already plain compiled JavaScript (no JSX). The ?v= query
+     string changes on every real update — that gives it a new URL, so
+     even ordinary HTTP/CDN caching (separate from the service worker
+     above) can't keep serving an old cached copy after a deploy. Bump
+     this number any time app.js changes. -->
+<script src="./app.js?v=2"></script>
 </body>
 </html>

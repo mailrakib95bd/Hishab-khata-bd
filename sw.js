@@ -1,4 +1,9 @@
-const CACHE_NAME = "hisab-khata-v1";
+// bumping this string is what forces every visitor's browser to notice
+// sw.js changed, install the new worker, and (via the activate handler
+// below) throw away every asset it cached under the old name — including
+// the previously-cached index.html/app.js that kept serving stale code
+// no matter how many times the underlying files were updated.
+const CACHE_NAME = "hisab-khata-v2";
 const CORE_ASSETS = [
   "./index.html",
   "./manifest.json",
