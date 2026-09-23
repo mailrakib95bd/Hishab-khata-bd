@@ -4185,10 +4185,16 @@ function FamilyBazarModule({ onClose, user }) {
     const [purchases, setPurchases] = useState([]);
     const [products, setProducts] = useState([]);
     const [budget, setBudget] = useState(null);
+    const [categories, setCategories] = useState([]);
+    const [sentInvitations, setSentInvitations] = useState([]);
     const [incoming, setIncoming] = useState([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
-    const [tab, setTab] = useState("home"); // home | bazar | family | budget
+    const [tab, setTab] = useState("home"); // home | bazar | reports | family | more
+    const [moreView, setMoreView] = useState(null); // null | products | categories | search | budget
+    const [selectedProductName, setSelectedProductName] = useState(null);
+    const [priceHistory, setPriceHistory] = useState([]);
+    const [editingMember, setEditingMember] = useState(null);
     const [showCreate, setShowCreate] = useState(false);
     const [showInvite, setShowInvite] = useState(false);
     const [showAddPurchase, setShowAddPurchase] = useState(false);
@@ -4217,8 +4223,10 @@ function FamilyBazarModule({ onClose, user }) {
             window.FB.familyPurchases(familyId, 200),
             window.FB.familyProducts(familyId),
             window.FB.getFamilyBudget(familyId),
+            window.FB.familyCategories(familyId),
+            window.FB.familySentInvitations(familyId).catch(() => []),
         ])
-            .then(([m, p, prod, b]) => { setMembers(m); setPurchases(p); setProducts(prod); setBudget(b); })
+            .then(([m, p, prod, b, cats, invs]) => { setMembers(m); setPurchases(p); setProducts(prod); setBudget(b); setCategories(cats); setSentInvitations(invs); })
             .catch((e) => setError(e.message || "লোড করা যায়নি"))
             .finally(() => setLoading(false));
     };
@@ -4261,6 +4269,38 @@ function FamilyBazarModule({ onClose, user }) {
 
     const handleSetBudget = (amount) => {
         window.FB.setFamilyBudget(activeFamilyId, amount).then(() => loadFamilyData(activeFamilyId)).catch((e) => setError(e.message));
+    };
+
+    const handleCancelInvite = (inviteId) => {
+        window.FB.cancelInvitation(inviteId).then(() => loadFamilyData(activeFamilyId)).catch((e) => setError(e.message));
+    };
+
+    const handleSaveMember = (patch) => {
+        window.FB.updateFamilyMember(activeFamilyId, editingMember.uid, patch)
+            .then(() => { setEditingMember(null); loadFamilyData(activeFamilyId); })
+            .catch((e) => setError(e.message));
+    };
+    const handleRemoveMember = () => {
+        if (!window.confirm("এই সদস্যকে পরিবার থেকে সরিয়ে দেবেন?")) return;
+        window.FB.removeFamilyMember(activeFamilyId, editingMember.uid)
+            .then(() => { setEditingMember(null); loadFamilyData(activeFamilyId); })
+            .catch((e) => setError(e.message));
+    };
+
+    const handleAddCategory = (name) => {
+        window.FB.upsertFamilyCategory(activeFamilyId, { name }).then(() => loadFamilyData(activeFamilyId)).catch((e) => setError(e.message));
+    };
+    const handleDeleteCategory = (id) => {
+        window.FB.deleteFamilyCategory(activeFamilyId, id).then(() => loadFamilyData(activeFamilyId)).catch((e) => setError(e.message));
+    };
+    const handleSeedDefaultCategories = () => {
+        Promise.all(FB_DEFAULT_CATEGORIES.map((c) => window.FB.upsertFamilyCategory(activeFamilyId, { name: c.label })))
+            .then(() => loadFamilyData(activeFamilyId)).catch((e) => setError(e.message));
+    };
+
+    const openProduct = (name) => {
+        setSelectedProductName(name);
+        window.FB.familyPriceHistory(activeFamilyId, name).then(setPriceHistory).catch((e) => setError(e.message));
     };
 
     // ---- not signed in ----
@@ -4312,9 +4352,9 @@ function FamilyBazarModule({ onClose, user }) {
             showSwitcher && families.length > 1 && React.createElement("div", { style: { marginBottom: 14, border: "1px solid var(--hk-border-light)", borderRadius: 8, overflow: "hidden" } },
                 families.map((f) => React.createElement("button", { key: f.id, onClick: () => { setActiveFamilyId(f.id); setShowSwitcher(false); }, style: { display: "block", width: "100%", textAlign: "left", padding: "10px 12px", background: f.id === activeFamilyId ? "var(--hk-surface-soft)" : "none", border: "none", borderBottom: "1px solid var(--hk-border-light)" } }, f.name))),
 
-            React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 14, borderBottom: "1px solid var(--hk-border-light)" } },
-                [["home", "🏠 Home"], ["bazar", "🛒 Bazar"], ["family", "👥 Family"], ["budget", "৳ Budget"]].map(([k, label]) => (
-                    React.createElement("button", { key: k, onClick: () => setTab(k), style: { flex: 1, padding: "8px 4px", background: "none", border: "none", borderBottom: tab === k ? "2px solid var(--hk-gold)" : "2px solid transparent", fontWeight: tab === k ? 700 : 500, color: tab === k ? "var(--hk-text)" : "var(--hk-text-muted)", fontSize: 12.5 } }, label)
+            React.createElement("div", { style: { display: "flex", gap: 4, marginBottom: 14, borderBottom: "1px solid var(--hk-border-light)" } },
+                [["home", "🏠 Home"], ["bazar", "🛒 Bazar"], ["reports", "📊 Reports"], ["family", "👥 Family"], ["more", "⚙ More"]].map(([k, label]) => (
+                    React.createElement("button", { key: k, onClick: () => { setTab(k); setMoreView(null); setSelectedProductName(null); }, style: { flex: 1, padding: "8px 2px", background: "none", border: "none", borderBottom: tab === k ? "2px solid var(--hk-gold)" : "2px solid transparent", fontWeight: tab === k ? 700 : 500, color: tab === k ? "var(--hk-text)" : "var(--hk-text-muted)", fontSize: 11.5 } }, label)
                 ))),
 
             tab === "home" && React.createElement(FBHomeTab, { monthTotal, pctChange, memberTotals, budget, spentPct, onAddPurchase: () => setShowAddPurchase(true) }),
@@ -4326,17 +4366,45 @@ function FamilyBazarModule({ onClose, user }) {
                 onDelete: (id) => { if (window.confirm("এই কেনাকাটা মুছে ফেলবেন?")) handleDeletePurchase(id); },
             }),
 
-            tab === "family" && React.createElement(FBFamilyTab, {
-                members, myMember, onInvite: () => setShowInvite(true),
+            tab === "reports" && React.createElement(FBReportsTab, {
+                purchases: purchases.filter((p) => canSeeMember({ uid: p.memberId })),
+                members, myMember, budget, monthTotal, prevMonthTotal, pctChange,
             }),
 
-            tab === "budget" && React.createElement(FBBudgetTab, {
+            tab === "family" && React.createElement(FBFamilyTab, {
+                members, myMember, sentInvitations,
+                onInvite: () => setShowInvite(true),
+                onCancelInvite: handleCancelInvite,
+                onEditMember: setEditingMember,
+            }),
+
+            tab === "more" && !moreView && React.createElement(FBMoreTab, { onOpen: setMoreView }),
+
+            tab === "more" && moreView === "products" && !selectedProductName && React.createElement(FBProductsTab, {
+                purchases: purchases.filter((p) => canSeeMember({ uid: p.memberId }) || (myMember && myMember.permissions && myMember.permissions.priceHistory)),
+                onSelect: openProduct,
+            }),
+            tab === "more" && moreView === "products" && selectedProductName && React.createElement(FBProductProfile, {
+                productName: selectedProductName, history: priceHistory,
+                canCompareLocation: myMember && myMember.permissions && myMember.permissions.locationComparison,
+                onBack: () => setSelectedProductName(null),
+            }),
+            tab === "more" && moreView === "categories" && React.createElement(FBCategoriesTab, {
+                categories, canEdit: myMember && (myMember.role === "owner" || myMember.role === "admin"),
+                onAdd: handleAddCategory, onDelete: handleDeleteCategory, onSeedDefaults: handleSeedDefaultCategories,
+            }),
+            tab === "more" && moreView === "search" && React.createElement(FBSearchTab, {
+                purchases: purchases.filter((p) => canSeeMember({ uid: p.memberId })), members, products,
+            }),
+            tab === "more" && moreView === "budget" && React.createElement(FBBudgetTab, {
                 budget, monthTotal, spentPct, canEdit: myMember && (myMember.role === "owner" || myMember.role === "admin"),
                 onSave: handleSetBudget,
             }),
+            tab === "more" && moreView && React.createElement("button", { style: Object.assign(Object.assign({}, styles.calBackBtn), { marginTop: 14 }), onClick: () => { setMoreView(null); setSelectedProductName(null); } }, "‹ More-এ ফিরুন"),
 
             showAddPurchase && React.createElement(FBAddPurchaseForm, { products, onClose: () => setShowAddPurchase(false), onSave: handleAddPurchase }),
-            showInvite && React.createElement(FBInviteForm, { onClose: () => setShowInvite(false), onSave: handleInvite })));
+            showInvite && React.createElement(FBInviteForm, { onClose: () => setShowInvite(false), onSave: handleInvite }),
+            editingMember && React.createElement(FBMemberEditForm, { member: editingMember, onClose: () => setEditingMember(null), onSave: handleSaveMember, onRemove: handleRemoveMember })));
 }
 
 function FBCreateFamilyForm({ onCancel, onCreate }) {
@@ -4382,13 +4450,211 @@ function FBBazarTab({ purchases, members, myUid, onAdd, onDelete }) {
                 p.memberId === myUid && React.createElement("button", { style: Object.assign(Object.assign({}, styles.taskDelete), { marginTop: 6 }), onClick: () => onDelete(p.id) }, "মুছুন"))));
 }
 
-function FBFamilyTab({ members, myMember, onInvite }) {
-    const canInvite = myMember && (myMember.role === "owner" || myMember.role === "admin");
+function FBFamilyTab({ members, myMember, sentInvitations, onInvite, onCancelInvite, onEditMember }) {
+    const canManage = myMember && (myMember.role === "owner" || myMember.role === "admin");
+    const pending = (sentInvitations || []).filter((i) => i.status === "pending");
     return React.createElement("div", null,
-        canInvite && React.createElement("button", { style: Object.assign(Object.assign({}, admStyles.addBtn), { marginBottom: 14 }), onClick: onInvite }, "+ সদস্যকে Invite করুন"),
-        members.map((m) => React.createElement("div", { key: m.uid, style: styles.taskItem },
+        canManage && React.createElement("button", { style: Object.assign(Object.assign({}, admStyles.addBtn), { marginBottom: 14 }), onClick: onInvite }, "+ সদস্যকে Invite করুন"),
+        members.map((m) => React.createElement("button", {
+            key: m.uid,
+            onClick: () => canManage && m.uid !== myMember.uid && onEditMember(m),
+            style: Object.assign(Object.assign({}, styles.taskItem), { width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: "1px solid var(--hk-border-light)", cursor: canManage && m.uid !== myMember.uid ? "pointer" : "default" }),
+        },
             React.createElement("span", { style: styles.taskText }, m.name || m.email, " (", (FB_RELATIONS.find((r) => r.key === m.relation) || {}).label || m.relation, ")"),
-            React.createElement("span", { style: { fontSize: 11.5, color: "var(--hk-text-muted)" } }, (FB_ROLES.find((r) => r.key === m.role) || { label: "মালিক" }).label))));
+            React.createElement("span", { style: { fontSize: 11.5, color: "var(--hk-text-muted)" } }, (FB_ROLES.find((r) => r.key === m.role) || { label: "মালিক" }).label))),
+        pending.length > 0 && React.createElement("div", { style: { marginTop: 14 } },
+            React.createElement("div", { style: styles.formLabel }, "পেন্ডিং Invitation"),
+            pending.map((i) => React.createElement("div", { key: i.id, style: styles.taskItem },
+                React.createElement("span", { style: styles.taskText }, i.invitedEmail),
+                canManage && React.createElement("button", { style: styles.taskDelete, onClick: () => onCancelInvite(i.id) }, "বাতিল")))));
+}
+
+// small self-contained inline SVG line chart — no charting library needed,
+// consistent with "clean line chart" requirement and the rest of this
+// codebase's inline-SVG icon style
+function fbLineChartSvg(points, width, height) {
+    if (!points || points.length < 2) return null;
+    const w = width || 300, h = height || 100, pad = 8;
+    const values = points.map((p) => p.value);
+    const min = Math.min(...values), max = Math.max(...values);
+    const range = max - min || 1;
+    const stepX = (w - pad * 2) / (points.length - 1);
+    const coords = points.map((p, i) => [pad + i * stepX, h - pad - ((p.value - min) / range) * (h - pad * 2)]);
+    const path = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    return React.createElement("svg", { viewBox: `0 0 ${w} ${h}`, style: { width: "100%", height: h } },
+        React.createElement("path", { d: path, fill: "none", stroke: "var(--hk-gold)", strokeWidth: 2 }),
+        coords.map(([x, y], i) => React.createElement("circle", { key: i, cx: x, cy: y, r: 2.5, fill: "var(--hk-gold)" })));
+}
+
+function FBReportsTab({ purchases, members, myMember, budget, monthTotal, prevMonthTotal, pctChange }) {
+    const canSeeCategory = myMember && myMember.permissions && myMember.permissions.categorySummary;
+    const monthNow = todayStr().slice(0, 7);
+    const monthPurchases = purchases.filter((p) => monthKeyOf(p.date) === monthNow);
+    const nameOf = (uid) => { const m = members.find((x) => x.uid === uid); return m ? (m.name || m.email) : uid; };
+
+    const byCategory = {};
+    monthPurchases.forEach((p) => (p.items || []).forEach((it) => {
+        const k = it.category || "অন্যান্য";
+        byCategory[k] = (byCategory[k] || 0) + (it.total || 0);
+    }));
+    const categoryRows = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
+    const categoryTotal = categoryRows.reduce((s, [, v]) => s + v, 0) || 1;
+
+    const byDay = {};
+    monthPurchases.forEach((p) => { byDay[p.date] = (byDay[p.date] || 0) + (p.total || 0); });
+    const dayPoints = Object.keys(byDay).sort().map((d) => ({ label: d, value: byDay[d] }));
+
+    return React.createElement("div", null,
+        React.createElement("div", { style: styles.formLabel }, "এই মাসের রিপোর্ট"),
+        React.createElement("div", { style: styles.taskItem },
+            React.createElement("span", { style: styles.taskText }, "মোট খরচ"),
+            React.createElement("span", { style: { fontWeight: 700 } }, formatTaka(monthTotal))),
+        React.createElement("div", { style: styles.taskItem },
+            React.createElement("span", { style: styles.taskText }, "গত মাস"),
+            React.createElement("span", { style: { fontWeight: 700 } }, formatTaka(prevMonthTotal))),
+        pctChange !== null && React.createElement("div", { style: { fontSize: 12.5, color: pctChange >= 0 ? "var(--hk-danger)" : "var(--hk-success)", marginBottom: 10 } }, pctChange >= 0 ? `+${pctChange}%` : `${pctChange}%`, " পরিবর্তন"),
+
+        budget && budget.monthlyAmount && React.createElement("div", { style: { marginBottom: 14 } },
+            React.createElement("div", { style: styles.formLabel }, "বাজেট অবস্থা"),
+            React.createElement("div", { style: { fontSize: 13 } }, "বাজেট ", formatTaka(budget.monthlyAmount), " · খরচ ", formatTaka(monthTotal), " · বাকি ", formatTaka(Math.max(0, budget.monthlyAmount - monthTotal)))),
+
+        React.createElement("div", { style: styles.formLabel }, "সদস্য অনুযায়ী"),
+        members.map((m) => {
+            const t = monthPurchases.filter((p) => p.memberId === m.uid).reduce((s, p) => s + (p.total || 0), 0);
+            const visible = m.uid === (myMember && myMember.uid) || (myMember && myMember.permissions && myMember.permissions.monthlyTotal);
+            return React.createElement("div", { key: m.uid, style: styles.taskItem },
+                React.createElement("span", { style: styles.taskText }, nameOf(m.uid)),
+                React.createElement("span", { style: { fontWeight: 600 } }, visible ? formatTaka(t) : "গোপন"));
+        }),
+
+        canSeeCategory && categoryRows.length > 0 && React.createElement("div", { style: { marginTop: 14 } },
+            React.createElement("div", { style: styles.formLabel }, "ক্যাটাগরি অনুযায়ী"),
+            categoryRows.map(([cat, amt]) => React.createElement("div", { key: cat, style: { marginBottom: 8 } },
+                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12.5 } },
+                    React.createElement("span", null, cat),
+                    React.createElement("span", null, formatTaka(amt), " (", Math.round((amt / categoryTotal) * 100), "%)")),
+                React.createElement("div", { style: { height: 6, borderRadius: 999, background: "var(--hk-border-light)", overflow: "hidden", marginTop: 2 } },
+                    React.createElement("div", { style: { height: "100%", width: `${Math.round((amt / categoryTotal) * 100)}%`, background: "var(--hk-gold)" } }))))),
+
+        dayPoints.length >= 2 && React.createElement("div", { style: { marginTop: 14 } },
+            React.createElement("div", { style: styles.formLabel }, "দৈনিক খরচ (এই মাস)"),
+            fbLineChartSvg(dayPoints.map((d) => ({ value: d.value })), 320, 90)),
+
+        React.createElement("div", { style: { fontSize: 11.5, color: "var(--hk-text-muted)", marginTop: 14 } }, "PDF/Excel export শীঘ্রই যোগ করা হবে।"));
+}
+
+function FBMoreTab({ onOpen }) {
+    const items = [
+        ["products", "📦", "পণ্য ও দামের ইতিহাস"],
+        ["categories", "🏷️", "ক্যাটাগরি ব্যবস্থাপনা"],
+        ["search", "🔍", "সার্চ"],
+        ["budget", "৳", "বাজেট"],
+    ];
+    return React.createElement("div", null, items.map(([k, icon, label]) => (
+        React.createElement("button", { key: k, onClick: () => onOpen(k), style: { display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", padding: "12px 10px", background: "none", border: "none", borderBottom: "1px solid var(--hk-border-light)", fontSize: 14 } },
+            React.createElement("span", { style: { fontSize: 18 } }, icon),
+            label)
+    )));
+}
+
+function FBProductsTab({ purchases, onSelect }) {
+    const byName = {};
+    purchases.forEach((p) => (p.items || []).forEach((it) => {
+        if (!byName[it.productName]) byName[it.productName] = { name: it.productName, latestPrice: it.unitPrice, latestDate: p.date, unit: it.unit };
+        else if (p.date > byName[it.productName].latestDate) byName[it.productName] = { name: it.productName, latestPrice: it.unitPrice, latestDate: p.date, unit: it.unit };
+    }));
+    const rows = Object.values(byName).sort((a, b) => a.name.localeCompare(b.name, "bn"));
+    return React.createElement("div", null,
+        rows.length === 0 ? React.createElement("div", { style: styles.taskEmpty }, "এখনো কোনো পণ্য কেনা হয়নি।")
+            : rows.map((r) => React.createElement("button", { key: r.name, onClick: () => onSelect(r.name), style: Object.assign(Object.assign({}, styles.taskItem), { width: "100%", textAlign: "left", background: "none", border: "none", borderBottom: "1px solid var(--hk-border-light)", cursor: "pointer" }) },
+                React.createElement("span", { style: styles.taskText }, r.name),
+                React.createElement("span", { style: { fontSize: 12, color: "var(--hk-text-muted)" } }, "সর্বশেষ ", formatTaka(r.latestPrice), "/", r.unit))));
+}
+
+function FBProductProfile({ productName, history, canCompareLocation, onBack }) {
+    const sorted = [...history].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const latest = sorted[sorted.length - 1];
+    const prev = sorted[sorted.length - 2];
+    const prices = sorted.map((h) => h.price);
+    const avg = prices.length ? prices.reduce((s, v) => s + v, 0) / prices.length : 0;
+    const low = prices.length ? Math.min(...prices) : 0;
+    const high = prices.length ? Math.max(...prices) : 0;
+
+    const byLocation = {};
+    sorted.forEach((h) => { if (h.location) { byLocation[h.location] = h.price; } });
+
+    return React.createElement("div", null,
+        React.createElement("button", { style: styles.calBackBtn, onClick: onBack }, "‹ পণ্যের তালিকায় ফিরুন"),
+        React.createElement("div", { style: { fontSize: 18, fontWeight: 700, margin: "8px 0" } }, productName),
+        latest && React.createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 10, fontSize: 13 } },
+            React.createElement("div", null, React.createElement("div", { style: { color: "var(--hk-text-muted)", fontSize: 11 } }, "সর্বশেষ দাম"), formatTaka(latest.price), "/", latest.unit),
+            prev && React.createElement("div", null, React.createElement("div", { style: { color: "var(--hk-text-muted)", fontSize: 11 } }, "আগের দাম"), formatTaka(prev.price)),
+            React.createElement("div", null, React.createElement("div", { style: { color: "var(--hk-text-muted)", fontSize: 11 } }, "গড়"), formatTaka(avg)),
+            React.createElement("div", null, React.createElement("div", { style: { color: "var(--hk-text-muted)", fontSize: 11 } }, "সর্বনিম্ন"), formatTaka(low)),
+            React.createElement("div", null, React.createElement("div", { style: { color: "var(--hk-text-muted)", fontSize: 11 } }, "সর্বোচ্চ"), formatTaka(high))),
+
+        sorted.length >= 2 ? React.createElement("div", { style: { marginBottom: 14 } },
+            React.createElement("div", { style: styles.formLabel }, "দামের প্রবণতা"),
+            fbLineChartSvg(sorted.map((h) => ({ value: h.price })), 320, 100))
+            : React.createElement("div", { style: { fontSize: 12, color: "var(--hk-text-muted)", marginBottom: 14 } }, "প্রবণতা দেখানোর মতো যথেষ্ট তথ্য নেই।"),
+
+        canCompareLocation && Object.keys(byLocation).length > 1 && React.createElement("div", { style: { marginBottom: 14 } },
+            React.createElement("div", { style: styles.formLabel }, "এলাকাভিত্তিক দাম তুলনা"),
+            Object.entries(byLocation).map(([loc, price]) => React.createElement("div", { key: loc, style: styles.taskItem },
+                React.createElement("span", { style: styles.taskText }, loc),
+                React.createElement("span", { style: { fontWeight: 600 } }, formatTaka(price))))),
+
+        React.createElement("div", { style: styles.formLabel }, "কেনার ইতিহাস"),
+        sorted.slice().reverse().map((h, i) => React.createElement("div", { key: i, style: styles.taskItem },
+            React.createElement("span", { style: styles.taskText }, formatDateBn(h.date).full, h.market ? ` — ${h.market}` : ""),
+            React.createElement("span", { style: { fontWeight: 600 } }, formatTaka(h.price)))));
+}
+
+function FBCategoriesTab({ categories, canEdit, onAdd, onDelete, onSeedDefaults }) {
+    const [name, setName] = useState("");
+    return React.createElement("div", null,
+        canEdit && React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } },
+            React.createElement("input", { style: Object.assign(Object.assign({}, admStyles.input), { flex: 1 }), value: name, onChange: (e) => setName(e.target.value), placeholder: "নতুন ক্যাটাগরির নাম" }),
+            React.createElement("button", { style: admStyles.addBtn, onClick: () => { if (name.trim()) { onAdd(name.trim()); setName(""); } } }, "যোগ করুন")),
+        canEdit && categories.length === 0 && React.createElement("button", { style: { background: "none", border: "1px dashed var(--hk-border-med)", borderRadius: 8, padding: "8px 12px", width: "100%", marginBottom: 10 }, onClick: onSeedDefaults }, "+ ডিফল্ট ক্যাটাগরি যোগ করুন"),
+        categories.length === 0 ? React.createElement("div", { style: styles.taskEmpty }, "এখনো কোনো ক্যাটাগরি নেই।")
+            : categories.map((c) => React.createElement("div", { key: c.id, style: styles.taskItem },
+                React.createElement("span", { style: styles.taskText }, c.name),
+                canEdit && React.createElement("button", { style: styles.taskDelete, onClick: () => onDelete(c.id) }, "মুছুন"))));
+}
+
+function FBSearchTab({ purchases, members, products }) {
+    const [q, setQ] = useState("");
+    const nameOf = (uid) => { const m = members.find((x) => x.uid === uid); return m ? (m.name || m.email) : uid; };
+    const query = q.trim().toLowerCase();
+    const results = query.length === 0 ? [] : purchases.flatMap((p) => (p.items || [])
+        .filter((it) => it.productName.toLowerCase().includes(query) || (it.category || "").toLowerCase().includes(query))
+        .map((it) => Object.assign({ purchaseDate: p.date, market: p.market, location: p.location, memberId: p.memberId }, it)))
+        .concat(purchases.filter((p) => (p.market || "").toLowerCase().includes(query) || (p.location || "").toLowerCase().includes(query) || nameOf(p.memberId).toLowerCase().includes(query))
+            .flatMap((p) => (p.items || []).map((it) => Object.assign({ purchaseDate: p.date, market: p.market, location: p.location, memberId: p.memberId }, it))));
+
+    return React.createElement("div", null,
+        React.createElement("input", { style: admStyles.input, value: q, onChange: (e) => setQ(e.target.value), placeholder: "পণ্য, ক্যাটাগরি, সদস্য, বাজার বা এলাকা দিয়ে খুঁজুন" }),
+        query.length > 0 && (results.length === 0
+            ? React.createElement("div", { style: styles.taskEmpty }, "কিছু পাওয়া যায়নি।")
+            : React.createElement("div", { style: { marginTop: 10 } }, results.map((r, i) => React.createElement("div", { key: i, style: styles.taskItem },
+                React.createElement("span", { style: styles.taskText }, r.productName, " — ", nameOf(r.memberId), " (", formatDateBn(r.purchaseDate).full, ")"),
+                React.createElement("span", { style: { fontWeight: 600 } }, formatTaka(r.unitPrice), "/", r.unit))))));
+}
+
+function FBMemberEditForm({ member, onClose, onSave, onRemove }) {
+    const [role, setRole] = useState(member.role);
+    const [permissions, setPermissions] = useState(member.permissions || FB_DEFAULT_PERMISSIONS);
+    const togglePerm = (key) => setPermissions(Object.assign(Object.assign({}, permissions), { [key]: !permissions[key] }));
+    return React.createElement(ModalShell, { title: member.name || member.email, fullScreen: true, onClose: onClose },
+        React.createElement("label", { style: admStyles.label }, "রোল"),
+        React.createElement("select", { style: admStyles.input, value: role, onChange: (e) => setRole(e.target.value) }, FB_ROLES.map((r) => React.createElement("option", { key: r.key, value: r.key }, r.label))),
+        React.createElement("div", { style: admStyles.label }, "পারমিশন"),
+        FB_PERMISSION_KEYS.map((p) => React.createElement("label", { key: p.key, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6, fontSize: 13.5 } },
+            React.createElement("input", { type: "checkbox", checked: !!permissions[p.key], onChange: () => togglePerm(p.key) }),
+            p.label)),
+        React.createElement("button", { style: Object.assign(Object.assign({}, admStyles.addBtn), { marginTop: 10 }), onClick: () => onSave({ role, permissions }) }, "সংরক্ষণ করুন"),
+        React.createElement("button", { style: Object.assign(Object.assign({}, styles.taskDelete), { marginTop: 10, width: "100%", textAlign: "center" }), onClick: onRemove }, "পরিবার থেকে সরিয়ে দিন"));
 }
 
 function FBBudgetTab({ budget, monthTotal, spentPct, canEdit, onSave }) {

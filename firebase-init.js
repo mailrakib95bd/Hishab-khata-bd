@@ -272,6 +272,24 @@ window.FB = {
     return (productName ? rows.filter((r) => r.productName === productName) : rows).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   },
 
+  async familyCategories(familyId) {
+    const snap = await getDocs(collection(db, "families", familyId, "categories"));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+
+  async upsertFamilyCategory(familyId, category) {
+    if (category.id) {
+      await updateDoc(doc(db, "families", familyId, "categories", category.id), { name: category.name, icon: category.icon || null, updatedAt: Date.now() });
+      return category.id;
+    }
+    const ref = await addDoc(collection(db, "families", familyId, "categories"), { name: category.name, icon: category.icon || null, createdAt: Date.now() });
+    return ref.id;
+  },
+
+  async deleteFamilyCategory(familyId, categoryId) {
+    await deleteDoc(doc(db, "families", familyId, "categories", categoryId));
+  },
+
   async getFamilyBudget(familyId) {
     const snap = await getDoc(doc(db, "families", familyId, "budgets", "current"));
     return snap.exists() ? snap.data() : null;
