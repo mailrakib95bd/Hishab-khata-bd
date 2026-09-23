@@ -124,6 +124,162 @@ window.FB = {
     });
     await batch.commit();
   },
+
+  // ---- Family Bazar ----------------------------------------------------
+  // See firestore.rules for the enforced security boundary; everything
+  // here is a thin wrapper, not itself the security layer.
+
+  currentUser() {
+    return auth.currentUser;
+  },
+
+  async createFamily(name, photoURL) {
+    const uid = auth.currentUser.uid;
+    const ref = await addDoc(collection(db, "families"), {
+      name, photoURL: photoURL || null, ownerId: uid, memberUids: [uid],
+      createdAt: Date.now(), updatedAt: Date.now(),
+    });
+    await setDoc(doc(db, "families", ref.id, "members", uid), {
+      uid, name: auth.currentUser.displayName || "", email: auth.currentUser.email || "",
+      photoURL: auth.currentUser.photoURL || null, relation: "other", role: "owner",
+      permissions: { monthlyTotal: true, categorySummary: true, purchaseDetails: true, priceHistory: true, locationComparison: true, reports: true, memberManagement: true },
+      status: "active", joinedAt: Date.now(), updatedAt: Date.now(),
+    });
+    return ref.id;
+  },
+
+  // families the signed-in user currently belongs to
+  async myFamilies() {
+    const uid = auth.currentUser.uid;
+    const snap = await getDocs(query(collection(db, "families")));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((f) => (f.memberUids || []).includes(uid));
+  },
+
+  async familyMembers(familyId) {
+    const snap = await getDocs(collection(db, "families", familyId, "members"));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+
+  async updateFamilyMember(familyId, uid, patch) {
+    await updateDoc(doc(db, "families", familyId, "members", uid), { ...patch, updatedAt: Date.now() });
+  },
+
+  async removeFamilyMember(familyId, uid) {
+    const fref = doc(db, "families", familyId);
+    const fsnap = await getDoc(fref);
+    const memberUids = (fsnap.data().memberUids || []).filter((x) => x !== uid);
+    await updateDoc(fref, { memberUids, updatedAt: Date.now() });
+    await deleteDoc(doc(db, "families", familyId, "members", uid));
+  },
+
+  async sendInvitation({ familyId, familyName, invitedEmail, relation, role, permissions }) {
+    const ref = await addDoc(collection(db, "invitations"), {
+      familyId, familyName, invitedBy: auth.currentUser.uid, invitedByName: auth.currentUser.displayName || "",
+      invitedEmail: invitedEmail.trim().toLowerCase(), relation, role, permissions,
+      status: "pending", createdAt: Date.now(), expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+    return ref.id;
+  },
+
+  // invitations addressed to the signed-in user's own email, still pending
+  async myIncomingInvitations() {
+    const email = (auth.currentUser.email || "").toLowerCase();
+    if (!email) return [];
+    const snap = await getDocs(query(collection(db, "invitations")));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      .filter((i) => i.invitedEmail === email && i.status === "pending" && i.expiresAt > Date.now());
+  },
+
+  // invitations THIS user has sent for one family (to show pending state /
+  // let them cancel)
+  async familySentInvitations(familyId) {
+    const snap = await getDocs(query(collection(db, "invitations")));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((i) => i.familyId === familyId);
+  },
+
+  async acceptInvitation(invite) {
+    const uid = auth.currentUser.uid;
+    const fref = doc(db, "families", invite.familyId);
+    const fsnap = await getDoc(fref);
+    const memberUids = fsnap.data().memberUids || [];
+    if (!memberUids.includes(uid)) {
+      await updateDoc(fref, { memberUids: [...memberUids, uid], updatedAt: Date.now() });
+    }
+    await setDoc(doc(db, "families", invite.familyId, "members", uid), {
+      uid, name: auth.currentUser.displayName || "", email: auth.currentUser.email || "",
+      photoURL: auth.currentUser.photoURL || null, relation: invite.relation, role: invite.role,
+      permissions: invite.permissions, status: "active", joinedAt: Date.now(), updatedAt: Date.now(),
+    });
+    await updateDoc(doc(db, "invitations", invite.id), { status: "accepted", respondedAt: Date.now() });
+  },
+
+  async rejectInvitation(inviteId) {
+    await updateDoc(doc(db, "invitations", inviteId), { status: "rejected", respondedAt: Date.now() });
+  },
+
+  async cancelInvitation(inviteId) {
+    await updateDoc(doc(db, "invitations", inviteId), { status: "cancelled" });
+  },
+
+  async familyProducts(familyId) {
+    const snap = await getDocs(collection(db, "families", familyId, "products"));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+
+  async upsertFamilyProduct(familyId, product) {
+    if (product.id) {
+      await updateDoc(doc(db, "families", familyId, "products", product.id), { ...product, updatedAt: Date.now() });
+      return product.id;
+    }
+    const ref = await addDoc(collection(db, "families", familyId, "products"), { ...product, createdAt: Date.now() });
+    return ref.id;
+  },
+
+  // last N purchases for a family (client-side sort avoids needing a
+  // composite index for a simple recency query)
+  async familyPurchases(familyId, limitN) {
+    const snap = await getDocs(collection(db, "families", familyId, "purchases"));
+    const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.createdAt - a.createdAt);
+    return typeof limitN === "number" ? rows.slice(0, limitN) : rows;
+  },
+
+  async addFamilyPurchase(familyId, purchase) {
+    const ref = await addDoc(collection(db, "families", familyId, "purchases"), { ...purchase, createdAt: Date.now(), updatedAt: Date.now() });
+    // one priceHistory row per line item, so price trends can be read back
+    // per-product without re-scanning every purchase
+    for (const item of purchase.items || []) {
+      if (!item.unitPrice) continue;
+      await addDoc(collection(db, "families", familyId, "priceHistory"), {
+        productId: item.productId || null, productName: item.productName, memberId: purchase.memberId,
+        price: item.unitPrice, unit: item.unit || null, location: purchase.location || null, market: purchase.market || null,
+        date: purchase.date, purchaseId: ref.id, createdAt: Date.now(),
+      });
+    }
+    return ref.id;
+  },
+
+  async updateFamilyPurchase(familyId, purchaseId, patch) {
+    await updateDoc(doc(db, "families", familyId, "purchases", purchaseId), { ...patch, updatedAt: Date.now() });
+  },
+
+  async deleteFamilyPurchase(familyId, purchaseId) {
+    await deleteDoc(doc(db, "families", familyId, "purchases", purchaseId));
+  },
+
+  async familyPriceHistory(familyId, productName) {
+    const snap = await getDocs(collection(db, "families", familyId, "priceHistory"));
+    const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    return (productName ? rows.filter((r) => r.productName === productName) : rows).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  },
+
+  async getFamilyBudget(familyId) {
+    const snap = await getDoc(doc(db, "families", familyId, "budgets", "current"));
+    return snap.exists() ? snap.data() : null;
+  },
+
+  async setFamilyBudget(familyId, monthlyAmount) {
+    await setDoc(doc(db, "families", familyId, "budgets", "current"), { monthlyAmount, updatedAt: Date.now() });
+  },
 };
 
 // finish a redirect-based Google sign-in, if one is in progress
