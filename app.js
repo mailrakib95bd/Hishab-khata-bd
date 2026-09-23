@@ -2021,7 +2021,7 @@ function App() {
     return (React.createElement(CatCtx.Provider, { value: { expenseCats, incomeCats } },
         React.createElement("div", { style: styles.app },
             React.createElement(FontLoader, null),
-            React.createElement(Header, { transactions: transactions, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onUpdateTask: updateTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName, onOpenMenu: () => setShowHamburgerMenu(true), onOpenNotifications: () => setShowNotificationCenter(true), unreadCount: totalUnreadCount, adminTasksCloud: adminTasksCloud, taxes: taxes, onOpenTaxPanel: () => setShowTaxPanel(true), completedAdminTaskIds: completedAdminTaskIds, onToggleAdminTaskComplete: toggleAdminTaskComplete }),
+            React.createElement(Header, { transactions: transactions, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onUpdateTask: updateTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName, onOpenMenu: () => setShowHamburgerMenu(true), onOpenNotifications: () => setShowNotificationCenter(true), unreadCount: totalUnreadCount, adminTasksCloud: adminTasksCloud, completedAdminTaskIds: completedAdminTaskIds, onToggleAdminTaskComplete: toggleAdminTaskComplete }),
             React.createElement("main", { style: styles.main },
                 tab === "dashboard" && (React.createElement(Dashboard, { transactions: transactions, budget: budget, categoryBudgets: categoryBudgets, debts: debts, accounts: accounts, onEditBudget: () => setShowBudget(true), onOpenTx: (t) => setEditingTx(t), onGoDebts: () => setTab("debts"), onGoReports: () => setTab("reports"), onQuickAdd: (type) => {
                         setQuickAddType(type);
@@ -2336,7 +2336,7 @@ function TaskForm({ initial, onClose, onSave }) {
                 onSave({ text: text.trim(), date: date || null, time: time || null, category: category || null, note: note.trim(), repeat: repeat === "none" ? null : repeat, reminderDate, reminderTime });
             } }, "সংরক্ষণ করুন")));
 }
-function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount, adminTasksCloud, taxes, onOpenTaxPanel, completedAdminTaskIds, onToggleAdminTaskComplete }) {
+function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount, adminTasksCloud, completedAdminTaskIds, onToggleAdminTaskComplete }) {
     const [showTasks, setShowTasks] = useState(false);
     useBackOverlay(showTasks, () => setShowTasks(false));
     const [showTaskForm, setShowTaskForm] = useState(false);
@@ -2432,13 +2432,6 @@ function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onTo
                                 React.createElement("button", { style: styles.taskCheck, onClick: () => onToggleAdminTaskComplete(t.id) }, "\u2610"),
                                 React.createElement("span", { style: Object.assign(Object.assign({}, styles.taskText), { flex: 1 }) }, t.title),
                                 t.dueDate && React.createElement("span", { style: { fontSize: 11, color: "var(--hk-text-muted)" } }, formatDateBn(t.dueDate).full))))))),
-                        (taxes || []).filter((t) => !t.paid).length > 0 && (React.createElement("div", { style: { marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--hk-border-light)" } },
-                            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 } },
-                                React.createElement("div", { style: { fontSize: 11.5, fontWeight: 700, color: "var(--hk-gold)" } }, "\uD83E\uDDFE \u0986\u09AE\u09BE\u09B0 \u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8"),
-                                React.createElement("button", { style: { fontSize: 11, color: "var(--hk-text-muted)", background: "none", border: "none", textDecoration: "underline" }, onClick: () => { setShowTasks(false); onOpenTaxPanel(); } }, "\u09B8\u09AC \u09A6\u09C7\u0996\u09C1\u09A8")),
-                            React.createElement("div", { style: styles.taskList }, (taxes || []).filter((t) => !t.paid).map((t) => (React.createElement("div", { key: t.id, style: styles.taskItem },
-                                React.createElement("span", { style: styles.taskText }, t.name),
-                                React.createElement("span", { style: { fontSize: 11, color: "var(--hk-text-muted)" } }, formatTaka(t.amount)))))))),
                         React.createElement("div", { style: styles.reminderHint }, "\u0985\u09CD\u09AF\u09BE\u09AA \u0996\u09CB\u09B2\u09BE \u09A5\u09BE\u0995\u09BE \u0985\u09AC\u09B8\u09CD\u09A5\u09BE\u09AF\u09BC \u09A8\u09BF\u09B0\u09CD\u09A6\u09BF\u09B7\u09CD\u099F \u09B8\u09AE\u09AF\u09BC\u09C7 \u09B8\u09CD\u0995\u09CD\u09B0\u09BF\u09A8\u09C7 \u09B8\u09A4\u09B0\u09CD\u0995\u09A4\u09BE \u09A6\u09C7\u0996\u09BE\u09AC\u09C7\u0964"),
                         tasks.length < MAX_TASKS && (React.createElement("div", { style: styles.taskAddRow },
                             React.createElement("input", { style: styles.taskInput, placeholder: "\u09A8\u09A4\u09C1\u09A8 \u0995\u09BE\u099C \u09B2\u09BF\u0996\u09C1\u09A8\u2026", value: newTask, onChange: (e) => setNewTask(e.target.value), onKeyDown: (e) => e.key === "Enter" && submitTask() }),
@@ -4075,30 +4068,33 @@ function NotificationCenter({ onClose, notices, dailyMessages, tasks, debts, spe
 function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, onOpenAccounts, isAdminUser, onOpenAdmin, unreadCount, }) {
     useBackgroundScrollLock();
     const menuItemStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "13px 4px", background: "none", border: "none", borderBottom: "1px solid var(--hk-border-light)", fontSize: 14.5, color: "var(--hk-text)" };
-    // fullscreen page now (not a partial drawer with a tappable backdrop) —
-    // the only way out is the close (☰) button, hardware back, or picking
-    // a menu item; there's no backdrop sliver left to tap since the panel
-    // fills the whole screen.
-    return React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 200, background: "var(--hk-card)", height: "100%", overflowY: "auto", overscrollBehaviorY: "contain", padding: "20px 18px", boxSizing: "border-box", display: "flex", flexDirection: "column" } },
-        React.createElement("button", { onClick: onClose, "aria-label": "\u09AE\u09C7\u09A8\u09C1 \u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8", style: { background: "none", border: "none", fontSize: 22, padding: 0, marginBottom: 18, color: "var(--hk-text)" } }, "\u2630"),
-        isAdminUser && React.createElement("button", { style: Object.assign(Object.assign({}, menuItemStyle), { color: "var(--hk-gold)", fontWeight: 700 }), onClick: onOpenAdmin }, "\u2699\uFE0F \u098F\u09A1\u09AE\u09BF\u09A8 \u09AA\u09CD\u09AF\u09BE\u09A8\u09C7\u09B2"),
-        React.createElement("button", { style: menuItemStyle, onClick: onOpenFAQ }, "\u09AA\u09CD\u09B0\u09B6\u09CD\u09A8 \u0993 \u0989\u09A4\u09CD\u09A4\u09B0"),
-        React.createElement("button", { style: menuItemStyle, onClick: onOpenTax }, "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
-        React.createElement("button", { style: menuItemStyle, onClick: onOpenAccounts }, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
-        React.createElement("button", { style: menuItemStyle, onClick: onOpenCalendar }, "\u09B9\u09BF\u099C\u09B0\u09BF \u0995\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0"),
-        React.createElement("button", { style: menuItemStyle, onClick: onOpenNotifications },
-            React.createElement("span", null, "\u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8"),
-            unreadCount > 0 && React.createElement("span", { style: { background: "var(--hk-danger)", color: "#fff", fontSize: 11, borderRadius: 999, padding: "1px 7px" } }, unreadCount)),
-        React.createElement("button", { style: menuItemStyle, onClick: onOpenSettings }, "\u09B8\u09C7\u099F\u09BF\u0982\u09B8"),
-        // marginTop: "auto" pins this block to the very bottom of the
-        // flex-column page, regardless of how few/many menu items are
-        // above it — the menu items stay naturally at the top
-        React.createElement("div", { style: { marginTop: "auto", paddingTop: 16, borderTop: "1px solid var(--hk-border-light)", fontSize: 12, color: "var(--hk-text-muted)", lineHeight: 1.8 } },
-            React.createElement("div", { style: { fontWeight: 700, fontSize: 13.5, color: "var(--hk-text)" } }, "\u09B9\u09BF\u09B8\u09BE\u09AC \u0996\u09BE\u09A4\u09BE"),
-            React.createElement("div", null, "\u099C\u09C0\u09AC\u09A8\u09C7\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC \u09A5\u09C7\u0995\u09C7 \u0986\u0996\u09BF\u09B0\u09BE\u09A4\u09C7\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC"),
-            React.createElement("div", null, "Version 10.1.2.3"),
-            React.createElement("div", { style: { marginTop: 6 } }, "\u0993\u09AF\u09BC\u09C7\u09AC\u09B8\u09BE\u0987\u099F: \u098F\u0987 \u0985\u09CD\u09AF\u09BE\u09AA\u09C7\u09B0 \u0993\u09AF\u09BC\u09C7\u09AC \u0985\u09CD\u09AF\u09BE\u09AA"),
-            React.createElement("div", null, "Privacy Policy: \u0986\u09AE\u09BE\u09A6\u09C7\u09B0 \u09B8\u09AE\u09CD\u09AA\u09B0\u09CD\u0995\u09C7 \u099C\u09BE\u09A8\u09C1\u09A8")));
+    // half-screen drawer (not fullscreen) — this is the one exception the
+    // user explicitly asked for: every panel reached FROM this menu stays
+    // fullscreen, but the menu itself should only cover half the screen,
+    // with the other half left as a tappable backdrop to close it. The ☰
+    // icon in the Header that opens this is untouched/unmoved.
+    return React.createElement("div", { style: { position: "fixed", inset: 0, zIndex: 200, display: "flex" } },
+        React.createElement("div", { style: { width: "50%", background: "var(--hk-card)", height: "100%", overflowY: "auto", overscrollBehaviorY: "contain", padding: "20px 18px", boxSizing: "border-box", display: "flex", flexDirection: "column" } },
+            React.createElement("button", { onClick: onClose, "aria-label": "\u09AE\u09C7\u09A8\u09C1 \u09AC\u09A8\u09CD\u09A7 \u0995\u09B0\u09C1\u09A8", style: { background: "none", border: "none", fontSize: 22, padding: 0, marginBottom: 18, color: "var(--hk-text)" } }, "\u2630"),
+            isAdminUser && React.createElement("button", { style: Object.assign(Object.assign({}, menuItemStyle), { color: "var(--hk-gold)", fontWeight: 700 }), onClick: onOpenAdmin }, "\u2699\uFE0F \u098F\u09A1\u09AE\u09BF\u09A8 \u09AA\u09CD\u09AF\u09BE\u09A8\u09C7\u09B2"),
+            React.createElement("button", { style: menuItemStyle, onClick: onOpenFAQ }, "\u09AA\u09CD\u09B0\u09B6\u09CD\u09A8 \u0993 \u0989\u09A4\u09CD\u09A4\u09B0"),
+            React.createElement("button", { style: menuItemStyle, onClick: onOpenTax }, "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
+            React.createElement("button", { style: menuItemStyle, onClick: onOpenAccounts }, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
+            React.createElement("button", { style: menuItemStyle, onClick: onOpenCalendar }, "\u09B9\u09BF\u099C\u09B0\u09BF \u0995\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0"),
+            React.createElement("button", { style: menuItemStyle, onClick: onOpenNotifications },
+                React.createElement("span", null, "\u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8"),
+                unreadCount > 0 && React.createElement("span", { style: { background: "var(--hk-danger)", color: "#fff", fontSize: 11, borderRadius: 999, padding: "1px 7px" } }, unreadCount)),
+            React.createElement("button", { style: menuItemStyle, onClick: onOpenSettings }, "\u09B8\u09C7\u099F\u09BF\u0982\u09B8"),
+            // marginTop: "auto" pins this block to the very bottom of the
+            // flex-column drawer, regardless of how few/many menu items are
+            // above it — the menu items stay naturally at the top
+            React.createElement("div", { style: { marginTop: "auto", paddingTop: 16, borderTop: "1px solid var(--hk-border-light)", fontSize: 12, color: "var(--hk-text-muted)", lineHeight: 1.8 } },
+                React.createElement("div", { style: { fontWeight: 700, fontSize: 13.5, color: "var(--hk-text)" } }, "\u09B9\u09BF\u09B8\u09BE\u09AC \u0996\u09BE\u09A4\u09BE"),
+                React.createElement("div", null, "\u099C\u09C0\u09AC\u09A8\u09C7\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC \u09A5\u09C7\u0995\u09C7 \u0986\u0996\u09BF\u09B0\u09BE\u09A4\u09C7\u09B0 \u09B9\u09BF\u09B8\u09BE\u09AC"),
+                React.createElement("div", null, "Version 10.1.2.3"),
+                React.createElement("div", { style: { marginTop: 6 } }, "\u0993\u09AF\u09BC\u09C7\u09AC\u09B8\u09BE\u0987\u099F: \u098F\u0987 \u0985\u09CD\u09AF\u09BE\u09AA\u09C7\u09B0 \u0993\u09AF\u09BC\u09C7\u09AC \u0985\u09CD\u09AF\u09BE\u09AA"),
+                React.createElement("div", null, "Privacy Policy: \u0986\u09AE\u09BE\u09A6\u09C7\u09B0 \u09B8\u09AE\u09CD\u09AA\u09B0\u09CD\u0995\u09C7 \u099C\u09BE\u09A8\u09C1\u09A8"))),
+        React.createElement("div", { style: { flex: 1, background: "rgba(0,0,0,0.4)" }, onClick: onClose }));
 }
 function FAQModal({ onClose, faqCloud }) {
     // read-only for everyone here — admins manage FAQ content exclusively
@@ -4113,8 +4109,13 @@ function FAQModal({ onClose, faqCloud }) {
 }
 /* ---------------- tax management ---------------- */
 function TaxForm({ initial, onClose, onSave }) {
+    // same category source Admin Task Management uses (cats.expenseCats) —
+    // reused as-is, not a new/duplicate list. TaxPanel/TaxForm isn't
+    // admin-gated, so this is available to admin and regular users alike.
+    const cats = useCategories();
     const [name, setName] = useState((initial === null || initial === void 0 ? void 0 : initial.name) || "");
     const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
+    const [category, setCategory] = useState((initial === null || initial === void 0 ? void 0 : initial.category) || "");
     const [dueDate, setDueDate] = useState((initial === null || initial === void 0 ? void 0 : initial.dueDate) || todayStr());
     const [note, setNote] = useState((initial === null || initial === void 0 ? void 0 : initial.note) || "");
     const [err, setErr] = useState("");
@@ -4123,6 +4124,10 @@ function TaxForm({ initial, onClose, onSave }) {
         React.createElement("input", { style: admStyles.input, value: name, onChange: (e) => setName(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "\u09AA\u09B0\u09BF\u09AE\u09BE\u09A3 *"),
         React.createElement("input", { style: admStyles.input, type: "number", inputMode: "decimal", value: amount, onChange: (e) => setAmount(e.target.value) }),
+        React.createElement("label", { style: admStyles.label }, "\u09B8\u09BE\u09AC-\u0995\u09CD\u09AF\u09BE\u099F\u09C7\u0997\u09B0\u09BF"),
+        React.createElement("select", { style: admStyles.input, value: category, onChange: (e) => setCategory(e.target.value) },
+            React.createElement("option", { value: "" }, "\u2014 \u09A8\u09BF\u09B0\u09CD\u09AC\u09BE\u099A\u09A8 \u0995\u09B0\u09C1\u09A8 \u2014"),
+            (cats.expenseCats || []).map((c) => React.createElement("option", { key: c.key, value: c.key }, c.label))),
         React.createElement("label", { style: admStyles.label }, "\u09AA\u09B0\u09BF\u09B6\u09CB\u09A7\u09C7\u09B0 \u09B6\u09C7\u09B7 \u09A4\u09BE\u09B0\u09BF\u0996"),
         React.createElement("input", { style: admStyles.input, type: "date", value: dueDate, onChange: (e) => setDueDate(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "\u09A8\u09CB\u099F"),
@@ -4134,10 +4139,12 @@ function TaxForm({ initial, onClose, onSave }) {
                     setErr("নাম ও সঠিক পরিমাণ দিন");
                     return;
                 }
-                onSave({ name: name.trim(), amount: amt, dueDate, note: note.trim() });
+                onSave({ name: name.trim(), amount: amt, category: category || null, dueDate, note: note.trim() });
             } }, "সংরক্ষণ করুন")));
 }
 function TaxPanel({ onClose, taxes, onAdd, onUpdate, onDelete, onTogglePaid }) {
+    const cats = useCategories();
+    const catLabel = (key) => { var _a; return key && ((_a = (cats.expenseCats || []).find((c) => c.key === key)) === null || _a === void 0 ? void 0 : _a.label); };
     const [showForm, setShowForm] = useState(false);
     const [editing, setEditing] = useState(null);
     const [deleteConfirmId, setDeleteConfirmId] = useState(null);
@@ -4159,6 +4166,7 @@ function TaxPanel({ onClose, taxes, onAdd, onUpdate, onDelete, onTogglePaid }) {
                 React.createElement("div", null,
                     React.createElement("div", { style: { fontWeight: 600 } }, t.name, t.paid && React.createElement("span", { style: { fontSize: 11, color: "var(--hk-success)", marginLeft: 6 } }, "\u2713 \u09AA\u09B0\u09BF\u09B6\u09CB\u09A7\u09BF\u09A4")),
                     t.dueDate && React.createElement("div", { style: Object.assign(Object.assign({}, admStyles.muted), overdue ? { color: "var(--hk-danger)" } : {}) }, "শেষ তারিখ: ", formatDateBn(t.dueDate).full, overdue ? " (মেয়াদোত্তীর্ণ)" : ""),
+                    catLabel(t.category) && React.createElement("div", { style: admStyles.muted }, catLabel(t.category)),
                     React.createElement("div", { style: { fontWeight: 600, marginTop: 3 } }, formatTaka(t.amount))),
                 React.createElement("div", { style: { display: "flex", gap: 2, alignItems: "flex-start" } },
                     React.createElement("button", { style: admStyles.iconBtn, onClick: () => onTogglePaid(t.id) }, t.paid ? "\u21BA" : "\u2713"),
@@ -4464,7 +4472,7 @@ function CalendarModal({ specialDays, onSaveSpecialDays, onClose, onRegisterBack
             React.createElement("div", { style: styles.formLabel }, "\u098F\u0987 \u09AE\u09BE\u09B8\u09C7\u09B0 \u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09AC\u09B8"),
             monthSpecialEntries.length === 0
                 ? React.createElement("div", { style: styles.taskEmpty }, "\u098F\u0987 \u09AE\u09BE\u09B8\u09C7 \u0995\u09CB\u09A8\u09CB \u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09A8 \u09AF\u09CB\u0997 \u0995\u09B0\u09BE \u09B9\u09AF\u09BC\u09A8\u09BF\u0964")
-                : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, monthSpecialEntries.map((e, i) => React.createElement("button", { key: i, onClick: () => setSelectedDate(e.dateStr), style: Object.assign(Object.assign({}, styles.calSpecialEditRow), { width: "100%", textAlign: "left", background: "var(--hk-card)", border: "none", cursor: "pointer" }) },
+                : React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, monthSpecialEntries.map((e, i) => React.createElement("div", { key: i, style: Object.assign(Object.assign({}, styles.calSpecialEditRow), { width: "100%" }) },
                     React.createElement("span", { style: { display: "flex", alignItems: "center", gap: 8 } },
                         React.createElement("i", { style: Object.assign(Object.assign({}, styles.legendDot), { background: e.isAdmin ? "#E8C547" : "var(--hk-gold)" }) }),
                         e.title),
