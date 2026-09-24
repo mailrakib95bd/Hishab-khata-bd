@@ -11,13 +11,35 @@ rules_version = '2';
 // ADMIN-ONLY GLOBAL CONTENT
 // Four top-level collections — notices/{id}, dailyMessages/{id},
 // adminSpecialDays/{id}, adminTasks/{id} — are readable by any signed-in
-// user but writable ONLY by the single primary admin UID below. This is
-// the actual security boundary: even if someone edits frontend JavaScript
-// or calls Firestore directly, a write from any other account is rejected
-// here, at the database level.
+// user but writable ONLY by the single primary admin UID below.
+//
+// FAMILY BAZAR (bottom of this file)
+// Multi-account family grocery module. There are no Cloud Functions in this
+// project, so every guarantee is expressed as a plain rule. The important
+// ones:
+//   * membership is proven by a member document that can only be created
+//     (a) by the family creator in the same batch that creates the family, or
+//     (b) from a genuine, pending, unexpired invitation addressed to the
+//         caller's verified e-mail — never by self-assignment;
+//   * a member's role/permissions can only be changed by owner/admin (or a
+//     member holding "memberManagement", limited to member/viewer targets),
+//     nobody can edit their own, and nobody can grant a permission they do
+//     not hold themselves;
+//   * other people's purchases need "purchaseDetails", price rows need
+//     "priceHistory", per-location prices need "locationComparison",
+//     per-member totals need "monthlyTotal", category totals need
+//     "categorySummary". Those are separate documents on purpose: a
+//     document can't be partly hidden, so each permission guards its own
+//     collection and the UI only reads what the rules will allow.
+//
+// FAMILY BAZAR (bottom half of this file)
+// Every privacy rule (who may read whose purchases / totals / prices) is
+// enforced HERE, on the server. The app hides buttons too, but that is only
+// cosmetics — see the long comment above the Family Bazar section.
 //
 // HOW TO APPLY: Firebase console → Build → Firestore Database → Rules tab
 // → paste this entire file, replacing whatever is there → Publish.
+// (Or: firebase deploy --only firestore:rules,firestore:indexes)
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -50,154 +72,283 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    match /faq/{id} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
     // ============================================================
-    // FAMILY BAZAR — multi-account family grocery/expense module.
+    // FAMILY BAZAR — multi-account family grocery / expense module.
     //
-    // Design constraint: this project has no Cloud Functions, so every
-    // check below happens with plain client-writable rules (no server-side
-    // trusted code). Two consequences, both intentional and documented:
-    //   1. "Accept invitation" is 3 separate client writes (family doc,
-    //      member doc, invitation doc), each independently validated below
-    //      — not one atomic transaction. A client that dies mid-accept can
-    //      leave a partial state (e.g. invitation marked accepted but the
-    //      member doc missing); the UI re-attempts all 3 on next load if
-    //      that happens.
-    //   2. There is no real email delivery — "invitation received" means
-    //      "a Firestore doc exists with your email on it", surfaced the
-    //      next time you sign in to this app. Nothing is sent to your
-    //      actual Gmail inbox unless a Cloud Functions + Trigger Email
-    //      extension is added later.
+    // There are no Cloud Functions in this project, so every check is a
+    // plain client-writable rule. Everything the UI hides is ALSO enforced
+    // here — frontend checks are never the security boundary.
+    //
+    // Source of truth for "is this person in the family?" is the member
+    // document families/{f}/members/{uid} (status == "active"). The
+    // families/{f}.memberUids array only exists so a user can list their own
+    // families with one indexed query; the two are always written together in
+    // one atomic batch (create family, accept invitation, leave/remove).
+    //
+    // PRIVACY MODEL — what each permission on a viewer's member document
+    // unlocks about OTHER people's data (your own data is always readable):
+    //   purchaseDetails    → purchases/*  (who bought what, when, where)
+    //   monthlyTotal       → memberMonthly/*  (daily / weekly / monthly totals)
+    //   categorySummary    → memberCategoryMonthly/*  (per-category totals)
+    //   priceHistory       → priceHistory/*  (price of a product over time)
+    //   locationComparison → locations/*  (latest price per market/area)
+    //   reports            → UI gate for the reports screen (it only reads
+    //                        data already gated above)
+    //   memberManagement   → invite / edit / remove members
+    // The owner always sees everything and can never be edited or removed.
+    //
+    // INVITATIONS are top-level (invitations/{id}) so an invited person can
+    // look theirs up by e-mail without any access to the family itself.
+    // Accepting is ONE batch: member doc + memberUids + invitation status.
+    // The member-doc rule re-validates role / permissions against the
+    // invitation, so nobody can grant themselves anything. The invited
+    // Google account must have a VERIFIED e-mail that matches.
+    // (No real e-mail is sent — the invitation appears inside the app the next
+    // time that Google account signs in.)
     // ============================================================
 
-    function familyDoc(familyId) {
-      return get(/databases/$(database)/documents/families/$(familyId));
+    function famPath(f) { return /databases/$(database)/documents/families/$(f); }
+    function mePath(f) { return /databases/$(database)/documents/families/$(f)/members/$(request.auth.uid); }
+    function signedIn() { return request.auth != null; }
+    function isMember(f) {
+      return signedIn() && exists(mePath(f)) && get(mePath(f)).data.status == "active";
     }
-    function isFamilyMember(familyId) {
-      return request.auth != null &&
-        request.auth.uid in familyDoc(familyId).data.memberUids;
+    function myRole(f) { return get(mePath(f)).data.role; }
+    function isOwner(f) { return isMember(f) && myRole(f) == "owner"; }
+    function isOwnerOrAdmin(f) { return isMember(f) && myRole(f) in ["owner", "admin"]; }
+    function canWrite(f) { return isMember(f) && myRole(f) != "viewer"; }
+    function hasPerm(f, k) {
+      return isMember(f) && (myRole(f) == "owner" || get(mePath(f)).data.permissions[k] == true);
     }
-    function myMemberDoc(familyId) {
-      return get(/databases/$(database)/documents/families/$(familyId)/members/$(request.auth.uid));
+    function canManage(f) { return isOwnerOrAdmin(f) || hasPerm(f, "memberManagement"); }
+
+    // a non-owner manager may only hand out permissions they hold themselves
+    function grantable(f, p) {
+      let mine = get(mePath(f)).data.permissions;
+      return (!p.monthlyTotal || mine.monthlyTotal == true) &&
+        (!p.categorySummary || mine.categorySummary == true) &&
+        (!p.purchaseDetails || mine.purchaseDetails == true) &&
+        (!p.priceHistory || mine.priceHistory == true) &&
+        (!p.locationComparison || mine.locationComparison == true) &&
+        (!p.reports || mine.reports == true) &&
+        (!p.memberManagement || mine.memberManagement == true);
     }
-    function myRole(familyId) {
-      return myMemberDoc(familyId).data.role;
+    function validRoleFor(f, role) {
+      return (isOwner(f) && role in ["admin", "member", "viewer"]) || role in ["member", "viewer"];
     }
-    function isOwnerOrAdmin(familyId) {
-      return isFamilyMember(familyId) && myRole(familyId) in ["owner", "admin"];
-    }
-    function hasPermission(familyId, key) {
-      return isFamilyMember(familyId) &&
-        myMemberDoc(familyId).data.permissions[key] == true;
+    function validPerms(p) {
+      return p.keys().hasOnly(["monthlyTotal", "categorySummary", "purchaseDetails", "priceHistory", "locationComparison", "reports", "memberManagement"]);
     }
 
     match /families/{familyId} {
-      allow read: if isFamilyMember(familyId);
-      // family creation: creator must set themselves as owner and the
-      // sole initial member — prevents someone creating a family that
-      // already "contains" other people
-      allow create: if request.auth != null &&
+      allow read: if signedIn() && request.auth.uid in resource.data.memberUids;
+
+      // creator must be the owner and the sole initial member
+      allow create: if signedIn() &&
         request.resource.data.ownerId == request.auth.uid &&
-        request.resource.data.memberUids == [request.auth.uid];
-      // memberUids may only gain/lose exactly one uid per write, and that
-      // uid must either be the requester (accepting an invite / leaving)
-      // or the write must come from the owner/admin (removing someone) —
-      // approximated here by: owner/admin can change it freely, anyone
-      // else can only add or remove themselves
-      allow update: if isFamilyMember(familyId) && (
-        isOwnerOrAdmin(familyId) ||
-        request.resource.data.memberUids.toSet().difference(resource.data.memberUids.toSet())
-          == [request.auth.uid].toSet() ||
-        resource.data.memberUids.toSet().difference(request.resource.data.memberUids.toSet())
-          == [request.auth.uid].toSet()
+        request.resource.data.memberUids == [request.auth.uid] &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 60;
+
+      allow update: if signedIn() && (
+        // owner / admin: rename, icon, settings
+        (isOwnerOrAdmin(familyId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name", "photoURL", "settings", "updatedAt"]) &&
+          request.resource.data.name is string &&
+          request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 60) ||
+        // joining: exactly ONE uid (yourself) is added, and your member doc
+        // (validated against an invitation) is created in the same batch
+        (!(request.auth.uid in resource.data.memberUids) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["memberUids", "updatedAt"]) &&
+          request.resource.data.memberUids.toSet() == resource.data.memberUids.toSet().union([request.auth.uid].toSet()) &&
+          existsAfter(mePath(familyId))) ||
+        // leaving / being removed: exactly ONE uid (named in lastRemovedUid) leaves
+        // memberUids, it is never the owner, and that person's member doc is
+        // deleted in the same batch. Yourself, or a manager for someone else.
+        (isMember(familyId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["memberUids", "lastRemovedUid", "updatedAt"]) &&
+          request.resource.data.lastRemovedUid is string &&
+          request.resource.data.lastRemovedUid != resource.data.ownerId &&
+          resource.data.memberUids.toSet().difference(request.resource.data.memberUids.toSet()) == [request.resource.data.lastRemovedUid].toSet() &&
+          request.resource.data.memberUids.toSet().difference(resource.data.memberUids.toSet()).size() == 0 &&
+          !existsAfter(/databases/$(database)/documents/families/$(familyId)/members/$(request.resource.data.lastRemovedUid)) &&
+          (request.resource.data.lastRemovedUid == request.auth.uid || canManage(familyId)))
       );
-      allow delete: if isFamilyMember(familyId) && myRole(familyId) == "owner";
+
+      allow delete: if isOwner(familyId);
     }
 
     match /families/{familyId}/members/{memberUid} {
-      // membership list itself (names/roles) is visible to every member —
-      // only the detailed purchase/price data behind it is permission-gated
-      allow read: if isFamilyMember(familyId);
-      // a member's own doc is created once, during invitation accept, by
-      // that same person — role/permissions on that first write come from
-      // the invitation they're accepting (checked against the invitation
-      // doc's fields) so they can't grant themselves "owner" on the way in
-      allow create: if request.auth != null && request.auth.uid == memberUid &&
-        request.resource.data.uid == request.auth.uid;
-      // after that: owner/admin can change anyone's role/permissions; a
-      // member can only touch their own non-privileged fields (name,
-      // photoURL, relation) — never their own role or permissions
-      allow update: if isOwnerOrAdmin(familyId) ||
+      // the member list (names / roles / relation) is visible to every
+      // member; the purchase data behind it is permission-gated below
+      allow read: if isMember(familyId);
+
+      allow create: if signedIn() && request.auth.uid == memberUid &&
+        request.resource.data.uid == memberUid &&
+        request.resource.data.status == "active" && (
+          // (a) the owner's own row, written in the same batch as the family
+          (!exists(famPath(familyId)) &&
+            getAfter(famPath(familyId)).data.ownerId == request.auth.uid &&
+            request.resource.data.role == "owner") ||
+          // (b) an invited person joining — everything checked against the invitation
+          (request.resource.data.role in ["admin", "member", "viewer"] &&
+            request.resource.data.inviteId is string &&
+            exists(/databases/$(database)/documents/invitations/$(request.resource.data.inviteId)) &&
+            get(/databases/$(database)/documents/invitations/$(request.resource.data.inviteId)).data.familyId == familyId &&
+            get(/databases/$(database)/documents/invitations/$(request.resource.data.inviteId)).data.status == "pending" &&
+            get(/databases/$(database)/documents/invitations/$(request.resource.data.inviteId)).data.expiresAt > request.time.toMillis() &&
+            request.auth.token.email_verified == true &&
+            request.auth.token.email.lower() == get(/databases/$(database)/documents/invitations/$(request.resource.data.inviteId)).data.invitedEmail &&
+            request.resource.data.role == get(/databases/$(database)/documents/invitations/$(request.resource.data.inviteId)).data.role &&
+            request.resource.data.permissions == get(/databases/$(database)/documents/invitations/$(request.resource.data.inviteId)).data.permissions)
+        );
+
+      allow update: if isMember(familyId) && (
+        // yourself: harmless profile fields only — never role / permissions / status
         (request.auth.uid == memberUid &&
-         request.resource.data.role == resource.data.role &&
-         request.resource.data.permissions == resource.data.permissions);
-      allow delete: if isOwnerOrAdmin(familyId) || request.auth.uid == memberUid;
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name", "photoURL", "relation", "updatedAt"])) ||
+        // a manager editing someone else
+        (request.auth.uid != memberUid && canManage(familyId) &&
+          resource.data.role != "owner" &&
+          (resource.data.role != "admin" || isOwner(familyId)) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["role", "permissions", "relation", "updatedAt"]) &&
+          validRoleFor(familyId, request.resource.data.role) &&
+          validPerms(request.resource.data.permissions) &&
+          (isOwner(familyId) || grantable(familyId, request.resource.data.permissions)))
+      );
+
+      allow delete: if isMember(familyId) && (
+        (request.auth.uid == memberUid && resource.data.role != "owner") ||
+        (request.auth.uid != memberUid && canManage(familyId) &&
+          resource.data.role != "owner" &&
+          (resource.data.role != "admin" || isOwner(familyId))) ||
+        // owner tearing the whole family down (family doc deleted in the same batch)
+        (isOwner(familyId) && !existsAfter(famPath(familyId)))
+      );
     }
 
     match /invitations/{inviteId} {
-      // visible to the person invited (by email) and to whoever sent it
-      allow read: if request.auth != null && (
-        request.auth.token.email == resource.data.invitedEmail ||
+      allow read: if signedIn() && (
+        (request.auth.token.email_verified == true && request.auth.token.email.lower() == resource.data.invitedEmail) ||
         request.auth.uid == resource.data.invitedBy
       );
-      // only an owner/admin of the referenced family can send an invite,
-      // and only as themselves
-      allow create: if request.auth != null &&
+
+      allow create: if signedIn() &&
         request.resource.data.invitedBy == request.auth.uid &&
         request.resource.data.status == "pending" &&
-        isOwnerOrAdmin(request.resource.data.familyId);
-      // the invited person may only flip status pending → accepted/rejected
-      // (nothing else on the document may change); the sender may cancel
-      // a still-pending invite
-      allow update: if request.auth != null && (
-        (request.auth.token.email == resource.data.invitedEmail &&
-         resource.data.status == "pending" &&
-         request.resource.data.status in ["accepted", "rejected"] &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "respondedAt"])) ||
+        request.resource.data.invitedEmail is string &&
+        request.resource.data.invitedEmail == request.resource.data.invitedEmail.lower() &&
+        request.resource.data.invitedEmail.matches("^[^@ ]+@[^@ ]+[.][^@ ]{2,}$") &&
+        request.resource.data.expiresAt <= request.time.toMillis() + 2592000000 &&
+        canManage(request.resource.data.familyId) &&
+        validRoleFor(request.resource.data.familyId, request.resource.data.role) &&
+        validPerms(request.resource.data.permissions) &&
+        (isOwner(request.resource.data.familyId) || grantable(request.resource.data.familyId, request.resource.data.permissions));
+
+      // the invited person may only flip pending → accepted / rejected;
+      // the sender may only cancel a pending invitation
+      allow update: if signedIn() && resource.data.status == "pending" && (
+        (request.auth.token.email_verified == true &&
+          request.auth.token.email.lower() == resource.data.invitedEmail &&
+          request.resource.data.status in ["accepted", "rejected"] &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "respondedAt"]) &&
+          (request.resource.data.status == "rejected" ||
+            existsAfter(/databases/$(database)/documents/families/$(resource.data.familyId)/members/$(request.auth.uid)))) ||
         (request.auth.uid == resource.data.invitedBy &&
-         request.resource.data.status == "cancelled")
+          request.resource.data.status == "cancelled" &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "respondedAt"]))
       );
-      allow delete: if request.auth != null && request.auth.uid == resource.data.invitedBy;
+
+      allow delete: if signedIn() && request.auth.uid == resource.data.invitedBy;
     }
 
     match /families/{familyId}/categories/{categoryId} {
-      allow read: if isFamilyMember(familyId);
+      allow read: if isMember(familyId);
       allow write: if isOwnerOrAdmin(familyId);
     }
 
+    // shared product catalogue — carries NO prices (prices live in the
+    // permission-gated priceHistory), so any member may read it
     match /families/{familyId}/products/{productId} {
-      allow read: if isFamilyMember(familyId);
-      // any active, non-viewer member can add/extend the shared product
-      // catalog while logging a purchase
-      allow write: if isFamilyMember(familyId) && myRole(familyId) != "viewer";
+      allow read: if isMember(familyId);
+      allow create, update: if canWrite(familyId) &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 80;
+      allow delete: if isOwnerOrAdmin(familyId);
     }
 
     match /families/{familyId}/budgets/{budgetId} {
-      allow read: if isFamilyMember(familyId);
-      allow write: if isOwnerOrAdmin(familyId);
+      allow read: if isMember(familyId);
+      allow write: if isOwnerOrAdmin(familyId) &&
+        request.resource.data.monthlyAmount is number &&
+        request.resource.data.monthlyAmount >= 0;
     }
 
+    // a purchase (with its line items embedded) belongs to whoever made it
     match /families/{familyId}/purchases/{purchaseId} {
-      // you can always read your own purchases; reading someone else's
-      // requires the purchaseDetails permission (checked on YOUR member
-      // doc, never the other person's)
-      allow read: if isFamilyMember(familyId) &&
-        (resource.data.memberId == request.auth.uid || hasPermission(familyId, "purchaseDetails"));
-      allow create: if isFamilyMember(familyId) && myRole(familyId) != "viewer" &&
-        request.resource.data.memberId == request.auth.uid;
-      allow update, delete: if isFamilyMember(familyId) &&
-        (resource.data.memberId == request.auth.uid || isOwnerOrAdmin(familyId));
+      allow read: if isMember(familyId) &&
+        (resource.data.memberId == request.auth.uid || hasPerm(familyId, "purchaseDetails"));
+      allow create: if canWrite(familyId) &&
+        request.resource.data.memberId == request.auth.uid &&
+        request.resource.data.month.matches("^[0-9]{4}-[0-9]{2}$") &&
+        request.resource.data.date.matches("^" + request.resource.data.month + "-[0-9]{2}$") &&
+        request.resource.data.total is number && request.resource.data.total >= 0 &&
+        request.resource.data.items.size() >= 1 && request.resource.data.items.size() <= 40;
+      allow update: if canWrite(familyId) &&
+        resource.data.memberId == request.auth.uid &&
+        request.resource.data.memberId == request.auth.uid &&
+        request.resource.data.month.matches("^[0-9]{4}-[0-9]{2}$") &&
+        request.resource.data.date.matches("^" + request.resource.data.month + "-[0-9]{2}$") &&
+        request.resource.data.total is number && request.resource.data.total >= 0 &&
+        request.resource.data.items.size() >= 1 && request.resource.data.items.size() <= 40;
+      // only the author — or the owner, when tearing a family down
+      allow delete: if isMember(familyId) && (resource.data.memberId == request.auth.uid || isOwner(familyId));
     }
 
+    // one row per purchased line item, id = {purchaseId}_{itemId}, so an
+    // edit overwrites in place instead of duplicating
     match /families/{familyId}/priceHistory/{priceId} {
-      allow read: if isFamilyMember(familyId) &&
-        (resource.data.memberId == request.auth.uid || hasPermission(familyId, "priceHistory"));
-      // written alongside a purchase, by the same purchaser, never edited
-      // afterward (edits happen by deleting + recreating the purchase)
-      allow create: if isFamilyMember(familyId) && myRole(familyId) != "viewer" &&
+      allow read: if isMember(familyId) &&
+        (resource.data.memberId == request.auth.uid || hasPerm(familyId, "priceHistory"));
+      allow create: if canWrite(familyId) && request.resource.data.memberId == request.auth.uid;
+      allow update: if canWrite(familyId) && resource.data.memberId == request.auth.uid &&
         request.resource.data.memberId == request.auth.uid;
-      allow update: if false;
-      allow delete: if isFamilyMember(familyId) &&
-        (resource.data.memberId == request.auth.uid || isOwnerOrAdmin(familyId));
+      allow delete: if isMember(familyId) && (resource.data.memberId == request.auth.uid || isOwner(familyId));
+    }
+
+    // latest known price per product × market/area × unit (shared, best-effort)
+    match /families/{familyId}/locations/{locId} {
+      allow read: if isMember(familyId) &&
+        (resource.data.memberId == request.auth.uid || hasPerm(familyId, "locationComparison"));
+      allow create: if canWrite(familyId) && request.resource.data.memberId == request.auth.uid;
+      // an older purchase can never overwrite a newer known price
+      allow update: if canWrite(familyId) && request.resource.data.memberId == request.auth.uid &&
+        request.resource.data.date >= resource.data.date;
+      allow delete: if isMember(familyId) && (resource.data.memberId == request.auth.uid || isOwnerOrAdmin(familyId));
+    }
+
+    // per-member, per-month aggregates: a dashboard reads a handful of tiny
+    // documents instead of every purchase. Doc id = {uid}_{YYYY-MM}.
+    match /families/{familyId}/memberMonthly/{docId} {
+      allow read: if isMember(familyId) &&
+        (docId.matches(request.auth.uid + "_.*") || hasPerm(familyId, "monthlyTotal"));
+      allow create, update: if canWrite(familyId) &&
+        docId.matches(request.auth.uid + "_[0-9]{4}-[0-9]{2}") &&
+        request.resource.data.memberId == request.auth.uid;
+      allow delete: if isMember(familyId) && (docId.matches(request.auth.uid + "_.*") || isOwner(familyId));
+    }
+    match /families/{familyId}/memberCategoryMonthly/{docId} {
+      allow read: if isMember(familyId) &&
+        (docId.matches(request.auth.uid + "_.*") || hasPerm(familyId, "categorySummary"));
+      allow create, update: if canWrite(familyId) &&
+        docId.matches(request.auth.uid + "_[0-9]{4}-[0-9]{2}") &&
+        request.resource.data.memberId == request.auth.uid;
+      allow delete: if isMember(familyId) && (docId.matches(request.auth.uid + "_.*") || isOwner(familyId));
     }
 
     // everything else is denied by default (no wildcard match below this)

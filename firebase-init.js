@@ -39,6 +39,11 @@ import {
   query,
   orderBy,
   writeBatch,
+  where,
+  limit,
+  increment,
+  arrayUnion,
+  arrayRemove,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -126,33 +131,81 @@ window.FB = {
   },
 
   // ---- Family Bazar ----------------------------------------------------
-  // See firestore.rules for the enforced security boundary; everything
-  // here is a thin wrapper, not itself the security layer.
+  // Thin data layer. The SECURITY BOUNDARY is firestore.rules — nothing here
+  // is trusted. All money maths / write planning lives in family-bazar-core.js
+  // (pure + unit-tested); this file only turns a plan into Firestore writes.
+  //
+  //   families/{f}                      name, ownerId, memberUids[], photoURL …
+  //   families/{f}/members/{uid}        role, permissions, relation …
+  //   invitations/{id}                  top level: an invitee finds theirs by e-mail
+  //   families/{f}/purchases/{id}       one doc per shopping trip; items[] embedded
+  //   families/{f}/priceHistory/{p_i}   one row per item, id = purchaseId_itemId
+  //   families/{f}/locations/{id}       latest price per product × place × unit
+  //   families/{f}/memberMonthly/{u_m}  per-member monthly totals (+ per day)
+  //   families/{f}/memberCategoryMonthly/{u_m}
+  //   families/{f}/products | categories | budgets
 
   currentUser() {
     return auth.currentUser;
   },
-
-  async createFamily(name, photoURL) {
-    const uid = auth.currentUser.uid;
-    const ref = await addDoc(collection(db, "families"), {
-      name, photoURL: photoURL || null, ownerId: uid, memberUids: [uid],
-      createdAt: Date.now(), updatedAt: Date.now(),
-    });
-    await setDoc(doc(db, "families", ref.id, "members", uid), {
-      uid, name: auth.currentUser.displayName || "", email: auth.currentUser.email || "",
-      photoURL: auth.currentUser.photoURL || null, relation: "other", role: "owner",
-      permissions: { monthlyTotal: true, categorySummary: true, purchaseDetails: true, priceHistory: true, locationComparison: true, reports: true, memberManagement: true },
-      status: "active", joinedAt: Date.now(), updatedAt: Date.now(),
-    });
-    return ref.id;
+  // invitations are only honoured for a verified e-mail (Google sign-in)
+  emailVerified() {
+    return !!(auth.currentUser && auth.currentUser.emailVerified);
   },
 
-  // families the signed-in user currently belongs to
   async myFamilies() {
     const uid = auth.currentUser.uid;
-    const snap = await getDocs(query(collection(db, "families")));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((f) => (f.memberUids || []).includes(uid));
+    const snap = await getDocs(query(collection(db, "families"), where("memberUids", "array-contains", uid)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+
+  // family doc + the owner's own member doc in ONE batch (the rules check them together)
+  async createFamily(name, icon) {
+    const u = auth.currentUser;
+    const now = Date.now();
+    const fref = doc(collection(db, "families"));
+    const batch = writeBatch(db);
+    batch.set(fref, {
+      name: String(name).trim(), photoURL: null, ownerId: u.uid, memberUids: [u.uid],
+      active: true, settings: { icon: icon || "🏠" }, createdAt: now, updatedAt: now,
+    });
+    batch.set(doc(db, "families", fref.id, "members", u.uid), {
+      uid: u.uid, name: u.displayName || (u.email || "").split("@")[0] || "আমি", email: u.email || "",
+      photoURL: u.photoURL || null, relation: "self", role: "owner",
+      permissions: window.FBCore.permissionPreset("owner"), status: "active", joinedAt: now, updatedAt: now,
+    });
+    await batch.commit();
+    return fref.id;
+  },
+
+  async updateFamily(familyId, patch) {
+    const allowed = {};
+    ["name", "photoURL", "settings"].forEach((k) => { if (k in patch) allowed[k] = patch[k]; });
+    await updateDoc(doc(db, "families", familyId), { ...allowed, updatedAt: Date.now() });
+  },
+
+  // owner only. Family data is removed collection by collection (Firestore has
+  // no recursive delete from a client); members' docs go first, the family doc
+  // next, and the owner's own member doc last.
+  async deleteFamily(familyId) {
+    const uid = auth.currentUser.uid;
+    const wipe = async (refs) => {
+      for (let i = 0; i < refs.length; i += 400) {
+        const b = writeBatch(db);
+        refs.slice(i, i + 400).forEach((r) => b.delete(r));
+        await b.commit();
+      }
+    };
+    for (const name of ["purchases", "priceHistory", "locations", "memberMonthly", "memberCategoryMonthly", "products", "categories", "budgets"]) {
+      const snap = await getDocs(collection(db, "families", familyId, name));
+      await wipe(snap.docs.map((d) => d.ref));
+    }
+    const inv = await getDocs(query(collection(db, "invitations"), where("invitedBy", "==", uid), where("familyId", "==", familyId)));
+    await wipe(inv.docs.map((d) => d.ref));
+    const mem = await getDocs(collection(db, "families", familyId, "members"));
+    await wipe(mem.docs.filter((d) => d.id !== uid).map((d) => d.ref));
+    await deleteDoc(doc(db, "families", familyId));
+    await deleteDoc(doc(db, "families", familyId, "members", uid));
   },
 
   async familyMembers(familyId) {
@@ -160,145 +213,224 @@ window.FB = {
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   },
 
-  async updateFamilyMember(familyId, uid, patch) {
-    await updateDoc(doc(db, "families", familyId, "members", uid), { ...patch, updatedAt: Date.now() });
+  // manager changing role / permissions / relation, or a person editing their own name/relation
+  async updateFamilyMember(familyId, memberUid, patch) {
+    const allowed = {};
+    ["role", "permissions", "relation", "name", "photoURL"].forEach((k) => { if (k in patch) allowed[k] = patch[k]; });
+    await updateDoc(doc(db, "families", familyId, "members", memberUid), { ...allowed, updatedAt: Date.now() });
   },
 
-  async removeFamilyMember(familyId, uid) {
-    const fref = doc(db, "families", familyId);
-    const fsnap = await getDoc(fref);
-    const memberUids = (fsnap.data().memberUids || []).filter((x) => x !== uid);
-    await updateDoc(fref, { memberUids, updatedAt: Date.now() });
-    await deleteDoc(doc(db, "families", familyId, "members", uid));
+  // remove someone (manager) or leave (memberUid === me): member doc + memberUids in one batch
+  async removeFamilyMember(familyId, memberUid) {
+    const batch = writeBatch(db);
+    batch.update(doc(db, "families", familyId), { memberUids: arrayRemove(memberUid), lastRemovedUid: memberUid, updatedAt: Date.now() });
+    batch.delete(doc(db, "families", familyId, "members", memberUid));
+    await batch.commit();
   },
 
+  // ---- invitations ----
   async sendInvitation({ familyId, familyName, invitedEmail, relation, role, permissions }) {
+    const now = Date.now();
     const ref = await addDoc(collection(db, "invitations"), {
-      familyId, familyName, invitedBy: auth.currentUser.uid, invitedByName: auth.currentUser.displayName || "",
-      invitedEmail: invitedEmail.trim().toLowerCase(), relation, role, permissions,
-      status: "pending", createdAt: Date.now(), expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      familyId, familyName, invitedBy: auth.currentUser.uid,
+      invitedByName: auth.currentUser.displayName || auth.currentUser.email || "",
+      invitedEmail: String(invitedEmail).trim().toLowerCase(), relation, role,
+      permissions: window.FBCore.normalizePermissions(permissions),
+      status: "pending", createdAt: now, expiresAt: now + 7 * 24 * 60 * 60 * 1000,
     });
     return ref.id;
   },
 
-  // invitations addressed to the signed-in user's own email, still pending
+  // pending, unexpired invitations addressed to MY verified e-mail
   async myIncomingInvitations() {
-    const email = (auth.currentUser.email || "").toLowerCase();
-    if (!email) return [];
-    const snap = await getDocs(query(collection(db, "invitations")));
+    const u = auth.currentUser;
+    const email = (u.email || "").toLowerCase();
+    if (!email || !u.emailVerified) return [];
+    const snap = await getDocs(query(collection(db, "invitations"), where("invitedEmail", "==", email)));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-      .filter((i) => i.invitedEmail === email && i.status === "pending" && i.expiresAt > Date.now());
+      .filter((i) => i.status === "pending" && i.expiresAt > Date.now())
+      .sort((a, b) => b.createdAt - a.createdAt);
   },
 
-  // invitations THIS user has sent for one family (to show pending state /
-  // let them cancel)
+  // invitations I sent for one family (pending / accepted / …)
   async familySentInvitations(familyId) {
-    const snap = await getDocs(query(collection(db, "invitations")));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((i) => i.familyId === familyId);
+    const snap = await getDocs(query(collection(db, "invitations"), where("invitedBy", "==", auth.currentUser.uid), where("familyId", "==", familyId)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => b.createdAt - a.createdAt);
   },
 
+  // ONE atomic batch: member doc + memberUids + invitation status. The rules
+  // validate the member doc against the invitation, so role/permissions can't be forged.
   async acceptInvitation(invite) {
-    const uid = auth.currentUser.uid;
-    const fref = doc(db, "families", invite.familyId);
-    const fsnap = await getDoc(fref);
-    const memberUids = fsnap.data().memberUids || [];
-    if (!memberUids.includes(uid)) {
-      await updateDoc(fref, { memberUids: [...memberUids, uid], updatedAt: Date.now() });
-    }
-    await setDoc(doc(db, "families", invite.familyId, "members", uid), {
-      uid, name: auth.currentUser.displayName || "", email: auth.currentUser.email || "",
-      photoURL: auth.currentUser.photoURL || null, relation: invite.relation, role: invite.role,
-      permissions: invite.permissions, status: "active", joinedAt: Date.now(), updatedAt: Date.now(),
+    const u = auth.currentUser;
+    const now = Date.now();
+    const batch = writeBatch(db);
+    batch.set(doc(db, "families", invite.familyId, "members", u.uid), {
+      uid: u.uid, name: u.displayName || (u.email || "").split("@")[0], email: u.email || "",
+      photoURL: u.photoURL || null, relation: invite.relation, role: invite.role,
+      permissions: invite.permissions, status: "active", joinedAt: now, updatedAt: now, inviteId: invite.id,
     });
-    await updateDoc(doc(db, "invitations", invite.id), { status: "accepted", respondedAt: Date.now() });
+    batch.update(doc(db, "families", invite.familyId), { memberUids: arrayUnion(u.uid), updatedAt: now });
+    batch.update(doc(db, "invitations", invite.id), { status: "accepted", respondedAt: now });
+    await batch.commit();
   },
-
   async rejectInvitation(inviteId) {
     await updateDoc(doc(db, "invitations", inviteId), { status: "rejected", respondedAt: Date.now() });
   },
-
   async cancelInvitation(inviteId) {
-    await updateDoc(doc(db, "invitations", inviteId), { status: "cancelled" });
+    await updateDoc(doc(db, "invitations", inviteId), { status: "cancelled", respondedAt: Date.now() });
   },
 
+  // ---- catalogues ----
   async familyProducts(familyId) {
     const snap = await getDocs(collection(db, "families", familyId, "products"));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   },
-
-  async upsertFamilyProduct(familyId, product) {
-    if (product.id) {
-      await updateDoc(doc(db, "families", familyId, "products", product.id), { ...product, updatedAt: Date.now() });
-      return product.id;
-    }
-    const ref = await addDoc(collection(db, "families", familyId, "products"), { ...product, createdAt: Date.now() });
-    return ref.id;
+  async renameProduct(familyId, productId, oldName, newName) {
+    await updateDoc(doc(db, "families", familyId, "products", productId), { name: newName.trim(), aliases: arrayUnion(oldName), updatedAt: Date.now() });
   },
-
-  // last N purchases for a family (client-side sort avoids needing a
-  // composite index for a simple recency query)
-  async familyPurchases(familyId, limitN) {
-    const snap = await getDocs(collection(db, "families", familyId, "purchases"));
-    const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.date || "").localeCompare(a.date || "") || b.createdAt - a.createdAt);
-    return typeof limitN === "number" ? rows.slice(0, limitN) : rows;
+  async setProductArchived(familyId, productId, archived) {
+    await updateDoc(doc(db, "families", familyId, "products", productId), { archived: !!archived, updatedAt: Date.now() });
   },
-
-  async addFamilyPurchase(familyId, purchase) {
-    const ref = await addDoc(collection(db, "families", familyId, "purchases"), { ...purchase, createdAt: Date.now(), updatedAt: Date.now() });
-    // one priceHistory row per line item, so price trends can be read back
-    // per-product without re-scanning every purchase
-    for (const item of purchase.items || []) {
-      if (!item.unitPrice) continue;
-      await addDoc(collection(db, "families", familyId, "priceHistory"), {
-        productId: item.productId || null, productName: item.productName, memberId: purchase.memberId,
-        price: item.unitPrice, unit: item.unit || null, location: purchase.location || null, market: purchase.market || null,
-        date: purchase.date, purchaseId: ref.id, createdAt: Date.now(),
-      });
-    }
-    return ref.id;
-  },
-
-  async updateFamilyPurchase(familyId, purchaseId, patch) {
-    await updateDoc(doc(db, "families", familyId, "purchases", purchaseId), { ...patch, updatedAt: Date.now() });
-  },
-
-  async deleteFamilyPurchase(familyId, purchaseId) {
-    await deleteDoc(doc(db, "families", familyId, "purchases", purchaseId));
-  },
-
-  async familyPriceHistory(familyId, productName) {
-    const snap = await getDocs(collection(db, "families", familyId, "priceHistory"));
-    const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    return (productName ? rows.filter((r) => r.productName === productName) : rows).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  },
-
   async familyCategories(familyId) {
     const snap = await getDocs(collection(db, "families", familyId, "categories"));
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   },
-
-  async upsertFamilyCategory(familyId, category) {
-    if (category.id) {
-      await updateDoc(doc(db, "families", familyId, "categories", category.id), { name: category.name, icon: category.icon || null, updatedAt: Date.now() });
-      return category.id;
-    }
-    const ref = await addDoc(collection(db, "families", familyId, "categories"), { name: category.name, icon: category.icon || null, createdAt: Date.now() });
+  async addFamilyCategory(familyId, { name, icon, group }) {
+    const ref = await addDoc(collection(db, "families", familyId, "categories"), { name: name.trim(), icon: icon || "🏷️", group: group || "grocery", createdAt: Date.now() });
     return ref.id;
   },
-
-  async deleteFamilyCategory(familyId, categoryId) {
-    await deleteDoc(doc(db, "families", familyId, "categories", categoryId));
+  async updateFamilyCategory(familyId, id, { name, icon }) {
+    await updateDoc(doc(db, "families", familyId, "categories", id), { name: name.trim(), icon: icon || "🏷️", updatedAt: Date.now() });
   },
-
+  async deleteFamilyCategory(familyId, id) {
+    await deleteDoc(doc(db, "families", familyId, "categories", id));
+  },
   async getFamilyBudget(familyId) {
     const snap = await getDoc(doc(db, "families", familyId, "budgets", "current"));
     return snap.exists() ? snap.data() : null;
   },
-
   async setFamilyBudget(familyId, monthlyAmount) {
-    await setDoc(doc(db, "families", familyId, "budgets", "current"), { monthlyAmount, updatedAt: Date.now() });
+    await setDoc(doc(db, "families", familyId, "budgets", "current"), { monthlyAmount, updatedAt: Date.now(), updatedBy: auth.currentUser.uid });
+  },
+
+  // ---- purchases ----
+  // month view: everyone's purchases if allowed, otherwise just mine
+  async purchasesForMonth(familyId, month, seeAll) {
+    const cs = [where("month", "==", month)];
+    if (!seeAll) cs.push(where("memberId", "==", auth.currentUser.uid));
+    const snap = await getDocs(query(collection(db, "families", familyId, "purchases"), ...cs, limit(400)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.createdAt || 0) - (a.createdAt || 0));
+  },
+
+  // create / edit / delete a purchase. oldP = null → create; newP = null → delete.
+  // Everything that must stay consistent (purchase, my monthly totals, my
+  // category totals, price-history rows, product catalogue) is ONE atomic batch.
+  // Shared "latest price per place" docs are best-effort afterwards, because
+  // any member may own that id and a stale write must never fail the purchase.
+  async savePurchase(familyId, oldP, newP) {
+    const uid = auth.currentUser.uid;
+    const plan = window.FBCore.planPurchaseChange(oldP, newP, uid);
+    const now = Date.now();
+    const F = (name, id) => doc(db, "families", familyId, name, id);
+    const batch = writeBatch(db);
+    if (newP) batch.set(F("purchases", newP.purchaseId), newP);
+    else batch.delete(F("purchases", oldP.purchaseId));
+    plan.monthly.forEach((m) => batch.set(F("memberMonthly", m.id), { ...resolveIncs(m.data), updatedAt: now }, { merge: true }));
+    plan.categories.forEach((m) => batch.set(F("memberCategoryMonthly", m.id), { ...resolveIncs(m.data), updatedAt: now }, { merge: true }));
+    plan.priceSet.forEach((r) => batch.set(F("priceHistory", r.id), { ...r.data, createdAt: now }));
+    plan.priceDelete.forEach((id) => batch.delete(F("priceHistory", id)));
+    plan.products.forEach((p) => batch.set(F("products", p.id), { ...p.data, archived: false, updatedAt: now }, { merge: true }));
+    await batch.commit();
+
+    for (const l of plan.locationSet) {
+      try {
+        const cur = await getDoc(F("locations", l.id)).catch(() => null);
+        if (cur && cur.exists() && (cur.data().date || "") > l.data.date) continue;
+        await setDoc(F("locations", l.id), { ...l.data, updatedAt: now });
+      } catch (e) { /* best effort */ }
+    }
+    for (const id of plan.locationRelease) {
+      try {
+        const cur = await getDoc(F("locations", id));
+        if (cur.exists() && cur.data().purchaseId === plan.purchaseId) await deleteDoc(F("locations", id));
+      } catch (e) { /* best effort */ }
+    }
+    return newP;
+  },
+
+  // ---- aggregates & price data (each call asks only for what the caller may see) ----
+  async monthlyStats(familyId, months, { totals, categories }) {
+    const uid = auth.currentUser.uid;
+    const load = async (coll, seeAll) => {
+      if (seeAll) {
+        const snap = await getDocs(query(collection(db, "families", familyId, coll), where("month", "in", months)));
+        return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      }
+      const out = [];
+      for (const m of months) {
+        try {
+          const s = await getDoc(doc(db, "families", familyId, coll, `${uid}_${m}`));
+          if (s.exists()) out.push({ id: s.id, ...s.data() });
+        } catch (e) { /* nothing recorded */ }
+      }
+      return out;
+    };
+    const [monthly, cats] = await Promise.all([load("memberMonthly", totals), load("memberCategoryMonthly", categories)]);
+    return { monthly, cats };
+  },
+
+  // price rows: by product and/or by month(s); mine only unless allowed to see all
+  async priceRows(familyId, { productId, months, seeAll, max }) {
+    const cs = [];
+    if (productId) cs.push(where("productId", "==", productId));
+    if (months && months.length) cs.push(where("month", "in", months));
+    if (!seeAll) cs.push(where("memberId", "==", auth.currentUser.uid));
+    const snap = await getDocs(query(collection(db, "families", familyId, "priceHistory"), ...cs, limit(max || 300)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+  async locationRows(familyId, { productId, seeAll, max }) {
+    const cs = [];
+    if (productId) cs.push(where("productId", "==", productId));
+    if (!seeAll) cs.push(where("memberId", "==", auth.currentUser.uid));
+    const snap = await getDocs(query(collection(db, "families", familyId, "locations"), ...cs, limit(max || 300)));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+
+  // repair: rebuild MY monthly aggregates from MY purchases (drift can only
+  // come from an interrupted client; this makes them exact again)
+  async rebuildMyStats(familyId) {
+    const uid = auth.currentUser.uid;
+    const snap = await getDocs(query(collection(db, "families", familyId, "purchases"), where("memberId", "==", uid), limit(3000)));
+    const built = window.FBCore.buildStatsFromPurchases(snap.docs.map((d) => d.data()));
+    const today = window.FBCore.dateToYmd(new Date());
+    const months = new Set(Object.keys(built));
+    window.FBCore.monthsBack(window.FBCore.monthOf(today), 12).forEach((m) => months.add(m));
+    let written = 0;
+    for (const m of months) {
+      const b = built[m] || { total: 0, count: 0, days: {}, cats: {} };
+      const categories = {};
+      Object.keys(b.cats).forEach((k) => (categories[k] = b.cats[k]));
+      const has = built[m] || (await getDoc(doc(db, "families", familyId, "memberMonthly", `${uid}_${m}`)).then((s) => s.exists()).catch(() => false));
+      if (!has) continue;
+      await setDoc(doc(db, "families", familyId, "memberMonthly", `${uid}_${m}`), { memberId: uid, month: m, total: b.total, count: b.count, days: b.days, updatedAt: Date.now() });
+      await setDoc(doc(db, "families", familyId, "memberCategoryMonthly", `${uid}_${m}`), { memberId: uid, month: m, categories, updatedAt: Date.now() });
+      written++;
+    }
+    return written;
   },
 };
+
+// { $inc: n } markers from FBCore.planPurchaseChange → Firestore increment()
+function resolveIncs(v) {
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    if (Object.keys(v).length === 1 && typeof v.$inc === "number") return increment(v.$inc);
+    const out = {};
+    Object.keys(v).forEach((k) => (out[k] = resolveIncs(v[k])));
+    return out;
+  }
+  return v;
+}
 
 // finish a redirect-based Google sign-in, if one is in progress
 getRedirectResult(auth).catch(() => {});

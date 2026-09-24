@@ -4,7 +4,8 @@
   "private": true,
   "description": "হিসাব-খাতা Family Management PWA",
   "scripts": {
-    "start": "npx serve ."
+    "start": "npx serve .",
+    "test": "node tests/core.test.js && node tests/ui-smoke.test.js"
   },
   "dependencies": {
     "@capacitor/android": "^7.4.0",
