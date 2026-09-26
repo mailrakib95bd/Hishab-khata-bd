@@ -419,6 +419,63 @@ window.FB = {
     }
     return written;
   },
+
+  // ---- shopping lists ---------------------------------------------------
+  // A household "to-buy" list assigned to one member, with an optional
+  // reminder. Small collection; the security rules already filter every
+  // read down to lists this account created, is assigned, or manages, so a
+  // plain collection read is enough (a `where` here couldn't add privacy
+  // beyond what the rule already enforces).
+  async familyShoppingLists(familyId) {
+    const snap = await getDocs(collection(db, "families", familyId, "shoppingLists"));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+
+  async saveShoppingList(familyId, list) {
+    const now = Date.now();
+    const id = list.id || doc(collection(db, "families", familyId, "shoppingLists")).id;
+    const items = list.items || [];
+    const data = {
+      title: list.title || "আজকের বাজার", createdBy: list.createdBy, assignedTo: list.assignedTo,
+      items, reminder: list.reminder || null,
+      status: !items.length || items.some((it) => !it.checked) ? "active" : "done",
+      createdAt: list.createdAt || now, updatedAt: now,
+    };
+    await setDoc(doc(db, "families", familyId, "shoppingLists", id), data);
+    return id;
+  },
+
+  async deleteShoppingList(familyId, listId) {
+    await deleteDoc(doc(db, "families", familyId, "shoppingLists", listId));
+  },
+
+  // manual checkbox — marks an item done without buying it (stays in the
+  // list, struck through) or un-marks it
+  async toggleShoppingItem(familyId, listId, itemId, checked) {
+    const ref = doc(db, "families", familyId, "shoppingLists", listId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    const items = (snap.data().items || []).map((it) => (it.id === itemId ? { ...it, checked } : it));
+    await updateDoc(ref, { items, updatedAt: Date.now() });
+  },
+
+  // called once those item(s) turn into an actual purchase — removes them
+  // from the list entirely; whatever wasn't bought stays for next time
+  async removeShoppingItems(familyId, listId, itemIds) {
+    const ref = doc(db, "families", familyId, "shoppingLists", listId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    const items = (snap.data().items || []).filter((it) => !itemIds.includes(it.id));
+    await updateDoc(ref, { items, status: items.length ? "active" : "done", updatedAt: Date.now() });
+  },
+
+  // records that today's reminder already fired, so the 20-second check
+  // loop (see family-bazar.js) doesn't show the same notification twice
+  async markShoppingReminderFired(familyId, listId, reminder, dateStr) {
+    await updateDoc(doc(db, "families", familyId, "shoppingLists", listId), {
+      reminder: Object.assign({}, reminder, { lastFiredDate: dateStr }), updatedAt: Date.now(),
+    });
+  },
 };
 
 // { $inc: n } markers from FBCore.planPurchaseChange → Firestore increment()

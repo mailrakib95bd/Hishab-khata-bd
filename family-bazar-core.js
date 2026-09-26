@@ -644,6 +644,64 @@
   }
   const INVITE_STATUS_LABEL = { pending: "অপেক্ষমাণ", accepted: "গৃহীত", rejected: "প্রত্যাখ্যাত", expired: "মেয়াদ শেষ", cancelled: "বাতিল" };
 
+  /* ------------------------------------------------------------------ *
+   * shopping lists — a household "to-buy" list assigned to one member,
+   * with an optional reminder. Pure helpers only; Firestore reads/writes
+   * live in firebase-init.js, the screens in family-bazar.js.
+   * ------------------------------------------------------------------ */
+  function shoppingItem(row) {
+    const name = String((row && row.name) || "").trim();
+    return {
+      id: (row && row.id) || randomId(), name,
+      quantity: row && row.quantity != null && row.quantity !== "" ? round2(parseNum(row.quantity)) : null,
+      unit: (row && row.unit) || null, categoryId: (row && row.categoryId) || null,
+      note: (row && row.note) || "", checked: !!(row && row.checked),
+    };
+  }
+
+  // draft rows come straight from the create-list form (strings, possibly
+  // blank trailing rows) — returns cleaned items or an error list, same
+  // shape/spirit as validatePurchaseDraft above
+  function validateShoppingDraft(draft) {
+    const errors = [];
+    const title = String((draft && draft.title) || "").trim();
+    if (!title) errors.push("তালিকার নাম লিখুন");
+    else if (title.length > 60) errors.push("তালিকার নাম অনেক বড়");
+    if (!draft || !draft.assignedTo) errors.push("কার জন্য তালিকা, তা বেছে নিন");
+    const items = [];
+    (draft && draft.items || []).forEach((row, i) => {
+      const name = String(row.name || "").trim();
+      if (!name && !String(row.quantity || "").trim()) return; // blank trailing row
+      const n = i + 1;
+      if (!name) { errors.push(`${n} নম্বর পণ্যের নাম লিখুন`); return; }
+      if (name.length > 80) { errors.push(`${n} নম্বর পণ্যের নাম অনেক বড়`); return; }
+      items.push(shoppingItem(Object.assign({}, row, { name })));
+    });
+    if (!items.length) errors.push("অন্তত একটি পণ্য যোগ করুন");
+    if (items.length > 60) errors.push("একটি তালিকায় সর্বোচ্চ ৬০টি পণ্য রাখা যাবে");
+    return { ok: errors.length === 0, errors, title, items };
+  }
+
+  // "HH:MM" reminder that fires once a day at most (mirrors the exact-minute
+  // match the app's own personal Task reminders already use), gated by
+  // lastFiredDate so re-checking every 20s doesn't re-fire the same minute
+  function shoppingReminderDue(list, todayYmd, nowHHMM) {
+    const r = list && list.reminder;
+    if (!r || !r.enabled || !r.time || list.status === "done") return false;
+    if (r.repeat === "once" && r.date !== todayYmd) return false;
+    if (r.lastFiredDate === todayYmd) return false;
+    return r.time === nowHHMM;
+  }
+
+  function pendingShoppingItems(list) { return (list && list.items || []).filter((it) => !it.checked); }
+  // lists that still need attention for `uid`: assigned to them, not fully done
+  function myShoppingLists(lists, uid) {
+    return (lists || []).filter((l) => l.assignedTo === uid && pendingShoppingItems(l).length > 0);
+  }
+  function pendingShoppingCount(lists, uid) {
+    return myShoppingLists(lists, uid).reduce((s, l) => s + pendingShoppingItems(l).length, 0);
+  }
+
   return {
     RELATIONS, INVITE_RELATIONS, ROLES, INVITABLE_ROLES, PERMISSIONS, PERMISSION_KEYS, DEFAULT_CATEGORIES, CATEGORY_GROUPS, UNITS, BUDGET_LEVELS, INVITE_STATUS_LABEL,
     permissionPreset, normalizePermissions,
@@ -657,5 +715,6 @@
     priceRowsFromPurchase, locationDocsFromPurchase, sortPriceRows, analyzePrices, priceMovers, locationComparison, matches,
     inviteState,
     buildPurchase, planPurchaseChange, budgetCrossing, canGrant, visibilityFor,
+    shoppingItem, validateShoppingDraft, shoppingReminderDue, pendingShoppingItems, myShoppingLists, pendingShoppingCount,
   };
 });

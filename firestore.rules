@@ -351,6 +351,35 @@ service cloud.firestore {
       allow delete: if isMember(familyId) && (docId.matches(request.auth.uid + "_.*") || isOwner(familyId));
     }
 
+    // a household "to-buy" list assigned to one member, optionally with a
+    // reminder. Only the creator, the assignee, or an owner/admin may see or
+    // touch it — nobody else in the family can read someone's private list.
+    match /families/{familyId}/shoppingLists/{listId} {
+      allow read: if isMember(familyId) &&
+        (resource.data.assignedTo == request.auth.uid || resource.data.createdBy == request.auth.uid || isOwnerOrAdmin(familyId));
+
+      allow create: if canWrite(familyId) &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.assignedTo is string &&
+        exists(/databases/$(database)/documents/families/$(familyId)/members/$(request.resource.data.assignedTo)) &&
+        get(/databases/$(database)/documents/families/$(familyId)/members/$(request.resource.data.assignedTo)).data.status == "active" &&
+        request.resource.data.title is string && request.resource.data.title.size() > 0 && request.resource.data.title.size() <= 60 &&
+        request.resource.data.items is list && request.resource.data.items.size() <= 60;
+
+      // assignee/creator/manager can edit items & reminder; who created or
+      // who it's assigned to can never be changed after creation (delete +
+      // recreate instead, keeps the read-access rule above simple and safe)
+      allow update: if isMember(familyId) &&
+        (resource.data.assignedTo == request.auth.uid || resource.data.createdBy == request.auth.uid || isOwnerOrAdmin(familyId)) &&
+        request.resource.data.createdBy == resource.data.createdBy &&
+        request.resource.data.assignedTo == resource.data.assignedTo &&
+        request.resource.data.title is string && request.resource.data.title.size() > 0 && request.resource.data.title.size() <= 60 &&
+        request.resource.data.items is list && request.resource.data.items.size() <= 60;
+
+      allow delete: if isMember(familyId) &&
+        (resource.data.assignedTo == request.auth.uid || resource.data.createdBy == request.auth.uid || isOwnerOrAdmin(familyId));
+    }
+
     // everything else is denied by default (no wildcard match below this)
   }
 }

@@ -1501,6 +1501,42 @@ function App() {
         persistAll({ transactions: next, auditLog: nextLog });
         setUndoBuffer({ kind: "transaction", item: removed, index: idx });
     };
+    // Family Bazar → personal expense sync. Every purchase a person logs in
+    // Family Bazar is *their own* (Firestore rules require memberId ===
+    // that account's uid), so it always belongs in that same Google
+    // account's own personal expense ledger too — not just the shared
+    // family view. Kept in one dedicated category so it's easy to spot and
+    // never collides with a category someone renamed or deleted by hand.
+    // oldPurchase/newPurchase are Family Bazar's own purchase objects
+    // (same `purchaseId` across an edit); newPurchase null means it was
+    // deleted there, so the matching personal transaction is deleted too.
+    const FAMILY_BAZAR_EXPENSE_CATEGORY = { key: "family_bazar", label: "ফ্যামিলি বাজার", icon: "🛒" };
+    const syncFamilyBazarExpense = (oldPurchase, newPurchase) => {
+        const purchaseId = (newPurchase || oldPurchase || {}).purchaseId;
+        if (!purchaseId) return;
+        let cats = expenseCats;
+        if (!cats.some((c) => c.key === FAMILY_BAZAR_EXPENSE_CATEGORY.key)) {
+            cats = [...cats, FAMILY_BAZAR_EXPENSE_CATEGORY];
+            setExpenseCats(cats);
+        }
+        const existing = transactions.find((t) => t.familyPurchaseId === purchaseId);
+        let next = transactions;
+        if (!newPurchase) {
+            if (existing) next = transactions.filter((t) => t.id !== existing.id);
+        } else {
+            const note = [newPurchase.market, newPurchase.location].filter(Boolean).join(" • ") || "ফ্যামিলি বাজার";
+            const patch = {
+                type: "expense", amount: newPurchase.total, date: newPurchase.date,
+                category: FAMILY_BAZAR_EXPENSE_CATEGORY.key, note,
+                familyPurchaseId: purchaseId, familyId: newPurchase.familyId || null, source: "family-bazar",
+            };
+            next = existing
+                ? transactions.map((t) => (t.id === existing.id ? Object.assign({}, t, patch) : t))
+                : [...transactions, Object.assign({ id: uid(), createdAt: Date.now() }, patch)];
+        }
+        if (next !== transactions) setTransactions(next);
+        if (next !== transactions || cats !== expenseCats) persistAll(Object.assign({ transactions: next }, cats !== expenseCats ? { expenseCats: cats } : {}));
+    };
     /* ---------------- family management ---------------- */
     const addFamilyMember = (member) => {
         const next = [...familyMembers, Object.assign(Object.assign({}, member), { id: uid(), createdAt: Date.now() })];
@@ -1756,6 +1792,7 @@ function App() {
                 date: fields.date || null, time: fields.time || null,
                 category: fields.category || null, note: fields.note || "",
                 repeat: fields.repeat || null,
+                amount: fields.amount != null && fields.amount !== "" && !isNaN(parseFloat(fields.amount)) ? parseFloat(fields.amount) : null,
                 reminderDate: fields.reminderDate || null, reminderTime: fields.reminderTime || null, remindedAt: null,
             }];
         setTasks(next);
@@ -2033,7 +2070,7 @@ function App() {
                     }, onTransfer: () => setShowTransfer(true), onTransferHistory: () => setShowTransferHistory(true), profileName: profileName, taxes: taxes, bazarItems: bazarItems })),
                 tab === "timeline" && (React.createElement(Timeline, { transactions: transactions, onOpenTx: (t) => setEditingTx(t) })),
                 tab === "debts" && (React.createElement(DebtsView, { debts: debts, onOpenDebt: (d) => setEditingDebt(d), onAddDebt: () => setShowAddDebt(true) })),
-                tab === "family" && (React.createElement(FamilyHub, { user: user, legacyProps: { familyMembers: familyMembers, bazarItems: bazarItems, transactions: transactions, onAddMember: addFamilyMember, onUpdateMember: updateFamilyMember, onDeleteMember: deleteFamilyMember, onAddBazarItem: addBazarItem, onUpdateBazarItem: updateBazarItem, onDeleteBazarItem: deleteBazarItem, onAddBazarItemAsExpense: addBazarItemAsExpense } })),
+                tab === "family" && (React.createElement(FamilyHub, { user: user, onExpenseSync: syncFamilyBazarExpense, legacyProps: { familyMembers: familyMembers, bazarItems: bazarItems, transactions: transactions, onAddMember: addFamilyMember, onUpdateMember: updateFamilyMember, onDeleteMember: deleteFamilyMember, onAddBazarItem: addBazarItem, onUpdateBazarItem: updateBazarItem, onDeleteBazarItem: deleteBazarItem, onAddBazarItemAsExpense: addBazarItemAsExpense } })),
                 tab === "reports" && React.createElement(Reports, { transactions: transactions, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
                 tab === "search" && (React.createElement(SearchView, { transactions: transactions, accounts: accounts, onOpenTx: (t) => setEditingTx(t), seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts, debts: debts }))),
             (tab === "dashboard" || tab === "timeline" || tab === "debts") && (React.createElement("button", { style: styles.fab, onClick: () => (tab === "debts" ? setShowAddDebt(true) : setShowAdd(true)), "aria-label": tab === "debts" ? "নতুন দেনা-পাওনা যোগ করুন" : "নতুন লেনদেন যোগ করুন" }, "+")),
@@ -2125,7 +2162,7 @@ function App() {
             showFAQ && React.createElement(FAQModal, { onClose: () => closeMenuPanel(setShowFAQ), faqCloud: faqCloud }),
             showTaxPanel && (React.createElement(TaxPanel, { onClose: () => closeMenuPanel(setShowTaxPanel), taxes: taxes, onAdd: addTax, onUpdate: updateTax, onDelete: deleteTax, onTogglePaid: toggleTaxPaid })),
             showAccountPanel && (React.createElement(AccountPanel, { onClose: () => closeMenuPanel(setShowAccountPanel), dynamicAccountBalances: dynamicAccountBalances, onAdd: addUserAccount, onUpdate: updateUserAccount, onDelete: deleteUserAccount, onToggleActive: toggleUserAccountActive, onViewTransactions: (id) => { setShowAccountPanel(false); setSearchSeed({ accountId: id, ts: Date.now() }); setTab("search"); } })),
-            showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user }),
+            showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user, onExpenseSync: syncFamilyBazarExpense }),
             showNotificationCenter && (React.createElement(NotificationCenter, {
                 onClose: () => closeMenuPanel(setShowNotificationCenter),
                 notices: notices, dailyMessages: dailyMessages, tasks: tasks, debts: debts,
@@ -2309,6 +2346,7 @@ function TaskForm({ initial, onClose, onSave }) {
     const [reminderPreset, setReminderPreset] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderDate) ? "custom" : "none");
     const [customReminderDate, setCustomReminderDate] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderDate) || "");
     const [customReminderTime, setCustomReminderTime] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderTime) || "");
+    const [amount, setAmount] = useState((initial === null || initial === void 0 || initial.amount == null) ? "" : String(initial.amount));
     const [err, setErr] = useState("");
     return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "টাস্ক সম্পাদনা" : "নতুন টাস্ক" },
         React.createElement("label", { style: admStyles.label }, "টাস্কের নাম *"),
@@ -2324,6 +2362,8 @@ function TaskForm({ initial, onClose, onSave }) {
         React.createElement("select", { style: admStyles.input, value: category, onChange: (e) => setCategory(e.target.value) },
             React.createElement("option", { value: "" }, "\u2014 \u09A8\u09BF\u09B0\u09CD\u09AC\u09BE\u099A\u09A8 \u0995\u09B0\u09C1\u09A8 \u2014"),
             (cats.expenseCats || []).map((c) => React.createElement("option", { key: c.key, value: c.key }, c.label))),
+        React.createElement("label", { style: admStyles.label }, "পরিমাণ / টাকা (ঐচ্ছিক)"),
+        React.createElement("input", { style: admStyles.input, type: "number", inputMode: "decimal", min: "0", placeholder: "৳", value: amount, onChange: (e) => setAmount(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "নোট / বিস্তারিত"),
         React.createElement("textarea", { style: Object.assign(Object.assign({}, admStyles.input), { minHeight: 70 }), value: note, onChange: (e) => setNote(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "রিমাইন্ডার"),
@@ -2340,7 +2380,8 @@ function TaskForm({ initial, onClose, onSave }) {
                     return;
                 }
                 const { reminderDate, reminderTime } = computeTaskReminderFields(date, time, reminderPreset, customReminderDate, customReminderTime);
-                onSave({ text: text.trim(), date: date || null, time: time || null, category: category || null, note: note.trim(), repeat: repeat === "none" ? null : repeat, reminderDate, reminderTime });
+                const amt = amount.trim() === "" ? null : parseFloat(amount);
+                onSave({ text: text.trim(), date: date || null, time: time || null, category: category || null, note: note.trim(), repeat: repeat === "none" ? null : repeat, amount: amt != null && !isNaN(amt) ? amt : null, reminderDate, reminderTime });
             } }, "সংরক্ষণ করুন")));
 }
 function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount, adminTasksCloud, completedAdminTaskIds, onToggleAdminTaskComplete }) {
@@ -2417,7 +2458,8 @@ function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onTo
                                 React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                                     React.createElement("div", { style: Object.assign(Object.assign({}, styles.taskText), { textDecoration: t.done ? "line-through" : "none", color: t.done ? "var(--hk-border-med2)" : "var(--hk-text)" }) }, t.text),
                                     t.category && React.createElement("div", { style: { fontSize: 11, color: "var(--hk-text-muted)", marginTop: 1 } }, catInfo("expense", t.category, taskCats).label),
-                                    t.note && React.createElement("div", { style: { fontSize: 11, color: "var(--hk-text-muted)", marginTop: 1 } }, t.note)),
+                                    t.note && React.createElement("div", { style: { fontSize: 11, color: "var(--hk-text-muted)", marginTop: 1 } }, t.note),
+                                    t.amount != null && React.createElement("div", { style: { fontSize: 11, color: "var(--hk-gold)", fontWeight: 700, marginTop: 1 } }, formatTaka(t.amount))),
                                 React.createElement("button", { style: styles.taskDelete, onClick: () => { setEditingTask(t); setShowTaskForm(true); }, "aria-label": "\u09B8\u09AE\u09CD\u09AA\u09BE\u09A6\u09A8\u09BE" }, "\u270E"),
                                 React.createElement("button", { style: Object.assign(Object.assign({}, styles.taskReminderBtn), { color: t.reminderTime ? "var(--hk-gold)" : "var(--hk-border-med)" }), onClick: () => openReminderEdit(t), "aria-label": "\u09B0\u09BF\u09AE\u09BE\u0987\u09A8\u09CD\u09A1\u09BE\u09B0" }, "\u23F0"),
                                 React.createElement("button", { style: styles.taskDelete, onClick: () => onDeleteTask(t.id) }, "\u2715")),
@@ -4159,17 +4201,17 @@ function TaxForm({ initial, onClose, onSave }) {
 //   • ☰ menu → "ফ্যামিলি বাজার"  → full-screen (mode "full")
 //   • bottom-nav "ফ্যামিলি" tab   → FamilyHub below (mode "embedded")
 // ---------------------------------------------------------------------
-function FamilyBazarModule({ onClose, user }) {
+function FamilyBazarModule({ onClose, user, onExpenseSync }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
     if (!Mod) {
         return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "🛒 ফ্যামিলি বাজার" },
             React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি বাজার লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
     }
-    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full" });
+    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", onExpenseSync: onExpenseSync });
 }
 // The Family tab: the shared, multi-account Family Bazar (default) plus the
 // original personal family list / bazar list, kept exactly as it was.
-function FamilyHub({ user, legacyProps }) {
+function FamilyHub({ user, legacyProps, onExpenseSync }) {
     const [part, setPart] = useState(() => { try { return localStorage.getItem("hk-family-hub") === "personal" ? "personal" : "bazar"; } catch (e) { return "bazar"; } });
     const pick = (k) => { setPart(k); try { localStorage.setItem("hk-family-hub", k); } catch (e) { /* ignore */ } };
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
@@ -4178,7 +4220,7 @@ function FamilyHub({ user, legacyProps }) {
         React.createElement("div", { style: { display: "flex", gap: 4, background: "var(--hk-card)", border: "1px solid var(--hk-border)", borderRadius: 12, padding: 4, margin: "0 0 12px" } },
             seg("bazar", "🛒 ফ্যামিলি বাজার"), seg("personal", "📝 ব্যক্তিগত তালিকা")),
         part === "personal" ? React.createElement(FamilyView, legacyProps)
-            : Mod ? React.createElement(Mod, { user: user, mode: "embedded" })
+            : Mod ? React.createElement(Mod, { user: user, mode: "embedded", onExpenseSync: onExpenseSync })
                 : React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি বাজার লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
 }
 

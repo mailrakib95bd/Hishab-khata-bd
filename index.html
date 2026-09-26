@@ -71,15 +71,15 @@
 <!-- Family Bazar: pure logic first (window.FBCore), then its UI
      (window.FamilyBazar). Both are plain classic scripts and must load
      BEFORE app.js, which reads window.FamilyBazar when it renders. -->
-<script src="./family-bazar-core.js?v=1"></script>
-<script src="./family-bazar.js?v=1"></script>
-<script type="module" src="./firebase-init.js?v=3"></script>
+<script src="./family-bazar-core.js?v=2"></script>
+<script src="./family-bazar.js?v=2"></script>
+<script type="module" src="./firebase-init.js?v=4"></script>
 
 <!-- app.js is already plain compiled JavaScript (no JSX). The ?v= query
      string changes on every real update — that gives it a new URL, so
      even ordinary HTTP/CDN caching (separate from the service worker
      above) can't keep serving an old cached copy after a deploy. Bump
      this number any time app.js changes. -->
-<script src="./app.js?v=3"></script>
+<script src="./app.js?v=4"></script>
 </body>
 </html>

@@ -218,7 +218,7 @@
    * data hook — loads only what THIS member is allowed to see
    * ------------------------------------------------------------------ */
   const safe = async (p, fallback) => { try { return await p; } catch (e) { return fallback; } };
-  const EMPTY_FAM = { loading: false, error: "", members: [], budget: null, categories: [], products: [], stats: { monthly: [], cats: [] }, prices: [] };
+  const EMPTY_FAM = { loading: false, error: "", members: [], budget: null, categories: [], products: [], stats: { monthly: [], cats: [] }, prices: [], shoppingLists: [] };
 
   function useFamilyData(user) {
     const uid = user && user.uid;
@@ -258,15 +258,16 @@
         if (!me) throw new Error("আপনি এই পরিবারের সদস্য নন।");
         const vis = Core.visibilityFor(me);
         const cm = Core.monthOf(today()), pm = Core.addMonths(cm, -1);
-        const [budget, categories, products, stats, prices] = await Promise.all([
+        const [budget, categories, products, stats, prices, shoppingLists] = await Promise.all([
           safe(window.FB.getFamilyBudget(familyId), null),
           safe(window.FB.familyCategories(familyId), []),
           safe(window.FB.familyProducts(familyId), []),
           safe(window.FB.monthlyStats(familyId, Core.monthsBack(cm, 6), { totals: vis.totals, categories: vis.categories }), { monthly: [], cats: [] }),
           safe(window.FB.priceRows(familyId, { months: [cm, pm], seeAll: vis.prices, max: 300 }), []),
+          safe(window.FB.familyShoppingLists(familyId), []),
         ]);
         if (mine !== seq.current) return;
-        setFam({ loading: false, error: "", members, budget, categories, products, stats, prices });
+        setFam({ loading: false, error: "", members, budget, categories, products, stats, prices, shoppingLists });
       } catch (e) {
         if (mine !== seq.current) return;
         setFam((f) => Object.assign({}, f, { loading: false, error: friendlyError(e) }));
@@ -442,8 +443,15 @@
     const rows = ctx.fam.members.map((m) => ({ m, v: vis.totals || m.uid === uid ? N.byMember[m.uid] || 0 : null })).sort((a, b) => (b.v == null ? -1 : b.v) - (a.v == null ? -1 : a.v));
     const maxV = Math.max(1, ...rows.map((r) => r.v || 0));
 
+    const myLists = Core.myShoppingLists(fam.shoppingLists, uid);
+    const myPending = myLists.reduce((s, l) => s + Core.pendingShoppingItems(l).length, 0);
+
     return h("div", null,
       h(IncomingCards, { ctx }),
+      myPending > 0 && h("button", { onClick: () => ctx.openSheet({ type: "shopping" }), style: Object.assign({}, S.card, { display: "flex", width: "100%", alignItems: "center", gap: 10, textAlign: "left", color: "var(--hk-text)", fontFamily: F, borderColor: "var(--hk-gold)" }) },
+        h("span", { style: { fontSize: 22 } }, "📝"),
+        h("span", { style: { flex: 1 } }, h("div", { style: { fontWeight: 700 } }, "আজকের বাজার"), h("div", { style: S.muted }, `আপনার তালিকায় ${bn(myPending)}টি পণ্য বাকি`)),
+        h("span", { style: S.muted }, "›")),
       h(BudgetBanner, { budget: N.budget, scopeAll: N.scopeAll, onOpen: () => ctx.goMore("budget") }),
       h("div", { style: S.hero },
         h("div", { style: { fontSize: 13, opacity: 0.85 } }, `এই মাসে ${scope} বাজার খরচ`),
@@ -494,7 +502,11 @@
     return products.find((p) => !p.archived && (Core.nameKey(p.name) === k || (p.aliases || []).some((a) => Core.nameKey(a) === k))) || null;
   }
 
-  function PurchaseSheet({ ctx, initial, close }) {
+  // seed = list of { name, quantity, unit, categoryId } from a shopping-list
+  // item, used to prefill one or more blank rows (price left empty for the
+  // user to fill in); fromList = { listId, itemIds } — once the purchase
+  // saves, those items are removed from that list (bought)
+  function PurchaseSheet({ ctx, initial, seed, fromList, close }) {
     const { uid, fam, vis } = ctx;
     const prefs = useMemo(() => readPrefs(uid), [uid]);
     const cats = useMemo(() => Core.allCategories(fam.categories), [fam.categories]);
@@ -506,7 +518,9 @@
     const [trackPrice, setTrackPrice] = useState(initial ? initial.trackPrice !== false : true);
     const [rows, setRows] = useState(() => initial && initial.items && initial.items.length
       ? initial.items.map((it) => ({ key: it.itemId, productName: it.productName, productId: it.productId, categoryId: it.categoryId || "", quantity: String(it.quantity), unit: it.unit, unitPrice: String(it.unitPrice), total: "", totalManual: false, itemId: it.itemId, catTouched: true, unitTouched: true }))
-      : [blankRow()]);
+      : seed && seed.length
+        ? seed.map((s) => Object.assign(blankRow(), { productName: s.name || "", categoryId: s.categoryId || "", catTouched: !!s.categoryId, quantity: s.quantity != null ? String(s.quantity) : "", unit: s.unit || blankRow().unit, unitTouched: !!s.unit }))
+        : [blankRow()]);
     const [errors, setErrors] = useState([]);
     const [busy, setBusy] = useState(false);
     const [dirty, setDirty] = useState(false);
@@ -567,6 +581,7 @@
         if (old) delete old.id;
         await window.FB.savePurchase(ctx.familyId, old, p);
         rememberPrefs(uid, p);
+        if (fromList) window.FB.removeShoppingItems(ctx.familyId, fromList.listId, fromList.itemIds).catch(() => {});
         ctx.afterPurchaseChange(old, p);
         close(true);
       } catch (e) { setErrors([friendlyError(e)]); busyRef.current = false; setBusy(false); }
@@ -641,6 +656,130 @@
       mine && h("div", { style: { display: "flex", gap: 10 } },
         h("button", { style: S.btn, onClick: () => ctx.openSheet({ type: "purchase", initial: purchase }) }, "সম্পাদনা"),
         h("button", { style: S.danger, disabled: busy, onClick: del }, "মুছুন")));
+  }
+
+  /* ------------------------------------------------------------------ *
+   * SHOPPING LISTS — "কী কী কিনতে হবে" reminders, assignable to any member.
+   * Buying an item from a list opens the exact same add-purchase form
+   * (seeded), and a successful purchase removes it from the list.
+   * ------------------------------------------------------------------ */
+  const REPEAT_LABEL = { none: "শুধু একবার", once: "নির্দিষ্ট তারিখে একবার", daily: "প্রতিদিন" };
+
+  function ShoppingListRow({ ctx, list }) {
+    const { fam, uid } = ctx;
+    const pending = Core.pendingShoppingItems(list);
+    const assignee = fam.members.find((m) => m.uid === list.assignedTo);
+    const who = list.assignedTo === uid ? "আপনার জন্য" : (assignee ? `${assignee.name}-এর জন্য` : "একজন সদস্যের জন্য");
+    return h("button", { onClick: () => ctx.openSheet({ type: "shopping-detail", listId: list.id }), style: Object.assign({}, S.card, { display: "block", width: "100%", textAlign: "left", color: "var(--hk-text)", fontFamily: F, marginBottom: 8 }) },
+      h("div", { style: S.row },
+        h("span", { style: { fontWeight: 700 } }, list.title),
+        list.status === "done" ? h("span", { style: S.pill("var(--hk-track)", "var(--hk-text-muted-2)") }, "সম্পন্ন") : h("span", { style: S.pill("var(--hk-gold)", "#1a1a1a") }, `${bn(pending.length)}টি বাকি`)),
+      h("div", { style: S.muted }, [who, list.reminder && list.reminder.enabled ? `🔔 ${bn(list.reminder.time)}${list.reminder.repeat === "daily" ? " • প্রতিদিন" : ""}` : null].filter(Boolean).join(" • ")));
+  }
+
+  function ShoppingListsSheet({ ctx, close }) {
+    const { fam, uid, vis } = ctx;
+    const lists = fam.shoppingLists || [];
+    const mine = lists.filter((l) => l.assignedTo === uid);
+    const forOthers = lists.filter((l) => l.createdBy === uid && l.assignedTo !== uid);
+    return h(Sheet, { title: "আজকের বাজার তালিকা", onClose: close,
+      footer: vis.write && h("button", { style: S.btn, onClick: () => ctx.openSheet({ type: "shopping-create" }) }, "+ নতুন তালিকা") },
+      lists.length === 0 && h(Empty, { icon: "📝", title: "কোনো তালিকা নেই", text: "কী কী বাজার করতে হবে তার একটি তালিকা বানিয়ে রাখুন — নিজের জন্য বা পরিবারের কারও জন্য, রিমাইন্ডার সহ।" }),
+      mine.length > 0 && h("div", { style: { marginBottom: 16 } }, h("div", { style: S.h2 }, "আপনার জন্য"), mine.map((l) => h(ShoppingListRow, { key: l.id, ctx, list: l }))),
+      forOthers.length > 0 && h("div", null, h("div", { style: S.h2 }, "আপনি অন্যদের জন্য তৈরি করেছেন"), forOthers.map((l) => h(ShoppingListRow, { key: l.id, ctx, list: l }))));
+  }
+
+  const blankShopRow = () => ({ key: Core.randomId(), name: "", categoryId: "", quantity: "", unit: "kg" });
+
+  function ShoppingCreateSheet({ ctx, close }) {
+    const { fam, uid, familyId, vis } = ctx;
+    const cats = useMemo(() => Core.allCategories(fam.categories), [fam.categories]);
+    const others = fam.members.filter((m) => m.uid !== uid && Core.isActive(m));
+    const [assignedTo, setAssignedTo] = useState(uid);
+    const [title, setTitle] = useState("আজকের বাজার");
+    const [rows, setRows] = useState([blankShopRow()]);
+    const [remindOn, setRemindOn] = useState(false);
+    const [repeat, setRepeat] = useState("daily");
+    const [time, setTime] = useState("18:00");
+    const [rdate, setRdate] = useState(today());
+    const [errors, setErrors] = useState([]);
+    const [busy, setBusy] = useState(false);
+    const patch = (i, p) => setRows((rs) => rs.map((r, j) => (j === i ? Object.assign({}, r, p) : r)));
+    const save = async () => {
+      if (busy) return;
+      const v = Core.validateShoppingDraft({ title, assignedTo, items: rows });
+      if (!v.ok) { setErrors(v.errors); return; }
+      setErrors([]); setBusy(true);
+      try {
+        await window.FB.saveShoppingList(familyId, {
+          title: v.title, createdBy: uid, assignedTo, items: v.items,
+          reminder: remindOn ? { enabled: true, time, repeat, date: repeat === "once" ? rdate : null } : null,
+        });
+        ctx.toast("তালিকা সংরক্ষণ করা হয়েছে ✓");
+        ctx.reload(); close();
+      } catch (e) { setErrors([friendlyError(e)]); setBusy(false); }
+    };
+    return h(Sheet, { title: "নতুন বাজার তালিকা", onClose: close,
+      footer: h("div", null,
+        errors.length > 0 && h("div", { style: { color: "var(--hk-danger)", fontSize: 13, marginBottom: 8, lineHeight: 1.5 } }, errors.map((e, i) => h("div", { key: i }, "• " + e))),
+        h("button", { style: S.btn, disabled: busy, onClick: save }, busy ? "সংরক্ষণ হচ্ছে…" : "তালিকা সংরক্ষণ করুন")) },
+      h("label", { style: S.label }, "তালিকার নাম"),
+      h("input", { style: S.input, value: title, maxLength: 60, onChange: (e) => setTitle(e.target.value) }),
+      others.length > 0 && h("div", null,
+        h("label", { style: S.label }, "কার জন্য এই তালিকা?"),
+        h("select", { style: S.input, value: assignedTo, onChange: (e) => setAssignedTo(e.target.value) },
+          h("option", { value: uid }, "নিজের জন্য"),
+          others.map((m) => h("option", { key: m.uid, value: m.uid }, m.name)))),
+      rows.map((r, i) => h("div", { key: r.key, style: Object.assign({}, S.card, { padding: "12px 12px 4px" }) },
+        h("div", { style: Object.assign({}, S.row, { marginBottom: 6 }) }, h("b", { style: { fontSize: 13 } }, `পণ্য ${bn(i + 1)}`),
+          rows.length > 1 && h("button", { "aria-label": "পণ্য বাদ দিন", onClick: () => setRows((rs) => rs.filter((_, j) => j !== i)), style: { background: "none", border: "none", color: "var(--hk-danger)", fontSize: 13, minHeight: 32 } }, "মুছুন")),
+        h("input", { style: S.input, placeholder: "পণ্যের নাম (যেমন: দুধ)", value: r.name, maxLength: 80, onChange: (e) => { const v = e.target.value; patch(i, { name: v, categoryId: r.categoryId || Core.guessCategoryId(v, fam.categories) || "" }); } }),
+        h("select", { style: S.input, value: r.categoryId, onChange: (e) => patch(i, { categoryId: e.target.value }), "aria-label": "ক্যাটাগরি" },
+          h("option", { value: "" }, "ক্যাটাগরি (ঐচ্ছিক)"),
+          Core.CATEGORY_GROUPS.map((g) => h("optgroup", { key: g.key, label: g.label }, cats.filter((c) => c.group === g.key).map((c) => h("option", { key: c.id, value: c.id }, `${c.icon} ${c.name}`))))),
+        h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
+          h("div", null, h("label", { style: S.label }, "পরিমাণ (ঐচ্ছিক)"), h("input", { style: S.input, inputMode: "decimal", placeholder: "২", value: r.quantity, onChange: (e) => patch(i, { quantity: e.target.value }) })),
+          h("div", null, h("label", { style: S.label }, "একক"), h("select", { style: S.input, value: r.unit, onChange: (e) => patch(i, { unit: e.target.value }) }, Core.UNITS.map((u) => h("option", { key: u, value: u }, unitText(u)))))))),
+      h("button", { style: Object.assign({}, S.btn2, { width: "100%", marginBottom: 14 }), onClick: () => setRows((rs) => rs.concat(blankShopRow())) }, "+ আরেকটি পণ্য যোগ করুন"),
+      h(Toggle, { on: remindOn, onChange: setRemindOn, label: "রিমাইন্ডার", hint: "নির্ধারিত সময়ে মনে করিয়ে দেওয়া হবে, যতক্ষণ তালিকায় বাকি পণ্য থাকবে" }),
+      remindOn && h("div", null,
+        h("label", { style: S.label }, "কখন?"),
+        h("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, [["daily", "প্রতিদিন"], ["once", "নির্দিষ্ট তারিখে"]].map(([k, l]) => h("button", { key: k, style: S.chip(repeat === k), onClick: () => setRepeat(k) }, l))),
+        h("div", { style: { display: "grid", gridTemplateColumns: repeat === "once" ? "1fr 1fr" : "1fr", gap: 8 } },
+          repeat === "once" && h("input", { type: "date", style: S.input, value: rdate, min: today(), onChange: (e) => setRdate(e.target.value) }),
+          h("input", { type: "time", style: S.input, value: time, onChange: (e) => setTime(e.target.value) }))));
+  }
+
+  function ShoppingDetailSheet({ ctx, listId, close }) {
+    const { fam, uid, familyId, vis } = ctx;
+    const list = (fam.shoppingLists || []).find((l) => l.id === listId);
+    const [busy, setBusy] = useState(false);
+    if (!list) return h(Sheet, { title: "বাজারের তালিকা", onClose: close }, h(Empty, { icon: "📝", title: "তালিকা পাওয়া যায়নি", text: "সম্ভবত এটি মুছে ফেলা হয়েছে বা সম্পন্ন হয়ে গেছে।" }));
+    const assignee = fam.members.find((m) => m.uid === list.assignedTo);
+    const canManage = list.createdBy === uid || list.assignedTo === uid || vis.admin;
+    const pending = Core.pendingShoppingItems(list);
+    const toggle = async (it) => { try { await window.FB.toggleShoppingItem(familyId, listId, it.id, !it.checked); ctx.reload(); } catch (e) { ctx.toast(friendlyError(e)); } };
+    const buyOne = (it) => ctx.openSheet({ type: "purchase", seed: [{ name: it.name, quantity: it.quantity, unit: it.unit, categoryId: it.categoryId }], fromList: { listId, itemIds: [it.id] } });
+    const buyAll = () => ctx.openSheet({ type: "purchase", seed: pending.map((it) => ({ name: it.name, quantity: it.quantity, unit: it.unit, categoryId: it.categoryId })), fromList: { listId, itemIds: pending.map((it) => it.id) } });
+    const removeList = async () => {
+      if (busy || !window.confirm("এই তালিকাটি পুরোপুরি মুছে ফেলবেন?")) return;
+      setBusy(true);
+      try { await window.FB.deleteShoppingList(familyId, listId); ctx.toast("তালিকা মুছে ফেলা হয়েছে"); ctx.reload(); close(); }
+      catch (e) { ctx.toast(friendlyError(e)); setBusy(false); }
+    };
+    return h(Sheet, { title: list.title, onClose: close,
+      footer: pending.length > 1 && h("button", { style: S.btn, onClick: buyAll }, `সবগুলো (${bn(pending.length)}টি) দিয়ে একসাথে বাজার যোগ করুন`) },
+      h("div", { style: S.muted }, list.assignedTo !== uid ? `${(assignee && assignee.name) || "একজন সদস্য"}-এর জন্য` : "আপনার জন্য",
+        list.reminder && list.reminder.enabled ? ` • 🔔 ${bn(list.reminder.time)} (${REPEAT_LABEL[list.reminder.repeat] || ""})` : ""),
+      h("div", { style: Object.assign({}, S.card, { marginTop: 10 }) },
+        (list.items || []).length === 0 ? h("div", { style: S.muted }, "তালিকাটি খালি — সব কেনা হয়ে গেছে।") :
+        (list.items || []).map((it) => h("div", { key: it.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: "1px solid var(--hk-border-light)" } },
+          h("input", { type: "checkbox", checked: !!it.checked, onChange: () => toggle(it), style: { width: 22, height: 22, accentColor: "var(--hk-success)", flex: "none" } }),
+          h("button", { onClick: () => buyOne(it), style: { flex: 1, textAlign: "left", background: "none", border: "none", color: "var(--hk-text)", fontFamily: F, padding: 0, textDecoration: it.checked ? "line-through" : "none", opacity: it.checked ? 0.55 : 1 } },
+            h("div", { style: { fontWeight: 600, fontSize: 14.5 } }, it.name),
+            (it.quantity || it.unit) && h("div", { style: S.muted }, [it.quantity != null ? qtyText(it.quantity) : null, it.unit ? unitText(it.unit) : null].filter(Boolean).join(" ") + " — কিনতে চাপ দিন")))),
+        h("div", { style: Object.assign({}, S.muted, { marginTop: 8 }) }, "✓ দিলে শুধু সম্পন্ন হিসেবে চিহ্নিত হবে। নামের ওপর চাপ দিলে দাম সহ বাজার হিসেবে যোগ হবে ও তালিকা থেকে সরে যাবে।")),
+      canManage && h("button", { style: S.danger, disabled: busy, onClick: removeList }, "তালিকাটি মুছে ফেলুন"));
   }
 
   /* ------------------------------------------------------------------ *
@@ -1175,16 +1314,19 @@
       h("button", { onClick: () => setView(null), style: { background: "none", border: "none", color: "var(--hk-gold)", fontFamily: F, fontWeight: 600, fontSize: 14, minHeight: 40, padding: "0 4px 6px" } }, "‹ আরও"),
       h("div", { style: Object.assign({}, S.h2, { fontSize: 19, marginTop: 0 }) }, MORE_TITLES[view]),
       view === "products" ? h(ProductsView, { ctx }) : view === "categories" ? h(CategoriesView, { ctx }) : view === "search" ? h(SearchView, { ctx }) : h(BudgetView, { ctx }));
+    const myPending = Core.pendingShoppingCount(ctx.fam.shoppingLists, ctx.uid);
     const items = [
       ["🔎", "খুঁজুন", "পণ্য, সদস্য, বাজার বা এলাকা", () => setView("search")],
+      ["📝", "বাজারের তালিকা", "কী কিনতে হবে, রিমাইন্ডার সহ", () => ctx.openSheet({ type: "shopping" }), myPending],
       ["📦", "পণ্য তালিকা", "সব পণ্য ও তাদের দামের ইতিহাস", () => setView("products")],
       ["🏷️", "ক্যাটাগরি", "গ্রোসারি ও গৃহস্থালির ক্যাটাগরি", () => setView("categories")],
       ["💰", "মাসিক বাজেট", "সীমা ঠিক করুন, সতর্কতা দেখুন", () => setView("budget")],
       ["⚙️", "পরিবারের সেটিংস", "নাম, আইকন, মেরামত, পরিবার ছাড়া", () => ctx.openSheet({ type: "settings" })],
       ["🔁", "পরিবার বদলান", `${ctx.families.length}টি পরিবার`, () => ctx.openSheet({ type: "switcher" })],
     ];
-    return h("div", null, items.map(([ic, t, sub, fn]) => h("button", { key: t, onClick: fn, style: Object.assign({}, S.card, { display: "flex", width: "100%", alignItems: "center", gap: 14, textAlign: "left", color: "var(--hk-text)", fontFamily: F, padding: "13px 16px", marginBottom: 8 }) },
-      h("span", { style: { fontSize: 24 } }, ic), h("span", { style: { flex: 1 } }, h("div", { style: { fontWeight: 700 } }, t), h("div", { style: S.muted }, sub)), h("span", { style: S.muted }, "›"))));
+    return h("div", null, items.map(([ic, t, sub, fn, badge]) => h("button", { key: t, onClick: fn, style: Object.assign({}, S.card, { display: "flex", width: "100%", alignItems: "center", gap: 14, textAlign: "left", color: "var(--hk-text)", fontFamily: F, padding: "13px 16px", marginBottom: 8 }) },
+      h("span", { style: { fontSize: 24 } }, ic), h("span", { style: { flex: 1 } }, h("div", { style: { fontWeight: 700 } }, t), h("div", { style: S.muted }, sub)),
+      badge > 0 ? h("span", { style: S.pill("var(--hk-gold)", "#1a1a1a") }, bn(badge)) : h("span", { style: S.muted }, "›"))));
   }
 
   /* ------------------------------------------------------------------ *
@@ -1207,7 +1349,7 @@
     return children;
   }
 
-  function Module({ user, onClose, mode }) {
+  function Module({ user, onClose, mode, onExpenseSync }) {
     const embedded = mode === "embedded";
     const D = useFamilyData(user);
     const [tab, setTab] = useState("home");
@@ -1221,6 +1363,32 @@
     useSheetBack(!!sheet, closeSheet);
     const uid = user && user.uid;
     const cm = Core.monthOf(today());
+
+    // shopping-list reminders — fires while this module is open (same
+    // 20-second, exact-minute-match approach the app's own Task reminders
+    // use; a client-only PWA can't reliably wake up in the background)
+    useEffect(() => {
+      const id = setInterval(() => {
+        const lists = D.fam.shoppingLists || [];
+        const now = new Date();
+        const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+        const dstr = today();
+        lists.filter((l) => l.assignedTo === uid && Core.shoppingReminderDue(l, dstr, hhmm)).forEach((l) => {
+          const n = Core.pendingShoppingItems(l).length;
+          toast(`🔔 আজকের বাজার: "${l.title}" — ${bn(n)}টি বাকি`);
+          try {
+            if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+              const body = `${l.title} — ${bn(n)}টি পণ্য বাকি`;
+              if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+                navigator.serviceWorker.ready.then((reg) => reg.showNotification("আজকের বাজার", { body, icon: "./icon-192.png" })).catch(() => { new Notification("আজকের বাজার", { body }); });
+              } else new Notification("আজকের বাজার", { body });
+            }
+          } catch (e) { /* Notification API unavailable — the in-app toast still shows */ }
+          window.FB.markShoppingReminderFired(D.activeId, l.id, l.reminder, dstr).catch(() => {});
+        });
+      }, 20 * 1000);
+      return () => clearInterval(id);
+    }, [D.fam.shoppingLists, D.activeId, uid, toast]);
 
     // one stable object (FamilyTab hangs `reloadInvites` on it), refreshed every render
     const ctx = Object.assign(ctxRef.current, {
@@ -1243,6 +1411,10 @@
         toast(lvl ? `⚠ ${LEVEL[lvl].text}` : newP ? (oldP ? "কেনাকাটা আপডেট হয়েছে" : "বাজার যোগ হয়েছে ✓") : "কেনাকাটা মুছে ফেলা হয়েছে");
         setPurchaseTick((n) => n + 1);
         D.reload();
+        // always this account's own purchase (Firestore rules require
+        // memberId === uid), so it also belongs in this account's own
+        // personal expense ledger, in addition to the shared family view
+        if (onExpenseSync) onExpenseSync(oldP, newP ? Object.assign({}, newP, { familyId: D.activeId }) : null);
       },
     });
 
@@ -1268,17 +1440,23 @@
         sheet.type === "invite" ? h(InviteSheet, { ctx, close: closeSheet }) :
         sheet.type === "member" ? h(MemberSheet, { ctx, uid: sheet.uid, close: closeSheet }) :
         sheet.type === "product" ? h(ProductSheet, { ctx, productId: sheet.productId, name: sheet.name, close: closeSheet }) :
-        sheet.type === "purchase" ? h(PurchaseSheet, { ctx, initial: sheet.initial || null, close: closeSheet }) :
+        sheet.type === "purchase" ? h(PurchaseSheet, { ctx, initial: sheet.initial || null, seed: sheet.seed || null, fromList: sheet.fromList || null, close: closeSheet }) :
         sheet.type === "purchase-details" ? h(PurchaseDetailsSheet, { ctx, purchase: sheet.purchase, close: closeSheet }) :
-        sheet.type === "settings" ? h(SettingsSheet, { ctx, close: closeSheet }) : null)));
+        sheet.type === "settings" ? h(SettingsSheet, { ctx, close: closeSheet }) :
+        sheet.type === "shopping" ? h(ShoppingListsSheet, { ctx, close: closeSheet }) :
+        sheet.type === "shopping-create" ? h(ShoppingCreateSheet, { ctx, close: closeSheet }) :
+        sheet.type === "shopping-detail" ? h(ShoppingDetailSheet, { ctx, listId: sheet.listId, close: closeSheet }) : null)));
     const toastEl = toastObj && h("div", { key: toastObj.k, role: "status", style: { position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: "calc(90px + env(safe-area-inset-bottom))", zIndex: 90, background: "var(--hk-header-bg)", color: "var(--hk-text-on-dark)", padding: "10px 18px", borderRadius: 999, fontSize: 14, fontFamily: F, maxWidth: "90vw", textAlign: "center", boxShadow: "0 4px 16px rgba(0,0,0,.25)" } }, toastObj.msg);
 
     if (!D.family) return h(R_Fragment, null, wrap(h("div", null, header("🛒 ফ্যামিলি বাজার", null, closeBtn), scroller(h(NoFamily, { ctx })))), sheetEl, toastEl);
 
     // ---- main -----------------------------------------------------------
     const nameSub = `${bn(D.fam.members.length || (D.family.memberUids || []).length)} জন সদস্য`;
+    const myPending = Core.pendingShoppingCount(D.fam.shoppingLists, uid);
     const switcher = h("div", { style: { display: "flex", alignItems: "center" } },
       h("button", { onClick: () => setSheet({ type: "switcher" }), "aria-label": "পরিবার বদলান", style: { background: "none", border: "none", color: "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } }, D.top.families.length > 1 || D.top.incoming.length ? "🔁" : ""),
+      h("button", { onClick: () => setSheet({ type: "shopping" }), "aria-label": "বাজারের তালিকা", style: { position: "relative", background: "none", border: "none", color: "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } },
+        "📝", myPending > 0 && h("span", { style: { position: "absolute", top: 2, right: 2, minWidth: 16, height: 16, borderRadius: 999, background: "var(--hk-gold)", color: "#1a1a1a", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" } }, bn(myPending))),
       h("button", { onClick: () => { setTab("more"); setMoreView("search"); }, "aria-label": "খুঁজুন", style: { background: "none", border: "none", color: "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } }, "🔎"),
       closeBtn);
     const famTitle = `${(D.family.settings && D.family.settings.icon) || "🏠"} ${D.family.name}`;
