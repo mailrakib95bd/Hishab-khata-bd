@@ -248,39 +248,71 @@
       setActiveIdRaw(id);
     }, [uid]);
 
-    const loadFam = useCallback(async (familyId) => {
+    // Members and shopping lists are small collections where staleness is
+    // exactly the bug users notice ("they made me a list and I don't see
+    // it", "I renamed myself and nobody else sees it") — so those, plus the
+    // monthly totals that drive the live "২০+৪০=৬০" dashboard figure, are
+    // real Firestore listeners (onSnapshot), not one-shot reads. Everything
+    // else here (budget, categories, products, recent price rows) changes
+    // rarely enough that an explicit reload() after a relevant action is
+    // fine, and keeps this from opening a listener per product/price row.
+    useEffect(() => {
+      if (!activeId || !window.FB) { setFam(Object.assign({}, EMPTY_FAM)); return undefined; }
+      setFam((f) => Object.assign({}, f, { loading: true, error: "" }));
+      let dead = false;
+      const unsubMembers = window.FB.subscribeFamilyMembers(activeId, (members) => {
+        if (dead) return;
+        if (members === null) { setFam((f) => Object.assign({}, f, { loading: false, error: "আপনি আর এই পরিবারের সদস্য নন, অথবা অ্যাক্সেস পাওয়া যাচ্ছে না।" })); return; }
+        setFam((f) => Object.assign({}, f, { loading: false, error: "", members }));
+      });
+      const unsubLists = window.FB.subscribeShoppingLists(activeId, (shoppingLists) => {
+        if (dead) return;
+        setFam((f) => Object.assign({}, f, { shoppingLists }));
+      });
+      return () => { dead = true; unsubMembers(); unsubLists(); };
+    }, [activeId]);
+
+    const myMember = fam.members.find((m) => m.uid === uid) || null;
+    const vis = useMemo(() => Core.visibilityFor(myMember), [myMember]);
+
+    // live monthly stats — re-subscribes if the visible scope changes
+    // (e.g. an admin just granted this person the monthlyTotal permission)
+    useEffect(() => {
+      if (!activeId || !window.FB || !myMember) return undefined;
+      let dead = false;
+      const cm = Core.monthOf(today());
+      const unsub = window.FB.subscribeMonthlyStats(activeId, Core.monthsBack(cm, 6), { totals: vis.totals, categories: vis.categories }, (stats) => {
+        if (dead) return;
+        setFam((f) => Object.assign({}, f, { stats }));
+      });
+      return () => { dead = true; unsub(); };
+    }, [activeId, !!myMember, vis.totals, vis.categories]);
+
+    // one-shot pieces — refreshed on family switch and by an explicit reload()
+    const loadStatic = useCallback(async (familyId) => {
       if (!familyId || !window.FB) return;
       const mine = ++seq.current;
-      setFam((f) => Object.assign({}, f, { loading: true, error: "" }));
+      const cm = Core.monthOf(today()), pm = Core.addMonths(cm, -1);
       try {
-        const members = await window.FB.familyMembers(familyId);
-        const me = members.find((m) => m.uid === uid);
-        if (!me) throw new Error("আপনি এই পরিবারের সদস্য নন।");
-        const vis = Core.visibilityFor(me);
-        const cm = Core.monthOf(today()), pm = Core.addMonths(cm, -1);
-        const [budget, categories, products, stats, prices, shoppingLists] = await Promise.all([
+        const [budget, categories, products, prices] = await Promise.all([
           safe(window.FB.getFamilyBudget(familyId), null),
           safe(window.FB.familyCategories(familyId), []),
           safe(window.FB.familyProducts(familyId), []),
-          safe(window.FB.monthlyStats(familyId, Core.monthsBack(cm, 6), { totals: vis.totals, categories: vis.categories }), { monthly: [], cats: [] }),
           safe(window.FB.priceRows(familyId, { months: [cm, pm], seeAll: vis.prices, max: 300 }), []),
-          safe(window.FB.familyShoppingLists(familyId), []),
         ]);
         if (mine !== seq.current) return;
-        setFam({ loading: false, error: "", members, budget, categories, products, stats, prices, shoppingLists });
+        setFam((f) => Object.assign({}, f, { budget, categories, products, prices }));
       } catch (e) {
         if (mine !== seq.current) return;
-        setFam((f) => Object.assign({}, f, { loading: false, error: friendlyError(e) }));
+        setFam((f) => Object.assign({}, f, { error: friendlyError(e) }));
       }
-    }, [uid]);
+    }, [vis.prices]);
 
     useEffect(() => { if (uid) loadTop(); }, [uid]);
-    useEffect(() => { if (activeId) loadFam(activeId); }, [activeId]);
+    useEffect(() => { if (activeId) loadStatic(activeId); }, [activeId, loadStatic]);
 
     const family = top.families.find((f) => f.id === activeId) || null;
-    const myMember = fam.members.find((m) => m.uid === uid) || null;
-    const vis = useMemo(() => Core.visibilityFor(myMember), [myMember]);
-    return { top, family, activeId, setActive, fam, myMember, vis, loadTop, reload: () => loadFam(activeId) };
+    return { top, family, activeId, setActive, fam, myMember, vis, loadTop, reload: () => loadStatic(activeId) };
   }
 
   /* ------------------------------------------------------------------ *
@@ -477,11 +509,16 @@
       fam.budget && !N.scopeAll && h("div", { style: S.card }, h("div", { style: S.muted }, `মাসিক বাজেট ${taka(fam.budget.monthlyAmount)} — মোট খরচ দেখার অনুমতি না থাকায় কতটা খরচ হয়েছে দেখানো যাচ্ছে না।`)),
       has && h("div", { style: S.card },
         h("div", { style: S.h2 }, "কে কত খরচ করেছে"),
-        rows.map(({ m, v }) => h("div", { key: m.uid, style: { marginBottom: 12 } },
-          h("div", { style: Object.assign({}, S.row, { marginBottom: 4 }) },
-            h("span", { style: { display: "flex", alignItems: "center", gap: 8 } }, h(Avatar, { m, size: 26 }), h("span", { style: { fontWeight: 600 } }, m.uid === uid ? `${m.name} (আপনি)` : m.name)),
-            v == null ? h("span", { style: S.muted }, "🔒 অনুমতি নেই") : h("b", null, taka(v))),
-          v != null && h(HBar, { pct: (v / maxV) * 100 })))),
+        rows.map(({ m, v }) => {
+          const days = v != null ? Core.memberDayBreakdown(fam.stats.monthly, N.cm, m.uid) : [];
+          return h("div", { key: m.uid, style: { marginBottom: 12 } },
+            h("div", { style: Object.assign({}, S.row, { marginBottom: 4 }) },
+              h("span", { style: { display: "flex", alignItems: "center", gap: 8 } }, h(Avatar, { m, size: 26 }), h("span", { style: { fontWeight: 600 } }, m.uid === uid ? `${m.name} (আপনি)` : m.name)),
+              v == null ? h("span", { style: S.muted }, "🔒 অনুমতি নেই") : h("b", null, taka(v))),
+            v != null && h(HBar, { pct: (v / maxV) * 100 }),
+            days.length >= 2 && h("div", { style: Object.assign({}, S.muted, { marginTop: 3, fontSize: 11.5, wordBreak: "break-word" }) },
+              days.map((d) => bn(d.amount)).join(" + ") + ` = ${taka(v)}`));
+        })),
       has && h("div", { style: S.card }, h("div", { style: S.h2 }, "গত ১৪ দিনের খরচ"), h(BarChart, { data: daily, labelEvery: 2 })),
       (vis.prices || movers.length > 0) && h("div", { style: S.card },
         h("div", { style: S.h2 }, "কোন পণ্যের দাম বাড়ল/কমল"),
@@ -581,9 +618,16 @@
         if (old) delete old.id;
         await window.FB.savePurchase(ctx.familyId, old, p);
         rememberPrefs(uid, p);
-        if (fromList) window.FB.removeShoppingItems(ctx.familyId, fromList.listId, fromList.itemIds).catch(() => {});
         ctx.afterPurchaseChange(old, p);
-        close(true);
+        if (fromList) {
+          // buying from a list goes back to that list (with the bought item
+          // now gone, and whatever's left still to buy) instead of dumping
+          // the person straight back on the dashboard
+          try { await window.FB.removeShoppingItems(ctx.familyId, fromList.listId, fromList.itemIds); } catch (e) { /* list may already be gone/changed — harmless */ }
+          ctx.openSheet({ type: "shopping-detail", listId: fromList.listId });
+        } else {
+          close(true);
+        }
       } catch (e) { setErrors([friendlyError(e)]); busyRef.current = false; setBusy(false); }
     };
 
@@ -694,7 +738,9 @@
   function ShoppingCreateSheet({ ctx, close }) {
     const { fam, uid, familyId, vis } = ctx;
     const cats = useMemo(() => Core.allCategories(fam.categories), [fam.categories]);
-    const others = fam.members.filter((m) => m.uid !== uid && Core.isActive(m));
+    const freq = useMemo(() => Core.assigneeFrequency(fam.shoppingLists, uid), [fam.shoppingLists, uid]);
+    const others = useMemo(() => Core.sortByFrequencyDesc(fam.members.filter((m) => m.uid !== uid && Core.isActive(m)), freq), [fam.members, uid, freq]);
+    const favoriteUid = others.length && freq[others[0].uid] > 0 ? others[0].uid : null;
     const [assignedTo, setAssignedTo] = useState(uid);
     const [title, setTitle] = useState("আজকের বাজার");
     const [rows, setRows] = useState([blankShopRow()]);
@@ -729,7 +775,7 @@
         h("label", { style: S.label }, "কার জন্য এই তালিকা?"),
         h("select", { style: S.input, value: assignedTo, onChange: (e) => setAssignedTo(e.target.value) },
           h("option", { value: uid }, "নিজের জন্য"),
-          others.map((m) => h("option", { key: m.uid, value: m.uid }, m.name)))),
+          others.map((m) => h("option", { key: m.uid, value: m.uid }, `${m.uid === favoriteUid ? "⭐ " : ""}${m.name}`)))),
       rows.map((r, i) => h("div", { key: r.key, style: Object.assign({}, S.card, { padding: "12px 12px 4px" }) },
         h("div", { style: Object.assign({}, S.row, { marginBottom: 6 }) }, h("b", { style: { fontSize: 13 } }, `পণ্য ${bn(i + 1)}`),
           rows.length > 1 && h("button", { "aria-label": "পণ্য বাদ দিন", onClick: () => setRows((rs) => rs.filter((_, j) => j !== i)), style: { background: "none", border: "none", color: "var(--hk-danger)", fontSize: 13, minHeight: 32 } }, "মুছুন")),
@@ -750,27 +796,63 @@
           h("input", { type: "time", style: S.input, value: time, onChange: (e) => setTime(e.target.value) }))));
   }
 
+  function AddShoppingItemForm({ ctx, listId, fam }) {
+    const [open, setOpen] = useState(false);
+    const [row, setRow] = useState(blankShopRow());
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+    const cats = useMemo(() => Core.allCategories(fam.categories), [fam.categories]);
+    if (!open) return h("button", { style: Object.assign({}, S.btn2, { width: "100%" }), onClick: () => setOpen(true) }, "+ নতুন পণ্য যোগ করুন");
+    const add = async () => {
+      const name = row.name.trim();
+      if (!name) { setErr("পণ্যের নাম লিখুন"); return; }
+      setBusy(true); setErr("");
+      try {
+        await window.FB.addShoppingItems(ctx.familyId, listId, [Core.shoppingItem(row)]);
+        ctx.toast("তালিকায় যোগ হয়েছে ✓");
+        setRow(blankShopRow()); setOpen(false);
+      } catch (e) { setErr(friendlyError(e)); } finally { setBusy(false); }
+    };
+    return h("div", { style: Object.assign({}, S.card, { padding: "12px 12px 4px" }) },
+      h("input", { style: S.input, placeholder: "পণ্যের নাম (যেমন: চিনি)", autoFocus: true, value: row.name, maxLength: 80, onChange: (e) => { const v = e.target.value; setRow((r) => Object.assign({}, r, { name: v, categoryId: r.categoryId || Core.guessCategoryId(v, fam.categories) || "" })); } }),
+      h("select", { style: S.input, value: row.categoryId, onChange: (e) => setRow((r) => Object.assign({}, r, { categoryId: e.target.value })), "aria-label": "ক্যাটাগরি" },
+        h("option", { value: "" }, "ক্যাটাগরি (ঐচ্ছিক)"),
+        Core.CATEGORY_GROUPS.map((g) => h("optgroup", { key: g.key, label: g.label }, cats.filter((c) => c.group === g.key).map((c) => h("option", { key: c.id, value: c.id }, `${c.icon} ${c.name}`))))),
+      h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
+        h("input", { style: S.input, inputMode: "decimal", placeholder: "পরিমাণ (ঐচ্ছিক)", value: row.quantity, onChange: (e) => setRow((r) => Object.assign({}, r, { quantity: e.target.value })) }),
+        h("select", { style: S.input, value: row.unit, onChange: (e) => setRow((r) => Object.assign({}, r, { unit: e.target.value })) }, Core.UNITS.map((u) => h("option", { key: u, value: u }, unitText(u))))),
+      err && h("div", { style: { color: "var(--hk-danger)", fontSize: 13, margin: "4px 0" } }, err),
+      h("div", { style: { display: "flex", gap: 8, marginBottom: 12 } },
+        h("button", { style: S.btn, disabled: busy, onClick: add }, busy ? "যোগ হচ্ছে…" : "তালিকায় যোগ করুন"),
+        h("button", { style: S.btn2, onClick: () => { setOpen(false); setErr(""); } }, "বাতিল")));
+  }
+
   function ShoppingDetailSheet({ ctx, listId, close }) {
     const { fam, uid, familyId, vis } = ctx;
     const list = (fam.shoppingLists || []).find((l) => l.id === listId);
     const [busy, setBusy] = useState(false);
     if (!list) return h(Sheet, { title: "বাজারের তালিকা", onClose: close }, h(Empty, { icon: "📝", title: "তালিকা পাওয়া যায়নি", text: "সম্ভবত এটি মুছে ফেলা হয়েছে বা সম্পন্ন হয়ে গেছে।" }));
     const assignee = fam.members.find((m) => m.uid === list.assignedTo);
+    const creator = fam.members.find((m) => m.uid === list.createdBy);
     const canManage = list.createdBy === uid || list.assignedTo === uid || vis.admin;
     const pending = Core.pendingShoppingItems(list);
-    const toggle = async (it) => { try { await window.FB.toggleShoppingItem(familyId, listId, it.id, !it.checked); ctx.reload(); } catch (e) { ctx.toast(friendlyError(e)); } };
+    const toggle = async (it) => { try { await window.FB.toggleShoppingItem(familyId, listId, it.id, !it.checked); } catch (e) { ctx.toast(friendlyError(e)); } };
     const buyOne = (it) => ctx.openSheet({ type: "purchase", seed: [{ name: it.name, quantity: it.quantity, unit: it.unit, categoryId: it.categoryId }], fromList: { listId, itemIds: [it.id] } });
     const buyAll = () => ctx.openSheet({ type: "purchase", seed: pending.map((it) => ({ name: it.name, quantity: it.quantity, unit: it.unit, categoryId: it.categoryId })), fromList: { listId, itemIds: pending.map((it) => it.id) } });
     const removeList = async () => {
       if (busy || !window.confirm("এই তালিকাটি পুরোপুরি মুছে ফেলবেন?")) return;
       setBusy(true);
-      try { await window.FB.deleteShoppingList(familyId, listId); ctx.toast("তালিকা মুছে ফেলা হয়েছে"); ctx.reload(); close(); }
+      try { await window.FB.deleteShoppingList(familyId, listId); ctx.toast("তালিকা মুছে ফেলা হয়েছে"); close(); }
       catch (e) { ctx.toast(friendlyError(e)); setBusy(false); }
     };
     return h(Sheet, { title: list.title, onClose: close,
       footer: pending.length > 1 && h("button", { style: S.btn, onClick: buyAll }, `সবগুলো (${bn(pending.length)}টি) দিয়ে একসাথে বাজার যোগ করুন`) },
       h("div", { style: S.muted }, list.assignedTo !== uid ? `${(assignee && assignee.name) || "একজন সদস্য"}-এর জন্য` : "আপনার জন্য",
         list.reminder && list.reminder.enabled ? ` • 🔔 ${bn(list.reminder.time)} (${REPEAT_LABEL[list.reminder.repeat] || ""})` : ""),
+      list.createdBy !== uid && h("div", { style: Object.assign({}, S.card, { marginTop: 10 }) },
+        h("div", { style: Object.assign({}, S.row, { marginBottom: creator && creator.phone ? 8 : 0 }) },
+          h("span", null, "পাঠিয়েছেন"), h("b", null, (creator && creator.name) || "একজন সদস্য")),
+        h(CallButtons, { phone: creator && creator.phone })),
       h("div", { style: Object.assign({}, S.card, { marginTop: 10 }) },
         (list.items || []).length === 0 ? h("div", { style: S.muted }, "তালিকাটি খালি — সব কেনা হয়ে গেছে।") :
         (list.items || []).map((it) => h("div", { key: it.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: "1px solid var(--hk-border-light)" } },
@@ -779,6 +861,7 @@
             h("div", { style: { fontWeight: 600, fontSize: 14.5 } }, it.name),
             (it.quantity || it.unit) && h("div", { style: S.muted }, [it.quantity != null ? qtyText(it.quantity) : null, it.unit ? unitText(it.unit) : null].filter(Boolean).join(" ") + " — কিনতে চাপ দিন")))),
         h("div", { style: Object.assign({}, S.muted, { marginTop: 8 }) }, "✓ দিলে শুধু সম্পন্ন হিসেবে চিহ্নিত হবে। নামের ওপর চাপ দিলে দাম সহ বাজার হিসেবে যোগ হবে ও তালিকা থেকে সরে যাবে।")),
+      canManage && h(AddShoppingItemForm, { ctx, listId, fam }),
       canManage && h("button", { style: S.danger, disabled: busy, onClick: removeList }, "তালিকাটি মুছে ফেলুন"));
   }
 
@@ -983,15 +1066,34 @@
     }));
   }
 
+  // tel:/wa.me — best-effort formatting; assumes a Bangladeshi mobile number
+  // (leading 0, 11 digits) when nothing else is given, since this app is
+  // Bangla-first, but passes through anything already in +<country> form
+  function phoneHref(kind, phone) {
+    const digits = String(phone || "").replace(/[^\d+]/g, "");
+    if (!digits) return null;
+    const intl = digits.startsWith("+") ? digits.slice(1) : digits.startsWith("0") ? "88" + digits : digits;
+    return kind === "whatsapp" ? `https://wa.me/${intl}` : `tel:${digits.startsWith("+") ? digits : digits}`;
+  }
+  function CallButtons({ phone }) {
+    if (!phone) return null;
+    return h("div", { style: { display: "flex", gap: 8 } },
+      h("a", { href: phoneHref("tel", phone), style: Object.assign({}, S.btn2, { flex: 1, textDecoration: "none", textAlign: "center", display: "block" }) }, "📞 কল করুন"),
+      h("a", { href: phoneHref("whatsapp", phone), target: "_blank", rel: "noopener noreferrer", style: Object.assign({}, S.btn2, { flex: 1, textDecoration: "none", textAlign: "center", display: "block", color: "#25D366", borderColor: "#25D366" }) }, "💬 WhatsApp"));
+  }
+
   function MemberSheet({ ctx, uid: memberUid, close }) {
     const { fam, vis, uid } = ctx;
     const m = fam.members.find((x) => x.uid === memberUid);
     const self = memberUid === uid;
     const canEdit = m && Core.canEditMember(ctx.me, m);
+    const ownerEditsInfo = m && !self && Core.isOwner(ctx.me);
     const [role, setRole] = useState(m ? m.role : "member");
     const [relation, setRelation] = useState(m ? (m.relation === "self" ? "" : m.relation) : "");
     const [perms, setPerms] = useState(m ? Core.normalizePermissions(m.permissions) : {});
     const [name, setName] = useState(m ? m.name : "");
+    const [phone, setPhone] = useState(m ? m.phone || "" : "");
+    const [infoRelation, setInfoRelation] = useState(m ? (m.relation === "self" ? "" : m.relation) : "");
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState("");
     const N = useNumbers(ctx);
@@ -1007,6 +1109,10 @@
       if (!relation.trim() && !self) { setErr("সম্পর্ক লিখুন"); return; }
       run(() => window.FB.updateFamilyMember(ctx.familyId, m.uid, { role, permissions: Core.normalizePermissions(perms), relation: relation.trim() }), "সংরক্ষিত হয়েছে");
     };
+    const saveInfo = () => {
+      if (!name.trim()) { setErr("নাম লিখুন"); return; }
+      run(() => window.FB.updateFamilyMember(ctx.familyId, m.uid, { name: name.trim(), phone: phone.trim(), relation: infoRelation.trim() }), "তথ্য সংরক্ষিত হয়েছে");
+    };
     const changeRole = (r) => {
       setRole(r);
       const preset = Core.permissionPreset(r), next = {};
@@ -1018,6 +1124,7 @@
       h("div", { style: Object.assign({}, S.card, { display: "flex", alignItems: "center", gap: 14 }) },
         h(Avatar, { m, size: 54 }),
         h("div", { style: { flex: 1, minWidth: 0 } }, h("div", { style: { fontWeight: 700, fontSize: 17 } }, m.name), h("div", { style: Object.assign({}, S.muted, { wordBreak: "break-all" }) }, m.email), h("div", { style: { marginTop: 4 } }, roleChip(m.role), " ", h("span", { style: S.muted }, relLabel(m.relation === "self" ? "" : m.relation))))),
+      !self && h(CallButtons, { phone: m.phone }),
       h("div", { style: S.card },
         h("div", { style: S.h2 }, "এই মাসের হিসাব"),
         show ? h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } },
@@ -1026,8 +1133,17 @@
       (vis.categories || self) && h("div", { style: S.card }, h("div", { style: S.h2 }, "ক্যাটাগরি অনুযায়ী (এই মাস)"),
         cats && cats.length ? cats.map((c) => h("div", { key: c.id, style: Object.assign({}, S.row, { padding: "4px 0" }) }, h("span", null, c.name), h("b", null, `${taka(c.total)} • ${bn(c.pct)}%`))) : h("div", { style: S.muted }, "এই মাসে কোনো খরচ নেই।")),
       !vis.details && !self && h("div", { style: Object.assign({}, S.muted, { marginBottom: 12 }) }, "🔒 প্রতিটি কেনাকাটার বিস্তারিত দেখার অনুমতি নেই।"),
-      self && h("div", { style: S.card }, h("label", { style: S.label }, "আমার নাম"), h("input", { style: S.input, value: name, maxLength: 40, onChange: (e) => setName(e.target.value) }),
-        h("button", { style: S.btn2, disabled: busy || !name.trim(), onClick: () => run(() => window.FB.updateFamilyMember(ctx.familyId, uid, { name: name.trim() }), "নাম বদলানো হয়েছে") }, "নাম সংরক্ষণ")),
+      self && h("div", { style: S.card },
+        h("label", { style: S.label }, "আমার নাম"), h("input", { style: S.input, value: name, maxLength: 40, onChange: (e) => setName(e.target.value) }),
+        h("label", { style: S.label }, "মোবাইল নাম্বার (ঐচ্ছিক)"), h("input", { style: S.input, type: "tel", placeholder: "০১XXXXXXXXX", value: phone, maxLength: 20, onChange: (e) => setPhone(e.target.value) }),
+        h("button", { style: S.btn2, disabled: busy || !name.trim(), onClick: () => run(() => window.FB.updateFamilyMember(ctx.familyId, uid, { name: name.trim(), phone: phone.trim() }), "সংরক্ষণ হয়েছে") }, "সংরক্ষণ")),
+      ownerEditsInfo && h("div", null,
+        h("div", { style: S.h2 }, "প্রোফাইল তথ্য সম্পাদনা (শুধু আপনি, মালিক হিসেবে)"),
+        h("div", { style: S.card },
+          h("label", { style: S.label }, "নাম"), h("input", { style: S.input, value: name, maxLength: 40, onChange: (e) => setName(e.target.value) }),
+          h("label", { style: S.label }, "মোবাইল নাম্বার (ঐচ্ছিক)"), h("input", { style: S.input, type: "tel", placeholder: "০১XXXXXXXXX", value: phone, maxLength: 20, onChange: (e) => setPhone(e.target.value) }),
+          h("label", { style: S.label }, "সম্পর্ক"), h(RelationPicker, { value: infoRelation, onChange: setInfoRelation }),
+          h("button", { style: S.btn2, disabled: busy || !name.trim(), onClick: saveInfo }, "তথ্য সংরক্ষণ"))),
       canEdit && h("div", null,
         h("div", { style: S.h2 }, "সম্পর্ক ও ভূমিকা"),
         h("div", { style: S.card },
@@ -1127,6 +1243,7 @@
     const [st, setSt] = useState({ loading: true, error: "", rows: [], locs: [] });
     const [range, setRange] = useState("30");
     const [newName, setNewName] = useState(null);
+    const [newCat, setNewCat] = useState(null);
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState("");
     const load = useCallback(async () => {
@@ -1190,6 +1307,12 @@
       err && h(ErrorBox, { msg: err }),
       product && vis.admin && h("div", { style: S.card },
         h("div", { style: S.h2 }, "পণ্য ব্যবস্থাপনা"),
+        h("div", { style: { marginBottom: 12 } },
+          h("div", { style: Object.assign({}, S.muted, { marginBottom: 4 }) }, "ক্যাটাগরি (বানান ভুলে আলাদা আইটেম হয়ে থাকলে এখান থেকে ঠিক করুন)"),
+          h("select", { style: S.input, value: newCat != null ? newCat : (product.categoryId || ""), onChange: (e) => setNewCat(e.target.value) },
+            h("option", { value: "" }, "— কোনো ক্যাটাগরি নেই —"),
+            Core.CATEGORY_GROUPS.map((g) => h("optgroup", { key: g.key, label: g.label }, Core.allCategories(fam.categories).filter((c) => c.group === g.key).map((c) => h("option", { key: c.id, value: c.id }, `${c.icon} ${c.name}`))))),
+          newCat != null && newCat !== (product.categoryId || "") && h("button", { style: Object.assign({}, S.btn2, { marginTop: 8 }), disabled: busy, onClick: () => run(() => window.FB.setProductCategory(familyId, pid, newCat || null), "ক্যাটাগরি বদলানো হয়েছে") }, "ক্যাটাগরি সংরক্ষণ")),
         newName === null ? h("div", { style: { display: "flex", gap: 8 } },
           h("button", { style: S.btn2, onClick: () => setNewName(product.name) }, "নাম বদলান"),
           h("button", { style: S.danger, disabled: busy, onClick: () => { if (window.confirm("পণ্যটি তালিকা থেকে সরানো হবে। আগের কেনাকাটা ও দামের ইতিহাস অক্ষত থাকবে।")) run(() => window.FB.setProductArchived(familyId, pid, true), "পণ্যটি সরানো হয়েছে"); } }, "তালিকা থেকে সরান")) :

@@ -211,8 +211,13 @@ service cloud.firestore {
       allow update: if isMember(familyId) && (
         // yourself: harmless profile fields only — never role / permissions / status
         (request.auth.uid == memberUid &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name", "photoURL", "relation", "updatedAt"])) ||
-        // a manager editing someone else
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name", "photoURL", "relation", "phone", "updatedAt"])) ||
+        // the family OWNER fixing another (non-owner) member's basic info —
+        // e.g. a typo in their name, or adding a phone number for them
+        (request.auth.uid != memberUid && isOwner(familyId) &&
+          resource.data.role != "owner" &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["name", "photoURL", "relation", "phone", "updatedAt"])) ||
+        // a manager editing someone else's role / permissions
         (request.auth.uid != memberUid && canManage(familyId) &&
           resource.data.role != "owner" &&
           (resource.data.role != "admin" || isOwner(familyId)) &&

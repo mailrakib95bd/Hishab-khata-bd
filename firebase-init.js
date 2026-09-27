@@ -44,6 +44,7 @@ import {
   increment,
   arrayUnion,
   arrayRemove,
+  onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -213,10 +214,20 @@ window.FB = {
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   },
 
-  // manager changing role / permissions / relation, or a person editing their own name/relation
+  // live member list — so a name (or phone/role/permission) change is seen
+  // by every other family member immediately, not just on next reload
+  subscribeFamilyMembers(familyId, cb) {
+    return onSnapshot(collection(db, "families", familyId, "members"), (snap) => {
+      cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, () => cb(null)); // null = the listener failed (e.g. no longer a member) — distinct from a real empty list
+  },
+
+  // manager changing role / permissions / relation, or a person editing
+  // their own name/photo/relation/phone; the family OWNER may additionally
+  // edit ANY member's name/photo/relation/phone (not just role/permissions)
   async updateFamilyMember(familyId, memberUid, patch) {
     const allowed = {};
-    ["role", "permissions", "relation", "name", "photoURL"].forEach((k) => { if (k in patch) allowed[k] = patch[k]; });
+    ["role", "permissions", "relation", "name", "photoURL", "phone"].forEach((k) => { if (k in patch) allowed[k] = patch[k]; });
     await updateDoc(doc(db, "families", familyId, "members", memberUid), { ...allowed, updatedAt: Date.now() });
   },
 
@@ -290,6 +301,13 @@ window.FB = {
   },
   async setProductArchived(familyId, productId, archived) {
     await updateDoc(doc(db, "families", familyId, "products", productId), { archived: !!archived, updatedAt: Date.now() });
+  },
+  // owner/admin fixing a product that landed in the wrong category (e.g. a
+  // typo created a near-duplicate item under "অন্যান্য") — purchases and
+  // price history keep pointing at the same productId, so nothing else
+  // needs to change; only future totals-by-category use this going forward.
+  async setProductCategory(familyId, productId, categoryId) {
+    await updateDoc(doc(db, "families", familyId, "products", productId), { categoryId: categoryId || null, updatedAt: Date.now() });
   },
   async familyCategories(familyId) {
     const snap = await getDocs(collection(db, "families", familyId, "categories"));
@@ -380,6 +398,35 @@ window.FB = {
     return { monthly, cats };
   },
 
+  // live monthly totals/category-totals — this is what makes the "কে কত
+  // খরচ করেছে" dashboard update the instant anyone in the family (with
+  // permission to be seen) logs a purchase, on every device, not just the
+  // one that made the change. `totals`/`categories` gate visibility exactly
+  // like monthlyStats above: seeing all members' docs, or only your own.
+  subscribeMonthlyStats(familyId, months, { totals, categories }, cb) {
+    const uid = auth.currentUser.uid;
+    const state = { monthly: [], cats: [] };
+    const emit = () => cb({ monthly: state.monthly, cats: state.cats });
+    const watch = (coll, seeAll, key) => {
+      if (seeAll) {
+        return onSnapshot(query(collection(db, "families", familyId, coll), where("month", "in", months)), (snap) => {
+          state[key] = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          emit();
+        }, () => { state[key] = []; emit(); });
+      }
+      const rows = {};
+      const unsubs = months.map((m) => onSnapshot(doc(db, "families", familyId, coll, `${uid}_${m}`), (snap) => {
+        if (snap.exists()) rows[m] = { id: snap.id, ...snap.data() }; else delete rows[m];
+        state[key] = Object.values(rows);
+        emit();
+      }, () => {}));
+      return () => unsubs.forEach((u) => u());
+    };
+    const stopMonthly = watch("memberMonthly", totals, "monthly");
+    const stopCats = watch("memberCategoryMonthly", categories, "cats");
+    return () => { stopMonthly(); stopCats(); };
+  },
+
   // price rows: by product and/or by month(s); mine only unless allowed to see all
   async priceRows(familyId, { productId, months, seeAll, max }) {
     const cs = [];
@@ -431,6 +478,14 @@ window.FB = {
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   },
 
+  // live — so a list made FOR someone (or the items in it) appears on that
+  // person's screen immediately, without them needing to reopen the app
+  subscribeShoppingLists(familyId, cb) {
+    return onSnapshot(collection(db, "families", familyId, "shoppingLists"), (snap) => {
+      cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, () => cb([]));
+  },
+
   async saveShoppingList(familyId, list) {
     const now = Date.now();
     const id = list.id || doc(collection(db, "families", familyId, "shoppingLists")).id;
@@ -467,6 +522,17 @@ window.FB = {
     if (!snap.exists()) return;
     const items = (snap.data().items || []).filter((it) => !itemIds.includes(it.id));
     await updateDoc(ref, { items, status: items.length ? "active" : "done", updatedAt: Date.now() });
+  },
+
+  // creator, assignee, or a manager can add more items to an existing list
+  // (e.g. "also need onions" while the list is already out with someone) —
+  // appended, existing items untouched
+  async addShoppingItems(familyId, listId, newItems) {
+    const ref = doc(db, "families", familyId, "shoppingLists", listId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    const items = [...(snap.data().items || []), ...newItems];
+    await updateDoc(ref, { items, status: "active", updatedAt: Date.now() });
   },
 
   // records that today's reminder already fired, so the 20-second check

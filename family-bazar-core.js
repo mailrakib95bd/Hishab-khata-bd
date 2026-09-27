@@ -371,6 +371,16 @@
     });
     return out;
   }
+  // per-day amounts for one member in one month, days with spending only,
+  // oldest first — the raw material for the "২০+৪০=৬০" running-total
+  // display on the dashboard (formatting/Bengali digits is the UI's job)
+  function memberDayBreakdown(docs, month, memberId) {
+    const out = {};
+    (docs || []).filter((d) => d.month === month && d.memberId === memberId).forEach((d) => {
+      Object.keys(d.days || {}).forEach((date) => { out[date] = round2((out[date] || 0) + (d.days[date] || 0)); });
+    });
+    return Object.keys(out).filter((date) => out[date] > 0).sort().map((date) => ({ date, amount: out[date] }));
+  }
   function pctChange(cur, prev) {
     if (!prev || prev <= 0) return null;
     return Math.round(((cur - prev) / prev) * 100);
@@ -701,6 +711,17 @@
   function pendingShoppingCount(lists, uid) {
     return myShoppingLists(lists, uid).reduce((s, l) => s + pendingShoppingItems(l).length, 0);
   }
+  // "who does this person most often make lists for?" — used to sort the
+  // assignee picker so the usual recipient is on top with a ★, instead of
+  // hunting through an alphabetical/insertion-order list every time
+  function assigneeFrequency(lists, creatorUid) {
+    const out = {};
+    (lists || []).forEach((l) => { if (l.createdBy === creatorUid && l.assignedTo !== creatorUid) out[l.assignedTo] = (out[l.assignedTo] || 0) + 1; });
+    return out;
+  }
+  function sortByFrequencyDesc(members, freq) {
+    return (members || []).slice().sort((a, b) => (freq[b.uid] || 0) - (freq[a.uid] || 0));
+  }
 
   return {
     RELATIONS, INVITE_RELATIONS, ROLES, INVITABLE_ROLES, PERMISSIONS, PERMISSION_KEYS, DEFAULT_CATEGORIES, CATEGORY_GROUPS, UNITS, BUDGET_LEVELS, INVITE_STATUS_LABEL,
@@ -716,5 +737,6 @@
     inviteState,
     buildPurchase, planPurchaseChange, budgetCrossing, canGrant, visibilityFor,
     shoppingItem, validateShoppingDraft, shoppingReminderDue, pendingShoppingItems, myShoppingLists, pendingShoppingCount,
+    memberDayBreakdown, assigneeFrequency, sortByFrequencyDesc,
   };
 });

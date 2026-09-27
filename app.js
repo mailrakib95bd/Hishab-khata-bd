@@ -2010,6 +2010,18 @@ function App() {
                 }
                 return d;
             });
+            // taxes get the exact same reminderDate/reminderTime check as
+            // tasks above (both are computed by the same
+            // computeTaskReminderFields helper from the Tax form)
+            let taxesChanged = false;
+            const nextTaxes = taxes.map((t) => {
+                if (t.reminderTime && t.reminderDate === today && t.reminderTime === hhmm && !t.paid && t.remindedAt !== today) {
+                    taxesChanged = true;
+                    fired.push(`${t.name} — ${formatTaka(t.amount)}`);
+                    return Object.assign(Object.assign({}, t), { remindedAt: today });
+                }
+                return t;
+            });
             if (fired.length > 0) {
                 setActiveReminder(fired.join(" · "));
                 try {
@@ -2036,14 +2048,15 @@ function App() {
                     // Notification API unavailable in this environment — the in-app banner still shows
                 }
             }
-            if (tasksChanged || debtsChanged) {
+            if (tasksChanged || debtsChanged || taxesChanged) {
                 setTasks(nextTasks);
                 setDebts(nextDebts);
-                persistAll({ tasks: nextTasks, debts: nextDebts });
+                if (taxesChanged) setTaxes(nextTaxes);
+                persistAll(Object.assign({ tasks: nextTasks, debts: nextDebts }, taxesChanged ? { taxes: nextTaxes } : {}));
             }
         }, 20 * 1000);
         return () => clearInterval(id);
-    }, [tasks, debts, transactions, budget, specialDays, persist]);
+    }, [tasks, debts, taxes, transactions, budget, specialDays, persist]);
     const accounts = useMemo(() => computeAccountBalances(transactions, accountOpening, transfers, debts), [transactions, accountOpening, transfers, debts]);
     if (!loaded) {
         return (React.createElement("div", { style: styles.loadingScreen },
@@ -4164,26 +4177,47 @@ function TaxForm({ initial, onClose, onSave }) {
     // same category source Admin Task Management uses (cats.expenseCats) —
     // reused as-is, not a new/duplicate list. TaxPanel/TaxForm isn't
     // admin-gated, so this is available to admin and regular users alike.
+    // Time/reminder/repeat fields below reuse the exact same
+    // TASK_REMINDER_PRESETS / TASK_REPEAT_OPTIONS / computeTaskReminderFields
+    // the (Admin) Task forms use — same coding, not a second copy — so a
+    // tax due date reminds you exactly the same way a task does.
     const cats = useCategories();
     const [name, setName] = useState((initial === null || initial === void 0 ? void 0 : initial.name) || "");
     const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
     const [category, setCategory] = useState((initial === null || initial === void 0 ? void 0 : initial.category) || "");
     const [dueDate, setDueDate] = useState((initial === null || initial === void 0 ? void 0 : initial.dueDate) || todayStr());
+    const [time, setTime] = useState((initial === null || initial === void 0 ? void 0 : initial.time) || "");
     const [note, setNote] = useState((initial === null || initial === void 0 ? void 0 : initial.note) || "");
+    const [repeat, setRepeat] = useState((initial === null || initial === void 0 ? void 0 : initial.repeat) || "none");
+    const [reminderPreset, setReminderPreset] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderDate) ? "custom" : "none");
+    const [customReminderDate, setCustomReminderDate] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderDate) || "");
+    const [customReminderTime, setCustomReminderTime] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderTime) || "");
     const [err, setErr] = useState("");
-    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: initial ? "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09B8\u09AE\u09CD\u09AA\u09BE\u09A6\u09A8\u09BE" : "\u09A8\u09A4\u09C1\u09A8 \u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8" },
-        React.createElement("label", { style: admStyles.label }, "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8\u09C7\u09B0 \u09A8\u09BE\u09AE *"),
+    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: initial ? "ট্যাক্স সম্পাদনা" : "নতুন ট্যাক্স" },
+        React.createElement("label", { style: admStyles.label }, "ট্যাক্সের নাম *"),
         React.createElement("input", { style: admStyles.input, value: name, onChange: (e) => setName(e.target.value) }),
-        React.createElement("label", { style: admStyles.label }, "\u09AA\u09B0\u09BF\u09AE\u09BE\u09A3 *"),
+        React.createElement("label", { style: admStyles.label }, "পরিমাণ *"),
         React.createElement("input", { style: admStyles.input, type: "number", inputMode: "decimal", value: amount, onChange: (e) => setAmount(e.target.value) }),
-        React.createElement("label", { style: admStyles.label }, "\u09B8\u09BE\u09AC-\u0995\u09CD\u09AF\u09BE\u099F\u09C7\u0997\u09B0\u09BF"),
+        React.createElement("label", { style: admStyles.label }, "সাব-ক্যাটেগরি"),
         React.createElement("select", { style: admStyles.input, value: category, onChange: (e) => setCategory(e.target.value) },
-            React.createElement("option", { value: "" }, "\u2014 \u09A8\u09BF\u09B0\u09CD\u09AC\u09BE\u099A\u09A8 \u0995\u09B0\u09C1\u09A8 \u2014"),
+            React.createElement("option", { value: "" }, "— নির্বাচন করুন —"),
             (cats.expenseCats || []).map((c) => React.createElement("option", { key: c.key, value: c.key }, c.label))),
-        React.createElement("label", { style: admStyles.label }, "\u09AA\u09B0\u09BF\u09B6\u09CB\u09A7\u09C7\u09B0 \u09B6\u09C7\u09B7 \u09A4\u09BE\u09B0\u09BF\u0996"),
-        React.createElement("input", { style: admStyles.input, type: "date", value: dueDate, onChange: (e) => setDueDate(e.target.value) }),
-        React.createElement("label", { style: admStyles.label }, "\u09A8\u09CB\u099F"),
+        React.createElement("div", { style: { display: "flex", gap: 8 } },
+            React.createElement("div", { style: { flex: 1 } },
+                React.createElement("label", { style: admStyles.label }, "পরিশোধের শেষ তারিখ"),
+                React.createElement("input", { style: admStyles.input, type: "date", value: dueDate, onChange: (e) => setDueDate(e.target.value) })),
+            React.createElement("div", { style: { flex: 1 } },
+                React.createElement("label", { style: admStyles.label }, "সময়"),
+                React.createElement("input", { style: admStyles.input, type: "time", value: time, onChange: (e) => setTime(e.target.value) }))),
+        React.createElement("label", { style: admStyles.label }, "নোট / বিস্তারিত"),
         React.createElement("input", { style: admStyles.input, value: note, onChange: (e) => setNote(e.target.value) }),
+        React.createElement("label", { style: admStyles.label }, "রিমাইন্ডার"),
+        React.createElement("select", { style: admStyles.input, value: reminderPreset, onChange: (e) => setReminderPreset(e.target.value) }, TASK_REMINDER_PRESETS.map((p) => React.createElement("option", { key: p.key, value: p.key }, p.label))),
+        reminderPreset === "custom" && React.createElement("div", { style: { display: "flex", gap: 8 } },
+            React.createElement("input", { style: Object.assign({}, admStyles.input, { flex: 1 }), type: "date", value: customReminderDate, onChange: (e) => setCustomReminderDate(e.target.value) }),
+            React.createElement("input", { style: Object.assign({}, admStyles.input, { flex: 1 }), type: "time", value: customReminderTime, onChange: (e) => setCustomReminderTime(e.target.value) })),
+        React.createElement("label", { style: admStyles.label }, "রিপিট"),
+        React.createElement("select", { style: admStyles.input, value: repeat, onChange: (e) => setRepeat(e.target.value) }, TASK_REPEAT_OPTIONS.map((r) => React.createElement("option", { key: r.key, value: r.key }, r.label))),
         err && React.createElement("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginBottom: 8 } }, err),
         React.createElement("button", { style: admStyles.addBtn, onClick: () => {
                 const amt = parseFloat(amount);
@@ -4191,7 +4225,8 @@ function TaxForm({ initial, onClose, onSave }) {
                     setErr("নাম ও সঠিক পরিমাণ দিন");
                     return;
                 }
-                onSave({ name: name.trim(), amount: amt, category: category || null, dueDate, note: note.trim() });
+                const { reminderDate, reminderTime } = computeTaskReminderFields(dueDate, time, reminderPreset, customReminderDate, customReminderTime);
+                onSave({ name: name.trim(), amount: amt, category: category || null, dueDate, time: time || null, note: note.trim(), repeat: repeat === "none" ? null : repeat, reminderDate, reminderTime });
             } }, "সংরক্ষণ করুন")));
 }
 // ---------------------------------------------------------------------
@@ -4247,8 +4282,9 @@ function TaxPanel({ onClose, taxes, onAdd, onUpdate, onDelete, onTogglePaid }) {
             React.createElement("div", { style: admStyles.row },
                 React.createElement("div", null,
                     React.createElement("div", { style: { fontWeight: 600 } }, t.name, t.paid && React.createElement("span", { style: { fontSize: 11, color: "var(--hk-success)", marginLeft: 6 } }, "\u2713 \u09AA\u09B0\u09BF\u09B6\u09CB\u09A7\u09BF\u09A4")),
-                    t.dueDate && React.createElement("div", { style: Object.assign(Object.assign({}, admStyles.muted), overdue ? { color: "var(--hk-danger)" } : {}) }, "শেষ তারিখ: ", formatDateBn(t.dueDate).full, overdue ? " (মেয়াদোত্তীর্ণ)" : ""),
+                    t.dueDate && React.createElement("div", { style: Object.assign(Object.assign({}, admStyles.muted), overdue ? { color: "var(--hk-danger)" } : {}) }, "শেষ তারিখ: ", formatDateBn(t.dueDate).full, t.time ? ` ${t.time}` : "", overdue ? " (মেয়াদোত্তীর্ণ)" : ""),
                     catLabel(t.category) && React.createElement("div", { style: admStyles.muted }, catLabel(t.category)),
+                    (t.reminderDate || t.repeat) && React.createElement("div", { style: { fontSize: 11, color: "var(--hk-text-muted)" } }, [t.reminderDate ? "🔔 রিমাইন্ডার সেট করা আছে" : null, t.repeat ? (TASK_REPEAT_OPTIONS.find((r) => r.key === t.repeat) || {}).label : null].filter(Boolean).join(" • ")),
                     React.createElement("div", { style: { fontWeight: 600, marginTop: 3 } }, formatTaka(t.amount))),
                 React.createElement("div", { style: { display: "flex", gap: 2, alignItems: "flex-start" } },
                     React.createElement("button", { style: admStyles.iconBtn, onClick: () => onTogglePaid(t.id) }, t.paid ? "\u21BA" : "\u2713"),
