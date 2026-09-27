@@ -221,4 +221,60 @@ t("dashboard: Rakib 320 + Abbu 350 = 670 (spec scenarios 4-6)", () => {
   assert.strictEqual(C.periodTotals(docs, "2026-09-24").thisMonth, 670);
   assert.deepStrictEqual(C.memberMonthTotals(docs, "2026-09"), { rakib: 320, abbu: 350 });
 });
+t("shopping list: valid draft cleans rows, drops a blank trailing row", () => {
+  const v = C.validateShoppingDraft({ title: "আজকের বাজার", assignedTo: "u2", items: [{ name: "চাল", quantity: "5", unit: "kg" }, { name: "", quantity: "" }] });
+  assert.ok(v.ok, JSON.stringify(v.errors));
+  assert.strictEqual(v.items.length, 1);
+  assert.strictEqual(v.items[0].quantity, 5);
+});
+t("shopping list: rejects no title / no assignee / no items", () => {
+  assert.ok(!C.validateShoppingDraft({ title: "", assignedTo: "u2", items: [{ name: "চাল" }] }).ok);
+  assert.ok(!C.validateShoppingDraft({ title: "X", assignedTo: null, items: [{ name: "চাল" }] }).ok);
+  assert.ok(!C.validateShoppingDraft({ title: "X", assignedTo: "u2", items: [] }).ok);
+});
+t("shopping list: pending count only counts unchecked items assigned to me", () => {
+  const lists = [
+    { id: "l1", assignedTo: "u2", items: [C.shoppingItem({ name: "চাল" }), C.shoppingItem({ name: "ডাল", checked: true })] },
+    { id: "l2", assignedTo: "u1", items: [C.shoppingItem({ name: "তেল" })] },
+  ];
+  assert.strictEqual(C.pendingShoppingCount(lists, "u2"), 1);
+  assert.strictEqual(C.pendingShoppingCount(lists, "u1"), 1);
+  assert.strictEqual(C.myShoppingLists(lists, "u2").length, 1);
+});
+t("member day breakdown: only nonzero days, sorted oldest first, matches the month total", () => {
+  const docs = [
+    { memberId: "u1", month: "2026-09", days: { "2026-09-24": 20, "2026-09-25": 40, "2026-09-26": 0 } },
+    { memberId: "u2", month: "2026-09", days: { "2026-09-24": 99 } },
+  ];
+  const b = C.memberDayBreakdown(docs, "2026-09", "u1");
+  assert.strictEqual(b.length, 2);
+  assert.strictEqual(b[0].date, "2026-09-24"); assert.strictEqual(b[0].amount, 20);
+  assert.strictEqual(b[1].date, "2026-09-25"); assert.strictEqual(b[1].amount, 40);
+  assert.strictEqual(b.reduce((s, e) => s + e.amount, 0), C.memberMonthTotals(docs, "2026-09").u1);
+});
+t("assignee frequency + sort: the person I make the most lists for comes first", () => {
+  const lists = [
+    { createdBy: "u1", assignedTo: "u2" }, { createdBy: "u1", assignedTo: "u2" },
+    { createdBy: "u1", assignedTo: "u3" }, { createdBy: "u1", assignedTo: "u1" }, // self — never counted
+    { createdBy: "u9", assignedTo: "u2" }, // someone else's list — doesn't count for u1
+  ];
+  const freq = C.assigneeFrequency(lists, "u1");
+  assert.strictEqual(freq.u2, 2); assert.strictEqual(freq.u3, 1); assert.strictEqual(freq.u1, undefined);
+  const members = [{ uid: "u3", name: "C" }, { uid: "u2", name: "B" }];
+  const sorted = C.sortByFrequencyDesc(members, freq);
+  assert.strictEqual(sorted[0].uid, "u2");
+});
+
+
+t("shopping reminder: fires once at the exact minute, not again the same day", () => {
+  const list = { status: "active", reminder: { enabled: true, time: "18:00", repeat: "daily" } };
+  assert.ok(C.shoppingReminderDue(list, "2026-09-25", "18:00"));
+  assert.ok(!C.shoppingReminderDue(list, "2026-09-25", "18:01"));
+  assert.ok(!C.shoppingReminderDue(Object.assign({}, list, { reminder: Object.assign({}, list.reminder, { lastFiredDate: "2026-09-25" }) }), "2026-09-25", "18:00"), "already fired today");
+  const once = { status: "active", reminder: { enabled: true, time: "09:00", repeat: "once", date: "2026-09-26" } };
+  assert.ok(!C.shoppingReminderDue(once, "2026-09-25", "09:00"), "wrong date for a one-time reminder");
+  assert.ok(C.shoppingReminderDue(once, "2026-09-26", "09:00"));
+  assert.ok(!C.shoppingReminderDue(Object.assign({}, list, { status: "done" }), "2026-09-25", "18:00"), "a finished list never reminds");
+});
+
 console.log(`\n${passed} passed${process.exitCode ? " — WITH FAILURES" : ""}`);
