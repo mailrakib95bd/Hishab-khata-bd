@@ -252,7 +252,29 @@
     setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1500);
   }
 
+  // Inside the Android APK (Capacitor WebView) blob downloads and
+  // window.print() don't work, so the PDF is written to the app cache and
+  // handed to the system share sheet (Save to Files / WhatsApp / Print…).
+  // Uses Capacitor's global plugin proxies — no bundler needed.
+  function isNative() {
+    const C = window.Capacitor;
+    return !!(C && typeof C.isNativePlatform === "function" && C.isNativePlatform());
+  }
+  function toBase64(bytes) {
+    let bin = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+  async function saveNative(bytes, filename) {
+    const P = window.Capacitor.Plugins || {};
+    if (!P.Filesystem || !P.Share) throw new Error("native plugins missing");
+    const res = await P.Filesystem.writeFile({ path: filename, data: toBase64(bytes), directory: "CACHE" });
+    await P.Share.share({ title: filename, url: res.uri, dialogTitle: "তালিকাটি সংরক্ষণ / প্রিন্ট করুন" });
+  }
+
   function printDraft(d) {
+    // on phones "print" = make the PDF and open the share/print sheet
+    if (isNative()) { downloadPdf(d).catch(() => {}); return; }
     const f = document.createElement("iframe");
     f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
     document.body.appendChild(f);
@@ -343,8 +365,10 @@
 
   async function downloadPdf(d) {
     const pages = await renderPdfPages(d);
+    const bytes = buildPdf(pages);
+    if (isNative()) { await saveNative(bytes, "khasra-khata_" + d.date + "_" + d.id + ".pdf"); return; }
     const safe = (d.name || "list").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40);
-    download(buildPdf(pages), "খসড়া-খাতা_" + safe + "_" + d.date + ".pdf");
+    download(bytes, "খসড়া-খাতা_" + safe + "_" + d.date + ".pdf");
   }
 
   /* ---------------- screens ---------------- */
@@ -511,5 +535,5 @@
         msg && h("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginTop: 6 } }, msg))));
   }
 
-  window.KhasraKhata = { Module: Module };
+  window.KhasraKhata = { Module: Module, _saveNative: saveNative, _isNative: isNative };
 })(typeof globalThis !== "undefined" ? globalThis : this);

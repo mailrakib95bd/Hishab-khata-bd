@@ -33,12 +33,20 @@
 মুছে ফেললে হিসাবও মুছে যাবে, তাই মাঝে মাঝে সেটিংস থেকে CSV এক্সপোর্ট করে
 ব্যাকআপ রাখা ভালো।
 
-## Play Store-এ APK হিসেবে দিতে চাইলে
-সরাসরি এই পরিবেশে APK তৈরি করা সম্ভব হয়নি (Android build টুলচেইন ও নেটওয়ার্ক
-এখানে নেই)। হোস্ট করার পর নিচের যেকোনো ফ্রি টুল দিয়ে এই PWA-কে APK-এ রূপান্তর
-করা যায়:
-- **PWABuilder** (pwabuilder.com) — লিংক দিলে এক ক্লিকে APK/AAB বানিয়ে দেয়।
-- **Capacitor** (capacitorjs.com) — বেশি কাস্টমাইজেশন দরকার হলে।
+## 📱 ফ্রী APK বানানো (GitHub Actions — নিজের পিসিতে Android Studio লাগে না)
+
+1. এই ফোল্ডারের সব ফাইল (লুকানো `.github/` ও `.gitignore` সহ) GitHub রিপোজিটরিতে আপলোড করুন।
+2. রিপোজিটরির **Actions** ট্যাব → **Build Android APK** → **Run workflow**।
+3. ৫–১০ মিনিট পর বিল্ড শেষ হলে সেই রানের পাতার নিচে **Artifacts → HishabKhata-App** থেকে `app-debug.apk` নামান।
+4. ফোনে APK খুলে ইনস্টল করুন (Settings-এ "Install unknown apps" চালু করতে হতে পারে)।
+
+কী হয় ভেতরে: `npm run build` শুধু ওয়েব-ফাইলগুলো `www/`-তে কপি করে এবং React লোকাল `vendor/`-এ বসায় (APK-তে CDN লাগে না); তারপর `cap add android` → `cap sync` → `gradlew assembleDebug`। `android/` ফোল্ডার প্রতিবার নতুন তৈরি হয়, তাই কমিট করতে হয় না।
+
+**জেনে রাখুন**
+- এটি **debug APK** — নিজের ফোনে/বন্ধুদের দিতে ঠিক আছে। Play Store-এর জন্য signed release বিল্ড আলাদা ধাপ।
+- Firebase (লগইন/ক্লাউড ব্যাকআপ) স্ক্রিপ্ট `gstatic.com` থেকে লোড হয়, তাই ওই ফিচারগুলোর জন্য ইন্টারনেট লাগবে; স্থানীয় হিসাব অফলাইনেও চলবে। Google Sign-In WebView-তে আলাদা কনফিগ ছাড়া কাজ নাও করতে পারে — ফোনে টেস্ট করে দেখতে হবে।
+- খসড়া খাতার প্রিন্ট/পিডিএফ APK-তে সিস্টেম শেয়ার-শিট খোলে (Files-এ সেভ, WhatsApp, প্রিন্ট)।
+- লোকালি বানাতে চাইলে: `npm install && npm run build && npx cap add android && npx cap sync android && cd android && ./gradlew assembleDebug` (Node 20+, JDK 17+)।
 
 ## Phase 2 — ক্লাউড অ্যাকাউন্ট / Backup চালু করা
 

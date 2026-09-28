@@ -68,7 +68,7 @@ const lastFocus = () => focusLog[focusLog.length - 1];
 const ls = {};
 const win = { location: { origin: "https://example.test" }, history: { pushState() {}, back() {} }, addEventListener() {}, removeEventListener() {}, localStorage: null };
 const ctxObj = { React, window: win, console, setTimeout, clearTimeout, Promise, Math, Date, Object, Array, JSON, Number, String, Set, Map, isNaN, parseFloat, parseInt, isFinite, Symbol, Error, Intl,
-  Uint8Array, Buffer };
+  Uint8Array, Buffer, btoa: (s) => Buffer.from(s, "binary").toString("base64") };
 win.localStorage = { getItem: (k) => (k in ls ? ls[k] : null), setItem: (k, v) => (ls[k] = String(v)), removeItem: (k) => delete ls[k] };
 ctxObj.window.React = React;
 vm.createContext(ctxObj);
@@ -151,6 +151,17 @@ assert(Module, "window.KhasraKhata.Module must be exported");
   // delete with confirmation
   await click("📜"); await click("বিস্তারিত দেখুন"); await click("🗑️ মুছুন"); has("নিশ্চিত? মুছে ফেলুন"); await click("নিশ্চিত? মুছে ফেলুন");
   assert.strictEqual(JSON.parse(ls["hisabkhata-khasra-v1:tester"]).length, 0); has("এখনও কোনো খসড়া সংরক্ষণ করা হয়নি"); ok("delete needs a second tap, then removes it");
+
+  // Android APK path: PDF goes to cache + system share sheet
+  const calls = [];
+  win.Capacitor = { isNativePlatform: () => true, Plugins: {
+    Filesystem: { writeFile: async (o) => { calls.push(["write", o]); return { uri: "file:///cache/" + o.path }; } },
+    Share: { share: async (o) => { calls.push(["share", o]); } } } };
+  assert.strictEqual(win.KhasraKhata._isNative(), true);
+  await win.KhasraKhata._saveNative(Uint8Array.from([37, 80, 68, 70]), "x.pdf");
+  assert.strictEqual(calls[0][1].directory, "CACHE"); assert.strictEqual(calls[0][1].data, Buffer.from("%PDF").toString("base64"));
+  assert.strictEqual(calls[1][1].url, "file:///cache/x.pdf"); ok("native APK: PDF written to cache, then system share sheet opened");
+  win.Capacitor = undefined; assert.strictEqual(win.KhasraKhata._isNative(), false); ok("in a normal browser it stays on the download path");
 
   console.log(`\n${n} passed`);
 })().catch((e) => { console.error("\nFAIL:", e.message); process.exit(1); });

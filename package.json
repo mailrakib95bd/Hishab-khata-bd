@@ -5,11 +5,17 @@
   "description": "হিসাব-খাতা Family Management PWA",
   "scripts": {
     "start": "npx serve .",
-    "test": "node tests/core.test.js && node tests/expense-sync.test.js && node tests/task-amount.test.js && node tests/tax-reminder.test.js && node tests/firebase-queries.test.js && node tests/ui-smoke.test.js"
+    "test": "node tests/core.test.js && node tests/expense-sync.test.js && node tests/task-amount.test.js && node tests/tax-reminder.test.js && node tests/firebase-queries.test.js && node tests/ui-smoke.test.js",
+    "build": "node scripts/build-web.js",
+    "android:sync": "npm run build && npx cap sync android"
   },
   "dependencies": {
     "@capacitor/android": "^7.4.0",
     "@capacitor/cli": "^7.4.0",
-    "@capacitor/core": "^7.4.0"
+    "@capacitor/core": "^7.4.0",
+    "@capacitor/filesystem": "^7.0.0",
+    "@capacitor/share": "^7.0.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   }
 }
