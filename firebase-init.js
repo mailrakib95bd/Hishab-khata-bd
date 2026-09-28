@@ -76,6 +76,8 @@ async function signInGoogle() {
   }
 }
 
+let famCache = { at: 0, uid: null, ids: [] };
+
 window.FB = {
   onAuthChange(cb) {
     return onAuthStateChanged(auth, cb);
@@ -179,9 +181,15 @@ window.FB = {
     return fref.id;
   },
 
+  // live family document (name / icon / settings) for everyone in the family
+  subscribeFamily(familyId, cb) {
+    return onSnapshot(doc(db, "families", familyId), (snap) => { if (snap.exists()) cb({ id: snap.id, ...snap.data() }); }, () => {});
+  },
+
   async updateFamily(familyId, patch) {
     const allowed = {};
-    ["name", "photoURL", "settings"].forEach((k) => { if (k in patch) allowed[k] = patch[k]; });
+    ["name", "photoURL", "settings"].forEach((k) => { if (k in patch && patch[k] !== undefined) allowed[k] = patch[k]; });
+    if (allowed.settings) allowed.settings = JSON.parse(JSON.stringify(allowed.settings)); // drops any undefined inside
     await updateDoc(doc(db, "families", familyId), { ...allowed, updatedAt: Date.now() });
   },
 
@@ -197,7 +205,7 @@ window.FB = {
         await b.commit();
       }
     };
-    for (const name of ["purchases", "priceHistory", "locations", "memberMonthly", "memberCategoryMonthly", "products", "categories", "budgets"]) {
+    for (const name of ["purchases", "priceHistory", "locations", "memberMonthly", "memberCategoryMonthly", "memberOtherMonthly", "products", "categories", "budgets"]) {
       const snap = await getDocs(collection(db, "families", familyId, name));
       await wipe(snap.docs.map((d) => d.ref));
     }
@@ -240,13 +248,14 @@ window.FB = {
   },
 
   // ---- invitations ----
-  async sendInvitation({ familyId, familyName, invitedEmail, relation, role, permissions }) {
+  async sendInvitation({ familyId, familyName, invitedEmail, relation, role, permissions, phone }) {
     const now = Date.now();
     const ref = await addDoc(collection(db, "invitations"), {
       familyId, familyName, invitedBy: auth.currentUser.uid,
       invitedByName: auth.currentUser.displayName || auth.currentUser.email || "",
       invitedEmail: String(invitedEmail).trim().toLowerCase(), relation, role,
       permissions: window.FBCore.normalizePermissions(permissions),
+      phone: String(phone || "").trim().slice(0, 20),
       status: "pending", createdAt: now, expiresAt: now + 7 * 24 * 60 * 60 * 1000,
     });
     return ref.id;
@@ -279,6 +288,7 @@ window.FB = {
       uid: u.uid, name: u.displayName || (u.email || "").split("@")[0], email: u.email || "",
       photoURL: u.photoURL || null, relation: invite.relation, role: invite.role,
       permissions: invite.permissions, status: "active", joinedAt: now, updatedAt: now, inviteId: invite.id,
+      phone: String(invite.phone || "").trim().slice(0, 20),
     });
     batch.update(doc(db, "families", invite.familyId), { memberUids: arrayUnion(u.uid), updatedAt: now });
     batch.update(doc(db, "invitations", invite.id), { status: "accepted", respondedAt: now });
@@ -405,8 +415,8 @@ window.FB = {
   // like monthlyStats above: seeing all members' docs, or only your own.
   subscribeMonthlyStats(familyId, months, { totals, categories }, cb) {
     const uid = auth.currentUser.uid;
-    const state = { monthly: [], cats: [] };
-    const emit = () => cb({ monthly: state.monthly, cats: state.cats });
+    const state = { monthly: [], cats: [], other: [] };
+    const emit = () => cb({ monthly: state.monthly, cats: state.cats, other: state.other });
     const watch = (coll, seeAll, key) => {
       if (seeAll) {
         return onSnapshot(query(collection(db, "families", familyId, coll), where("month", "in", months)), (snap) => {
@@ -424,7 +434,8 @@ window.FB = {
     };
     const stopMonthly = watch("memberMonthly", totals, "monthly");
     const stopCats = watch("memberCategoryMonthly", categories, "cats");
-    return () => { stopMonthly(); stopCats(); };
+    const stopOther = watch("memberOtherMonthly", totals, "other");
+    return () => { stopMonthly(); stopCats(); stopOther(); };
   },
 
   // price rows: by product and/or by month(s); mine only unless allowed to see all
@@ -467,23 +478,70 @@ window.FB = {
     return written;
   },
 
+  // Publishes THIS account's personal expense total (everything in the
+  // dashboard timeline except what came from Family Bazar, which is already
+  // counted there) for the given months, to every family it belongs to —
+  // so "কে কত খরচ করেছে" can show  বাজার + অন্যান্য = মোট. Members who hold the
+  // "মাসিক মোট" permission can see it (rules), nobody else. byMonth: {"2026-09": 6500}
+  async publishOtherExpense(byMonth) {
+    const u = auth.currentUser;
+    if (!u) return 0;
+    const now = Date.now();
+    if (!famCache.at || now - famCache.at > 10 * 60 * 1000 || famCache.uid !== u.uid) {
+      const snap = await getDocs(query(collection(db, "families"), where("memberUids", "array-contains", u.uid)));
+      famCache = { at: now, uid: u.uid, ids: snap.docs.map((d) => d.id) };
+    }
+    let wrote = 0;
+    for (const fid of famCache.ids) {
+      for (const m of Object.keys(byMonth)) {
+        try {
+          await setDoc(doc(db, "families", fid, "memberOtherMonthly", `${u.uid}_${m}`), { memberId: u.uid, month: m, total: Number(byMonth[m]) || 0, updatedAt: now });
+          wrote++;
+        } catch (e) { /* not (or no longer) a member here, or rules not published yet — harmless */ }
+      }
+    }
+    return wrote;
+  },
+
   // ---- shopping lists ---------------------------------------------------
   // A household "to-buy" list assigned to one member, with an optional
   // reminder. Small collection; the security rules already filter every
   // read down to lists this account created, is assigned, or manages, so a
   // plain collection read is enough (a `where` here couldn't add privacy
   // beyond what the rule already enforces).
+  // IMPORTANT: Firestore security rules are not filters. The rule lets you
+  // read a list only if you created it or it's assigned to you, so a query
+  // over the WHOLE collection is rejected outright for anyone but an
+  // owner/admin (that's why lists "weren't showing" for ordinary members).
+  // The query itself has to prove it: one query per condition, merged here.
   async familyShoppingLists(familyId) {
-    const snap = await getDocs(collection(db, "families", familyId, "shoppingLists"));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const uid = auth.currentUser.uid;
+    const col = collection(db, "families", familyId, "shoppingLists");
+    const [a, c] = await Promise.all([
+      getDocs(query(col, where("assignedTo", "==", uid))),
+      getDocs(query(col, where("createdBy", "==", uid))),
+    ]);
+    const map = {};
+    a.docs.concat(c.docs).forEach((d) => { map[d.id] = { id: d.id, ...d.data() }; });
+    return Object.values(map);
   },
 
-  // live — so a list made FOR someone (or the items in it) appears on that
-  // person's screen immediately, without them needing to reopen the app
+  // live version of the above — the person a list was made FOR (or who made
+  // it) sees it, and every later edit, immediately
   subscribeShoppingLists(familyId, cb) {
-    return onSnapshot(collection(db, "families", familyId, "shoppingLists"), (snap) => {
-      cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-    }, () => cb([]));
+    const uid = auth.currentUser.uid;
+    const col = collection(db, "families", familyId, "shoppingLists");
+    const parts = { a: [], c: [] };
+    const emit = () => {
+      const map = {};
+      parts.a.concat(parts.c).forEach((l) => { map[l.id] = l; });
+      cb(Object.values(map));
+    };
+    const grab = (key) => (snap) => { parts[key] = snap.docs.map((d) => ({ id: d.id, ...d.data() })); emit(); };
+    const fail = (key) => () => { parts[key] = []; emit(); };
+    const u1 = onSnapshot(query(col, where("assignedTo", "==", uid)), grab("a"), fail("a"));
+    const u2 = onSnapshot(query(col, where("createdBy", "==", uid)), grab("c"), fail("c"));
+    return () => { u1(); u2(); };
   },
 
   async saveShoppingList(familyId, list) {

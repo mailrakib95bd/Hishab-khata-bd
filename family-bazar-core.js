@@ -371,16 +371,6 @@
     });
     return out;
   }
-  // per-day amounts for one member in one month, days with spending only,
-  // oldest first — the raw material for the "২০+৪০=৬০" running-total
-  // display on the dashboard (formatting/Bengali digits is the UI's job)
-  function memberDayBreakdown(docs, month, memberId) {
-    const out = {};
-    (docs || []).filter((d) => d.month === month && d.memberId === memberId).forEach((d) => {
-      Object.keys(d.days || {}).forEach((date) => { out[date] = round2((out[date] || 0) + (d.days[date] || 0)); });
-    });
-    return Object.keys(out).filter((date) => out[date] > 0).sort().map((date) => ({ date, amount: out[date] }));
-  }
   function pctChange(cur, prev) {
     if (!prev || prev <= 0) return null;
     return Math.round(((cur - prev) / prev) * 100);
@@ -659,6 +649,12 @@
    * with an optional reminder. Pure helpers only; Firestore reads/writes
    * live in firebase-init.js, the screens in family-bazar.js.
    * ------------------------------------------------------------------ */
+  // optional mobile number: digits with an optional leading +, spaces/dashes allowed
+  function isValidPhone(v) {
+    const d = String(v || "").replace(/[\s-]/g, "");
+    return /^\+?\d{7,15}$/.test(d);
+  }
+
   function shoppingItem(row) {
     const name = String((row && row.name) || "").trim();
     return {
@@ -736,7 +732,7 @@
     priceRowsFromPurchase, locationDocsFromPurchase, sortPriceRows, analyzePrices, priceMovers, locationComparison, matches,
     inviteState,
     buildPurchase, planPurchaseChange, budgetCrossing, canGrant, visibilityFor,
-    shoppingItem, validateShoppingDraft, shoppingReminderDue, pendingShoppingItems, myShoppingLists, pendingShoppingCount,
-    memberDayBreakdown, assigneeFrequency, sortByFrequencyDesc,
+    isValidPhone, shoppingItem, validateShoppingDraft, shoppingReminderDue, pendingShoppingItems, myShoppingLists, pendingShoppingCount,
+    assigneeFrequency, sortByFrequencyDesc,
   };
 });

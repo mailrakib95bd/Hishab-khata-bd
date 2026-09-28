@@ -249,6 +249,7 @@ service cloud.firestore {
         request.resource.data.invitedEmail is string &&
         request.resource.data.invitedEmail == request.resource.data.invitedEmail.lower() &&
         request.resource.data.invitedEmail.matches("^[^@ ]+@[^@ ]+[.][^@ ]{2,}$") &&
+        (!("phone" in request.resource.data) || (request.resource.data.phone is string && request.resource.data.phone.size() <= 20)) &&
         request.resource.data.expiresAt <= request.time.toMillis() + 2592000000 &&
         canManage(request.resource.data.familyId) &&
         validRoleFor(request.resource.data.familyId, request.resource.data.role) &&
@@ -353,6 +354,22 @@ service cloud.firestore {
       allow create, update: if canWrite(familyId) &&
         docId.matches(request.auth.uid + "_[0-9]{4}-[0-9]{2}") &&
         request.resource.data.memberId == request.auth.uid;
+      allow delete: if isMember(familyId) && (docId.matches(request.auth.uid + "_.*") || isOwner(familyId));
+    }
+
+    // each member's own PERSONAL monthly expense total (everything in their
+    // dashboard timeline except what Family Bazar already counts), published
+    // by that member's app so "কে কত খরচ করেছে" can show বাজার + অন্যান্য = মোট.
+    // Same visibility as the other monthly totals: yourself, or anyone holding
+    // the monthlyTotal permission. Any active member (even a viewer) may
+    // publish their OWN row — it isn't family purchase data.
+    match /families/{familyId}/memberOtherMonthly/{docId} {
+      allow read: if isMember(familyId) &&
+        (docId.matches(request.auth.uid + "_.*") || hasPerm(familyId, "monthlyTotal"));
+      allow create, update: if isMember(familyId) &&
+        docId.matches(request.auth.uid + "_[0-9]{4}-[0-9]{2}") &&
+        request.resource.data.memberId == request.auth.uid &&
+        request.resource.data.total is number && request.resource.data.total >= 0;
       allow delete: if isMember(familyId) && (docId.matches(request.auth.uid + "_.*") || isOwner(familyId));
     }
 

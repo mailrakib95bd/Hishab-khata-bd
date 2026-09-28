@@ -67,28 +67,31 @@
   const activeKey = (uid) => `hk-fb-active:${uid}`;
 
   /* ------------------------------------------------------------------ *
-   * back-button handling for the ONE sheet this module shows at a time.
+   * back-button handling for a STACK of screens (sheets opened from other
+   * sheets, plus the "আরও" sub-views). One browser-history entry is kept
+   * per level, so the phone's back button — like the on-screen ‹ — goes
+   * back exactly ONE level instead of dumping the person on the dashboard.
    * Uses the capture phase + stopImmediatePropagation so the app's own
    * overlay handlers (e.g. the one that closes this whole module when it's
-   * opened from the ☰ menu) never see the same "back" press.
+   * opened from the ☰ menu) never see a "back" press this module handled.
    * ------------------------------------------------------------------ */
-  function useSheetBack(isOpen, onClose) {
-    const st = useRef({ pushed: false, swallow: 0 });
-    const closeRef = useRef(onClose);
-    closeRef.current = onClose;
+  function useSheetBack(depth, onPop) {
+    const st = useRef({ pushed: 0, swallow: 0 });
+    const popRef = useRef(onPop);
+    popRef.current = onPop;
     useEffect(() => {
       const s = st.current;
-      if (isOpen && !s.pushed) { window.history.pushState({ hkFbSheet: true }, ""); s.pushed = true; }
-      else if (!isOpen && s.pushed) { s.pushed = false; s.swallow++; window.history.back(); }
-    }, [isOpen]);
+      while (s.pushed < depth) { window.history.pushState({ hkFbLevel: s.pushed + 1 }, ""); s.pushed++; }
+      if (s.pushed > depth) { const n = s.pushed - depth; s.pushed = depth; s.swallow++; window.history.go(-n); }
+    }, [depth]);
     useEffect(() => {
-      const onPop = (e) => {
+      const onPopState = (e) => {
         const s = st.current;
         if (s.swallow > 0) { s.swallow--; e.stopImmediatePropagation(); return; }
-        if (s.pushed) { s.pushed = false; e.stopImmediatePropagation(); closeRef.current(); }
+        if (s.pushed > 0) { s.pushed--; e.stopImmediatePropagation(); popRef.current(); }
       };
-      window.addEventListener("popstate", onPop, true);
-      return () => window.removeEventListener("popstate", onPop, true);
+      window.addEventListener("popstate", onPopState, true);
+      return () => window.removeEventListener("popstate", onPopState, true);
     }, []);
   }
 
@@ -218,7 +221,7 @@
    * data hook — loads only what THIS member is allowed to see
    * ------------------------------------------------------------------ */
   const safe = async (p, fallback) => { try { return await p; } catch (e) { return fallback; } };
-  const EMPTY_FAM = { loading: false, error: "", members: [], budget: null, categories: [], products: [], stats: { monthly: [], cats: [] }, prices: [], shoppingLists: [] };
+  const EMPTY_FAM = { loading: false, error: "", members: [], budget: null, categories: [], products: [], stats: { monthly: [], cats: [], other: [] }, prices: [], shoppingLists: [] };
 
   function useFamilyData(user) {
     const uid = user && user.uid;
@@ -311,8 +314,28 @@
     useEffect(() => { if (uid) loadTop(); }, [uid]);
     useEffect(() => { if (activeId) loadStatic(activeId); }, [activeId, loadStatic]);
 
-    const family = top.families.find((f) => f.id === activeId) || null;
-    return { top, family, activeId, setActive, fam, myMember, vis, loadTop, reload: () => loadStatic(activeId) };
+    // live family doc — a rename / new icon shows on every member's screen
+    // at once (and on the owner's own, without waiting for a reload)
+    const [liveFamily, setLiveFamily] = useState(null);
+    useEffect(() => {
+      setLiveFamily(null);
+      if (!activeId || !window.FB || !window.FB.subscribeFamily) return undefined;
+      return window.FB.subscribeFamily(activeId, (f) => setLiveFamily(f));
+    }, [activeId]);
+    const topFamily = top.families.find((f) => f.id === activeId) || null;
+    const family = topFamily && liveFamily ? Object.assign({}, topFamily, liveFamily) : topFamily;
+
+    // Someone who left (or was removed) keeps their old aggregate rows in
+    // Firestore — their history is kept — but their money must NOT count in
+    // the family's totals any more, so every figure is restricted to the
+    // people who are members right now.
+    const famOut = useMemo(() => {
+      const ids = new Set(fam.members.filter((m) => Core.isActive(m)).map((m) => m.uid));
+      if (!ids.size) return fam;
+      const keep = (arr) => (arr || []).filter((d) => ids.has(d.memberId));
+      return Object.assign({}, fam, { stats: { monthly: keep(fam.stats.monthly), cats: keep(fam.stats.cats), other: keep(fam.stats.other) } });
+    }, [fam]);
+    return { top, family, activeId, setActive, fam: famOut, myMember, vis, loadTop, reload: () => loadStatic(activeId) };
   }
 
   /* ------------------------------------------------------------------ *
@@ -431,9 +454,14 @@
       const docs = fam.stats.monthly;
       const totals = Core.periodTotals(docs, t);
       const byMember = Core.memberMonthTotals(docs, cm);
+      // other (non-bazar) expenses from each member's own dashboard timeline;
+      // for ME the app passes the live local figure, so it's never out of date
+      const other = {}; const hasOther = {};
+      (fam.stats.other || []).filter((d) => d.month === cm).forEach((d) => { other[d.memberId] = Core.round2((other[d.memberId] || 0) + (Number(d.total) || 0)); hasOther[d.memberId] = true; });
+      if (ctx.myOther && ctx.uid) { other[ctx.uid] = Core.round2(ctx.myOther[cm] || 0); hasOther[ctx.uid] = true; }
       const budget = fam.budget && fam.budget.monthlyAmount ? Core.budgetStatus(fam.budget.monthlyAmount, totals.thisMonth) : null;
-      return { t, cm, pm, docs, totals, byMember, budget, scopeAll: vis.totals };
-    }, [fam.stats, fam.budget, vis.totals]);
+      return { t, cm, pm, docs, totals, byMember, other, hasOther, budget, scopeAll: vis.totals };
+    }, [fam.stats, fam.budget, vis.totals, ctx.myOther, ctx.uid]);
   }
 
   function BudgetBanner({ budget, scopeAll, onOpen }) {
@@ -472,8 +500,15 @@
     const has = N.docs.length > 0 && (N.totals.thisMonth > 0 || N.totals.prevMonth > 0 || daily.some((d) => d.value > 0));
     const pct = Core.pctChange(N.totals.thisMonth, N.totals.prevMonth);
     const scope = vis.totals ? "পরিবারে" : "আপনার";
-    const rows = ctx.fam.members.map((m) => ({ m, v: vis.totals || m.uid === uid ? N.byMember[m.uid] || 0 : null })).sort((a, b) => (b.v == null ? -1 : b.v) - (a.v == null ? -1 : a.v));
-    const maxV = Math.max(1, ...rows.map((r) => r.v || 0));
+    // per person: বাজার (Family Bazar) + অন্যান্য (their own dashboard timeline) = মোট
+    const rows = ctx.fam.members.map((m) => {
+      const seen = vis.totals || m.uid === uid;
+      const v = seen ? N.byMember[m.uid] || 0 : null;
+      const o = seen && N.hasOther[m.uid] ? N.other[m.uid] || 0 : null;
+      return { m, v, o, total: v == null ? null : Core.round2(v + (o || 0)) };
+    }).sort((a, b) => (b.total == null ? -1 : b.total) - (a.total == null ? -1 : a.total));
+    const maxV = Math.max(1, ...rows.map((r) => r.total || 0));
+    const anyMember = rows.some((r) => (r.total || 0) > 0);
 
     const myLists = Core.myShoppingLists(fam.shoppingLists, uid);
     const myPending = myLists.reduce((s, l) => s + Core.pendingShoppingItems(l).length, 0);
@@ -507,18 +542,17 @@
         h(HBar, { pct: N.budget.pct, color: LEVEL[N.budget.level].color }),
         h("div", { style: Object.assign({}, S.row, { marginTop: 8, fontSize: 13.5 }) }, h("span", null, `খরচ ${taka(N.budget.spent)}`), h("span", null, `বাকি ${taka(N.budget.remaining)}`), h("b", null, `${bn(N.budget.pct)}%`))),
       fam.budget && !N.scopeAll && h("div", { style: S.card }, h("div", { style: S.muted }, `মাসিক বাজেট ${taka(fam.budget.monthlyAmount)} — মোট খরচ দেখার অনুমতি না থাকায় কতটা খরচ হয়েছে দেখানো যাচ্ছে না।`)),
-      has && h("div", { style: S.card },
+      (has || anyMember) && h("div", { style: S.card },
         h("div", { style: S.h2 }, "কে কত খরচ করেছে"),
-        rows.map(({ m, v }) => {
-          const days = v != null ? Core.memberDayBreakdown(fam.stats.monthly, N.cm, m.uid) : [];
-          return h("div", { key: m.uid, style: { marginBottom: 12 } },
-            h("div", { style: Object.assign({}, S.row, { marginBottom: 4 }) },
-              h("span", { style: { display: "flex", alignItems: "center", gap: 8 } }, h(Avatar, { m, size: 26 }), h("span", { style: { fontWeight: 600 } }, m.uid === uid ? `${m.name} (আপনি)` : m.name)),
-              v == null ? h("span", { style: S.muted }, "🔒 অনুমতি নেই") : h("b", null, taka(v))),
-            v != null && h(HBar, { pct: (v / maxV) * 100 }),
-            days.length >= 2 && h("div", { style: Object.assign({}, S.muted, { marginTop: 3, fontSize: 11.5, wordBreak: "break-word" }) },
-              days.map((d) => bn(d.amount)).join(" + ") + ` = ${taka(v)}`));
-        })),
+        rows.map(({ m, v, o, total }) => h("div", { key: m.uid, style: { marginBottom: 12 } },
+          h("div", { style: Object.assign({}, S.row, { marginBottom: 4 }) },
+            h("span", { style: { display: "flex", alignItems: "center", gap: 8 } }, h(Avatar, { m, size: 26 }), h("span", { style: { fontWeight: 600 } }, m.uid === uid ? `${m.name} (আপনি)` : m.name)),
+            total == null ? h("span", { style: S.muted }, "🔒 অনুমতি নেই") : h("b", null, taka(total))),
+          total != null && h(HBar, { pct: (total / maxV) * 100 }),
+          total != null && h("div", { style: Object.assign({}, S.muted, { marginTop: 3, fontSize: 12, wordBreak: "break-word" }) },
+            o == null
+              ? `${taka(v)} ফ্যামিলি বাজার (অন্যান্য খরচ এখনো সিঙ্ক হয়নি)`
+              : `${taka(v)} ফ্যামিলি বাজার + ${taka(o)} অন্যান্য খরচ = ${taka(total)}`)))),
       has && h("div", { style: S.card }, h("div", { style: S.h2 }, "গত ১৪ দিনের খরচ"), h(BarChart, { data: daily, labelEvery: 2 })),
       (vis.prices || movers.length > 0) && h("div", { style: S.card },
         h("div", { style: S.h2 }, "কোন পণ্যের দাম বাড়ল/কমল"),
@@ -620,13 +654,14 @@
         rememberPrefs(uid, p);
         ctx.afterPurchaseChange(old, p);
         if (fromList) {
-          // buying from a list goes back to that list (with the bought item
-          // now gone, and whatever's left still to buy) instead of dumping
-          // the person straight back on the dashboard
+          // bought from a list: drop the bought item, then go back ONE level —
+          // to that same list (still open underneath), now showing what's left
           try { await window.FB.removeShoppingItems(ctx.familyId, fromList.listId, fromList.itemIds); } catch (e) { /* list may already be gone/changed — harmless */ }
-          ctx.openSheet({ type: "shopping-detail", listId: fromList.listId });
+          close();
+        } else if (initial) {
+          ctx.closeAll(); // edited from the details page: details would show the OLD data, so leave both
         } else {
-          close(true);
+          close();
         }
       } catch (e) { setErrors([friendlyError(e)]); busyRef.current = false; setBusy(false); }
     };
@@ -1093,7 +1128,6 @@
     const [perms, setPerms] = useState(m ? Core.normalizePermissions(m.permissions) : {});
     const [name, setName] = useState(m ? m.name : "");
     const [phone, setPhone] = useState(m ? m.phone || "" : "");
-    const [infoRelation, setInfoRelation] = useState(m ? (m.relation === "self" ? "" : m.relation) : "");
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState("");
     const N = useNumbers(ctx);
@@ -1111,7 +1145,8 @@
     };
     const saveInfo = () => {
       if (!name.trim()) { setErr("নাম লিখুন"); return; }
-      run(() => window.FB.updateFamilyMember(ctx.familyId, m.uid, { name: name.trim(), phone: phone.trim(), relation: infoRelation.trim() }), "তথ্য সংরক্ষিত হয়েছে");
+      if (phone.trim() && !Core.isValidPhone(phone)) { setErr("মোবাইল নাম্বার সঠিক নয় (যেমন: 01712345678)"); return; }
+      run(() => window.FB.updateFamilyMember(ctx.familyId, m.uid, { name: name.trim(), phone: phone.trim() }), "তথ্য সংরক্ষিত হয়েছে");
     };
     const changeRole = (r) => {
       setRole(r);
@@ -1142,7 +1177,6 @@
         h("div", { style: S.card },
           h("label", { style: S.label }, "নাম"), h("input", { style: S.input, value: name, maxLength: 40, onChange: (e) => setName(e.target.value) }),
           h("label", { style: S.label }, "মোবাইল নাম্বার (ঐচ্ছিক)"), h("input", { style: S.input, type: "tel", placeholder: "০১XXXXXXXXX", value: phone, maxLength: 20, onChange: (e) => setPhone(e.target.value) }),
-          h("label", { style: S.label }, "সম্পর্ক"), h(RelationPicker, { value: infoRelation, onChange: setInfoRelation }),
           h("button", { style: S.btn2, disabled: busy || !name.trim(), onClick: saveInfo }, "তথ্য সংরক্ষণ"))),
       canEdit && h("div", null,
         h("div", { style: S.h2 }, "সম্পর্ক ও ভূমিকা"),
@@ -1163,6 +1197,7 @@
     const { me, fam } = ctx;
     const roles = Core.assignableRoles(me);
     const [email, setEmail] = useState("");
+    const [phone, setPhone] = useState("");
     const [relation, setRelation] = useState("brother");
     const [role, setRole] = useState("member");
     const [perms, setPerms] = useState(() => { const p = Core.permissionPreset("member"), o = {}; Core.PERMISSION_KEYS.forEach((k) => (o[k] = p[k] && (Core.isOwner(me) || Core.hasPerm(me, k)))); return o; });
@@ -1175,12 +1210,13 @@
       const e = email.trim().toLowerCase();
       if (!Core.isValidEmail(e)) { setErr("সঠিক Gmail / ইমেইল ঠিকানা লিখুন"); return; }
       if (!relation.trim()) { setErr("সম্পর্ক বেছে নিন"); return; }
+      if (phone.trim() && !Core.isValidPhone(phone)) { setErr("মোবাইল নাম্বার সঠিক নয় (যেমন: 01712345678)"); return; }
       if (fam.members.some((m) => (m.email || "").toLowerCase() === e)) { setErr("এই ইমেইলের সদস্য আগে থেকেই পরিবারে আছেন"); return; }
       setBusy(true); setErr("");
       try {
         const existing = await window.FB.familySentInvitations(ctx.familyId);
         if (existing.some((i) => i.invitedEmail === e && Core.inviteState(i) === "pending")) { setErr("এই ইমেইলে আগেই একটি Invitation পাঠানো আছে"); setBusy(false); return; }
-        await window.FB.sendInvitation({ familyId: ctx.familyId, familyName: ctx.family.name, invitedEmail: e, relation: relation.trim(), role, permissions: Core.normalizePermissions(perms) });
+        await window.FB.sendInvitation({ familyId: ctx.familyId, familyName: ctx.family.name, invitedEmail: e, relation: relation.trim(), role, permissions: Core.normalizePermissions(perms), phone: phone.trim() });
         ctx.bumpInvites();
         setDone(e);
       } catch (x) { setErr(friendlyError(x)); }
@@ -1195,6 +1231,8 @@
     return h(Sheet, { title: "সদস্যকে Invite করুন", onClose: close, footer: h("div", null, err && h("div", { style: { color: "var(--hk-danger)", fontSize: 13, marginBottom: 8 } }, err), h("button", { style: S.btn, disabled: busy, onClick: submit }, busy ? "পাঠানো হচ্ছে…" : "Invitation পাঠান")) },
       h("label", { style: S.label }, "Gmail / Google ইমেইল *"),
       h("input", { style: S.input, type: "email", inputMode: "email", autoCapitalize: "none", placeholder: "abbu@gmail.com", value: email, onChange: (e) => setEmail(e.target.value) }),
+      h("label", { style: S.label }, "মোবাইল নাম্বার (ঐচ্ছিক)"),
+      h("input", { style: S.input, type: "tel", inputMode: "tel", placeholder: "০১XXXXXXXXX", value: phone, maxLength: 20, onChange: (e) => setPhone(e.target.value) }),
       h("label", { style: S.label }, "সম্পর্ক"), h(RelationPicker, { value: relation, onChange: setRelation }),
       h("label", { style: S.label }, "ভূমিকা"),
       h("select", { style: S.input, value: role, onChange: (e) => changeRole(e.target.value) }, roles.map((r) => h("option", { key: r, value: r }, `${Core.ROLES[r].label} — ${Core.ROLES[r].hint}`))),
@@ -1472,18 +1510,27 @@
     return children;
   }
 
-  function Module({ user, onClose, mode, onExpenseSync }) {
+  function Module({ user, onClose, mode, onExpenseSync, otherByMonth }) {
     const embedded = mode === "embedded";
     const D = useFamilyData(user);
     const [tab, setTab] = useState("home");
     const [moreView, setMoreView] = useState(null);
-    const [sheet, setSheet] = useState(null);
+    // a STACK, not a single slot: opening a sheet from a sheet pushes, and
+    // back/close pops to the previous one (see useSheetBack above)
+    const [stack, setStack] = useState([]);
+    const sheet = stack.length ? stack[stack.length - 1] : null;
+    const setSheet = useCallback((d) => setStack((s) => (d ? s.concat([d]) : [])), []);
     const [purchaseTick, setPurchaseTick] = useState(0);
     const [inviteTick, setInviteTick] = useState(0);
     const [toastObj, toast] = useToast();
     const ctxRef = useRef({});
-    const closeSheet = useCallback(() => setSheet(null), []);
-    useSheetBack(!!sheet, closeSheet);
+    const closeSheet = useCallback(() => setStack((s) => s.slice(0, -1)), []);
+    const closeAll = useCallback(() => setStack([]), []);
+    // the "আরও" sub-views (পণ্য তালিকা, ক্যাটাগরি, খুঁজুন, বাজেট) are a level too
+    const moreLevel = tab === "more" && !!moreView ? 1 : 0;
+    useSheetBack(stack.length + moreLevel, () => {
+      if (stack.length) closeSheet(); else if (moreLevel) setMoreView(null);
+    });
     const uid = user && user.uid;
     const cm = Core.monthOf(today());
 
@@ -1518,11 +1565,11 @@
       uid, user, familyId: D.activeId, activeId: D.activeId, families: D.top.families, family: D.family, incoming: D.top.incoming,
       emailVerified: !!(window.FB && window.FB.emailVerified && window.FB.emailVerified()),
       fam: D.fam, vis: D.vis, me: D.myMember, purchaseTick, inviteTick, prevMonthKey: Core.addMonths(cm, -1),
-      toast, openSheet: setSheet, loadTop: D.loadTop, reload: D.reload,
-      setActive: (id) => { D.setActive(id); setTab("home"); setMoreView(null); },
+      myOther: otherByMonth || null, toast, openSheet: setSheet, closeAll, loadTop: D.loadTop, reload: D.reload,
+      setActive: (id) => { D.setActive(id); setStack([]); setTab("home"); setMoreView(null); },
       goMore: (v) => { setTab("more"); setMoreView(v); },
       bumpInvites: () => setInviteTick((n) => n + 1),
-      afterAccept: async (fid) => { await D.loadTop(fid); D.setActive(fid); setTab("home"); },
+      afterAccept: async (fid) => { await D.loadTop(fid); D.setActive(fid); setStack([]); setTab("home"); },
       afterPurchaseChange: (oldP, newP) => {
         const amount = D.fam.budget && D.fam.budget.monthlyAmount;
         let lvl = null;

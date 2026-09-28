@@ -1537,6 +1537,36 @@ function App() {
         if (next !== transactions) setTransactions(next);
         if (next !== transactions || cats !== expenseCats) persistAll(Object.assign({ transactions: next }, cats !== expenseCats ? { expenseCats: cats } : {}));
     };
+    // Personal (non-Family-Bazar) expenses per month, straight from the
+    // dashboard timeline. Family Bazar purchases are already in the timeline
+    // as synced transactions (familyPurchaseId) — they're left out here so the
+    // family view can show  বাজার + অন্যান্য  without counting anything twice.
+    const otherExpenseByMonth = useMemo(() => {
+        const out = {};
+        transactions.forEach((t) => {
+            if (t.type !== "expense" || t.familyPurchaseId) return;
+            const m = String(t.date || "").slice(0, 7);
+            if (m.length === 7) out[m] = Math.round(((out[m] || 0) + (Number(t.amount) || 0)) * 100) / 100;
+        });
+        return out;
+    }, [transactions]);
+    // publish this month's + last month's figure to the families this Google
+    // account belongs to (members with the "মাসিক মোট" permission can see it)
+    const lastPublishedOther = useRef("");
+    useEffect(() => {
+        if (!user || !window.FB || !window.FB.publishOtherExpense) return undefined;
+        const now = new Date();
+        const cm = todayStr().slice(0, 7);
+        const pmDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const pm = `${pmDate.getFullYear()}-${String(pmDate.getMonth() + 1).padStart(2, "0")}`;
+        const payload = { [cm]: otherExpenseByMonth[cm] || 0, [pm]: otherExpenseByMonth[pm] || 0 };
+        const key = user.uid + JSON.stringify(payload);
+        if (key === lastPublishedOther.current) return undefined;
+        const timer = setTimeout(() => {
+            window.FB.publishOtherExpense(payload).then(() => { lastPublishedOther.current = key; }).catch(() => { });
+        }, 1500);
+        return () => clearTimeout(timer);
+    }, [otherExpenseByMonth, user && user.uid]);
     /* ---------------- family management ---------------- */
     const addFamilyMember = (member) => {
         const next = [...familyMembers, Object.assign(Object.assign({}, member), { id: uid(), createdAt: Date.now() })];
@@ -2083,7 +2113,7 @@ function App() {
                     }, onTransfer: () => setShowTransfer(true), onTransferHistory: () => setShowTransferHistory(true), profileName: profileName, taxes: taxes, bazarItems: bazarItems })),
                 tab === "timeline" && (React.createElement(Timeline, { transactions: transactions, onOpenTx: (t) => setEditingTx(t) })),
                 tab === "debts" && (React.createElement(DebtsView, { debts: debts, onOpenDebt: (d) => setEditingDebt(d), onAddDebt: () => setShowAddDebt(true) })),
-                tab === "family" && (React.createElement(FamilyHub, { user: user, onExpenseSync: syncFamilyBazarExpense, legacyProps: { familyMembers: familyMembers, bazarItems: bazarItems, transactions: transactions, onAddMember: addFamilyMember, onUpdateMember: updateFamilyMember, onDeleteMember: deleteFamilyMember, onAddBazarItem: addBazarItem, onUpdateBazarItem: updateBazarItem, onDeleteBazarItem: deleteBazarItem, onAddBazarItemAsExpense: addBazarItemAsExpense } })),
+                tab === "family" && (React.createElement(FamilyHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth, legacyProps: { familyMembers: familyMembers, bazarItems: bazarItems, transactions: transactions, onAddMember: addFamilyMember, onUpdateMember: updateFamilyMember, onDeleteMember: deleteFamilyMember, onAddBazarItem: addBazarItem, onUpdateBazarItem: updateBazarItem, onDeleteBazarItem: deleteBazarItem, onAddBazarItemAsExpense: addBazarItemAsExpense } })),
                 tab === "reports" && React.createElement(Reports, { transactions: transactions, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
                 tab === "search" && (React.createElement(SearchView, { transactions: transactions, accounts: accounts, onOpenTx: (t) => setEditingTx(t), seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts, debts: debts }))),
             (tab === "dashboard" || tab === "timeline" || tab === "debts") && (React.createElement("button", { style: styles.fab, onClick: () => (tab === "debts" ? setShowAddDebt(true) : setShowAdd(true)), "aria-label": tab === "debts" ? "নতুন দেনা-পাওনা যোগ করুন" : "নতুন লেনদেন যোগ করুন" }, "+")),
@@ -2175,7 +2205,7 @@ function App() {
             showFAQ && React.createElement(FAQModal, { onClose: () => closeMenuPanel(setShowFAQ), faqCloud: faqCloud }),
             showTaxPanel && (React.createElement(TaxPanel, { onClose: () => closeMenuPanel(setShowTaxPanel), taxes: taxes, onAdd: addTax, onUpdate: updateTax, onDelete: deleteTax, onTogglePaid: toggleTaxPaid })),
             showAccountPanel && (React.createElement(AccountPanel, { onClose: () => closeMenuPanel(setShowAccountPanel), dynamicAccountBalances: dynamicAccountBalances, onAdd: addUserAccount, onUpdate: updateUserAccount, onDelete: deleteUserAccount, onToggleActive: toggleUserAccountActive, onViewTransactions: (id) => { setShowAccountPanel(false); setSearchSeed({ accountId: id, ts: Date.now() }); setTab("search"); } })),
-            showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user, onExpenseSync: syncFamilyBazarExpense }),
+            showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth }),
             showNotificationCenter && (React.createElement(NotificationCenter, {
                 onClose: () => closeMenuPanel(setShowNotificationCenter),
                 notices: notices, dailyMessages: dailyMessages, tasks: tasks, debts: debts,
@@ -4236,17 +4266,17 @@ function TaxForm({ initial, onClose, onSave }) {
 //   • ☰ menu → "ফ্যামিলি বাজার"  → full-screen (mode "full")
 //   • bottom-nav "ফ্যামিলি" tab   → FamilyHub below (mode "embedded")
 // ---------------------------------------------------------------------
-function FamilyBazarModule({ onClose, user, onExpenseSync }) {
+function FamilyBazarModule({ onClose, user, onExpenseSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
     if (!Mod) {
         return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "🛒 ফ্যামিলি বাজার" },
             React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি বাজার লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
     }
-    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", onExpenseSync: onExpenseSync });
+    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth });
 }
 // The Family tab: the shared, multi-account Family Bazar (default) plus the
 // original personal family list / bazar list, kept exactly as it was.
-function FamilyHub({ user, legacyProps, onExpenseSync }) {
+function FamilyHub({ user, legacyProps, onExpenseSync, otherByMonth }) {
     const [part, setPart] = useState(() => { try { return localStorage.getItem("hk-family-hub") === "personal" ? "personal" : "bazar"; } catch (e) { return "bazar"; } });
     const pick = (k) => { setPart(k); try { localStorage.setItem("hk-family-hub", k); } catch (e) { /* ignore */ } };
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
@@ -4255,7 +4285,7 @@ function FamilyHub({ user, legacyProps, onExpenseSync }) {
         React.createElement("div", { style: { display: "flex", gap: 4, background: "var(--hk-card)", border: "1px solid var(--hk-border)", borderRadius: 12, padding: 4, margin: "0 0 12px" } },
             seg("bazar", "🛒 ফ্যামিলি বাজার"), seg("personal", "📝 ব্যক্তিগত তালিকা")),
         part === "personal" ? React.createElement(FamilyView, legacyProps)
-            : Mod ? React.createElement(Mod, { user: user, mode: "embedded", onExpenseSync: onExpenseSync })
+            : Mod ? React.createElement(Mod, { user: user, mode: "embedded", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth })
                 : React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি বাজার লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
 }
 
