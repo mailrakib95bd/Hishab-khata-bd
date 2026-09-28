@@ -1,15 +1,15 @@
-// Tests the optional Amount/টাকা field on personal Tasks: addTask should
-// accept a numeric string, an empty string, or an invalid string and always
-// store either a clean number or null — and the old plain-string quick-add
-// call (typeof data === "string") must keep working unchanged. Runs the
-// exact source straight out of app.js so this can never silently drift.
+// The optional পরিমাণ/টাকা field was REMOVED from personal Tasks. This test
+// makes sure it stays gone: addTask must never store an `amount`, even if an
+// old caller still passes one, and the plain-string quick add keeps working.
+// Runs the exact source straight out of app.js so it can never drift.
 "use strict";
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 const assert = require("assert");
 
-const src = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+const appPath = fs.existsSync(path.join(__dirname, "app.js")) ? path.join(__dirname, "app.js") : path.join(__dirname, "..", "app.js");
+const src = fs.readFileSync(appPath, "utf8");
 const START = "const addTask = (data) => {";
 const END = "const updateTask = (id, patch) => {";
 const start = src.indexOf(START);
@@ -37,30 +37,30 @@ function makeState() {
   return { state, add: (data) => ctx.addTask(data) };
 }
 
-t("a numeric amount string is stored as a number", () => {
+t("a task never stores an amount, even if the caller passes one", () => {
   const { state, add } = makeState();
   add({ text: "দুধ কিনুন", amount: "150" });
-  assert.strictEqual(state.tasks[0].amount, 150);
+  assert.strictEqual(state.tasks.length, 1);
+  assert.strictEqual("amount" in state.tasks[0], false);
 });
-t("no amount, blank amount, and an invalid amount all store null (field is optional)", () => {
+t("the rest of the task is stored as before", () => {
   const { state, add } = makeState();
-  add({ text: "A" });
-  add({ text: "B", amount: "" });
-  add({ text: "C", amount: "abc" });
-  const amounts = state.tasks.map((x) => x.amount); // cross-realm array (vm context) — compare by value, not deepStrictEqual
-  assert.strictEqual(amounts.length, 3);
-  amounts.forEach((a) => assert.strictEqual(a, null));
+  add({ text: "A", date: "2026-10-01", time: "09:30", category: "food", note: "n", repeat: "daily" });
+  const x = state.tasks[0];
+  assert.strictEqual(x.text, "A"); assert.strictEqual(x.date, "2026-10-01"); assert.strictEqual(x.time, "09:30");
+  assert.strictEqual(x.category, "food"); assert.strictEqual(x.note, "n"); assert.strictEqual(x.repeat, "daily");
+  assert.strictEqual(x.done, false);
 });
-t("the old plain-string quick-add call still works and has no amount", () => {
+t("the old plain-string quick-add call still works", () => {
   const { state, add } = makeState();
   add("বাজারে যাও");
   assert.strictEqual(state.tasks[0].text, "বাজারে যাও");
-  assert.strictEqual(state.tasks[0].amount, null);
 });
-t("a zero amount is kept (0 is a valid, meaningful amount — not treated as missing)", () => {
-  const { state, add } = makeState();
-  add({ text: "D", amount: "0" });
-  assert.strictEqual(state.tasks[0].amount, 0);
+t("the task form source no longer has a পরিমাণ field", () => {
+  const f0 = src.indexOf("function TaskForm(");
+  const f1 = src.indexOf("function Header(", f0);
+  const form = src.slice(f0, f1);
+  assert(!form.includes("পরিমাণ") && !form.includes("amount"), "TaskForm still mentions পরিমাণ/amount");
 });
 
 console.log(`\n${passed} passed${process.exitCode ? " — WITH FAILURES" : ""}`);

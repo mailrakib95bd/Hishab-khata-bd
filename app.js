@@ -466,6 +466,43 @@ function gregorianToHijri(date) {
     const h = jdnToHijri(jdn);
     return { day: h.day, month: HIJRI_MONTHS[h.month - 1], year: h.year };
 }
+function jdnToGregorian(jdn) {
+    const a = jdn + 32044;
+    const b = Math.floor((4 * a + 3) / 146097);
+    const c = a - Math.floor((146097 * b) / 4);
+    const d = Math.floor((4 * c + 3) / 1461);
+    const e = c - Math.floor((1461 * d) / 4);
+    const m = Math.floor((5 * e + 2) / 153);
+    return {
+        day: e - Math.floor((153 * m + 2) / 5) + 1,
+        month: m + 3 - 12 * Math.floor(m / 10),
+        year: 100 * b + d - 4800 + Math.floor(m / 10),
+    };
+}
+// Hijri (year, month 1-12, day) → English "YYYY-MM-DD", or null if that
+// Hijri date doesn't exist (e.g. day 30 of a 29-day month). It is verified
+// against jdnToHijri above, so it always agrees with what the calendar shows.
+function hijriToGregorianYmd(year, month, day) {
+    const y = parseInt(year, 10), m = parseInt(month, 10), d = parseInt(day, 10);
+    if (!(y >= 1 && y <= 1600) || !(m >= 1 && m <= 12) || !(d >= 1 && d <= 30))
+        return null;
+    const guess = d + Math.ceil(29.5 * (m - 1)) + (y - 1) * 354 + Math.floor((3 + 11 * y) / 30) + 1948439;
+    for (let off = -2; off <= 2; off++) {
+        const h = jdnToHijri(guess + off);
+        if (h.year === y && h.month === m && h.day === d) {
+            const g = jdnToGregorian(guess + off);
+            return `${String(g.year).padStart(4, "0")}-${String(g.month).padStart(2, "0")}-${String(g.day).padStart(2, "0")}`;
+        }
+    }
+    return null;
+}
+// English "YYYY-MM-DD" → { year, month (1-12), day }
+function ymdToHijriParts(ymd) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || "");
+    if (!m)
+        return null;
+    return jdnToHijri(gregorianToJDN(+m[1], +m[2], +m[3]));
+}
 // approximate sunset time (UTC instant) for given date & coordinates
 function calcSunsetInstant(date, lat, lon) {
     const rad = Math.PI / 180;
@@ -862,6 +899,11 @@ function App() {
     const [showAdminPanel, setShowAdminPanel] = useState(false);
     const [showFAQ, setShowFAQ] = useState(false);
     const [showTaxPanel, setShowTaxPanel] = useState(false);
+    const [showKhasra, setShowKhasra] = useState(false);
+    // খসড়া খাতা has its own inner screens (input → history → detail); the module
+    // registers a "step back" function here so the phone's back button walks
+    // detail → history → input first and only then closes the whole panel
+    const khasraBackRef = useRef(null);
     const [showAccountPanel, setShowAccountPanel] = useState(false);
     const [showFamilyBazar, setShowFamilyBazar] = useState(false);
     // pending Family Bazar invitations for the signed-in Google account (badge on the ☰ menu)
@@ -995,6 +1037,26 @@ function App() {
     useBackOverlay(!!editingTransfer, () => setEditingTransfer(null));
     useBackOverlay(showAccountPanel, () => closeMenuPanel(setShowAccountPanel));
     useBackOverlay(showFamilyBazar, () => closeMenuPanel(setShowFamilyBazar));
+    useEffect(() => {
+        if (!showKhasra)
+            return;
+        window.history.pushState({ hkOverlay: true }, "");
+        let poppedByBack = false;
+        const onPop = () => {
+            if (khasraBackRef.current && khasraBackRef.current()) {
+                window.history.pushState({ hkOverlay: true }, "");
+                return;
+            }
+            poppedByBack = true;
+            closeMenuPanel(setShowKhasra);
+        };
+        window.addEventListener("popstate", onPop);
+        return () => {
+            window.removeEventListener("popstate", onPop);
+            if (!poppedByBack && window.history.state && window.history.state.hkOverlay)
+                window.history.back();
+        };
+    }, [showKhasra]);
     const loadIdentityData = useCallback(async (identity) => {
         try {
             const res = await window.storage.get(userDataKey(identity));
@@ -1822,7 +1884,6 @@ function App() {
                 date: fields.date || null, time: fields.time || null,
                 category: fields.category || null, note: fields.note || "",
                 repeat: fields.repeat || null,
-                amount: fields.amount != null && fields.amount !== "" && !isNaN(parseFloat(fields.amount)) ? parseFloat(fields.amount) : null,
                 reminderDate: fields.reminderDate || null, reminderTime: fields.reminderTime || null, remindedAt: null,
             }];
         setTasks(next);
@@ -2198,6 +2259,7 @@ function App() {
                 onOpenAccounts: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowAccountPanel(true), 0); },
                 familyInvites: famAlerts.count,
                 onOpenFamilyBazar: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowFamilyBazar(true), 0); },
+                onOpenKhasra: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowKhasra(true), 0); },
                 isAdminUser: isAdmin(user),
                 onOpenAdmin: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowAdminPanel(true), 0); },
                 unreadCount: totalUnreadCount,
@@ -2205,6 +2267,7 @@ function App() {
             showFAQ && React.createElement(FAQModal, { onClose: () => closeMenuPanel(setShowFAQ), faqCloud: faqCloud }),
             showTaxPanel && (React.createElement(TaxPanel, { onClose: () => closeMenuPanel(setShowTaxPanel), taxes: taxes, onAdd: addTax, onUpdate: updateTax, onDelete: deleteTax, onTogglePaid: toggleTaxPaid })),
             showAccountPanel && (React.createElement(AccountPanel, { onClose: () => closeMenuPanel(setShowAccountPanel), dynamicAccountBalances: dynamicAccountBalances, onAdd: addUserAccount, onUpdate: updateUserAccount, onDelete: deleteUserAccount, onToggleActive: toggleUserAccountActive, onViewTransactions: (id) => { setShowAccountPanel(false); setSearchSeed({ accountId: id, ts: Date.now() }); setTab("search"); } })),
+            showKhasra && React.createElement(KhasraKhataModule, { onClose: () => closeMenuPanel(setShowKhasra), storageId: user && user.uid ? user.uid : "guest", registerBack: (fn) => { khasraBackRef.current = fn; } }),
             showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth }),
             showNotificationCenter && (React.createElement(NotificationCenter, {
                 onClose: () => closeMenuPanel(setShowNotificationCenter),
@@ -2389,7 +2452,6 @@ function TaskForm({ initial, onClose, onSave }) {
     const [reminderPreset, setReminderPreset] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderDate) ? "custom" : "none");
     const [customReminderDate, setCustomReminderDate] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderDate) || "");
     const [customReminderTime, setCustomReminderTime] = useState((initial === null || initial === void 0 ? void 0 : initial.reminderTime) || "");
-    const [amount, setAmount] = useState((initial === null || initial === void 0 || initial.amount == null) ? "" : String(initial.amount));
     const [err, setErr] = useState("");
     return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "টাস্ক সম্পাদনা" : "নতুন টাস্ক" },
         React.createElement("label", { style: admStyles.label }, "টাস্কের নাম *"),
@@ -2405,8 +2467,6 @@ function TaskForm({ initial, onClose, onSave }) {
         React.createElement("select", { style: admStyles.input, value: category, onChange: (e) => setCategory(e.target.value) },
             React.createElement("option", { value: "" }, "\u2014 \u09A8\u09BF\u09B0\u09CD\u09AC\u09BE\u099A\u09A8 \u0995\u09B0\u09C1\u09A8 \u2014"),
             (cats.expenseCats || []).map((c) => React.createElement("option", { key: c.key, value: c.key }, c.label))),
-        React.createElement("label", { style: admStyles.label }, "পরিমাণ / টাকা (ঐচ্ছিক)"),
-        React.createElement("input", { style: admStyles.input, type: "number", inputMode: "decimal", min: "0", placeholder: "৳", value: amount, onChange: (e) => setAmount(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "নোট / বিস্তারিত"),
         React.createElement("textarea", { style: Object.assign(Object.assign({}, admStyles.input), { minHeight: 70 }), value: note, onChange: (e) => setNote(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "রিমাইন্ডার"),
@@ -2423,8 +2483,7 @@ function TaskForm({ initial, onClose, onSave }) {
                     return;
                 }
                 const { reminderDate, reminderTime } = computeTaskReminderFields(date, time, reminderPreset, customReminderDate, customReminderTime);
-                const amt = amount.trim() === "" ? null : parseFloat(amount);
-                onSave({ text: text.trim(), date: date || null, time: time || null, category: category || null, note: note.trim(), repeat: repeat === "none" ? null : repeat, amount: amt != null && !isNaN(amt) ? amt : null, reminderDate, reminderTime });
+                onSave({ text: text.trim(), date: date || null, time: time || null, category: category || null, note: note.trim(), repeat: repeat === "none" ? null : repeat, reminderDate, reminderTime });
             } }, "সংরক্ষণ করুন")));
 }
 function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount, adminTasksCloud, completedAdminTaskIds, onToggleAdminTaskComplete }) {
@@ -2501,8 +2560,7 @@ function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onTo
                                 React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                                     React.createElement("div", { style: Object.assign(Object.assign({}, styles.taskText), { textDecoration: t.done ? "line-through" : "none", color: t.done ? "var(--hk-border-med2)" : "var(--hk-text)" }) }, t.text),
                                     t.category && React.createElement("div", { style: { fontSize: 11, color: "var(--hk-text-muted)", marginTop: 1 } }, catInfo("expense", t.category, taskCats).label),
-                                    t.note && React.createElement("div", { style: { fontSize: 11, color: "var(--hk-text-muted)", marginTop: 1 } }, t.note),
-                                    t.amount != null && React.createElement("div", { style: { fontSize: 11, color: "var(--hk-gold)", fontWeight: 700, marginTop: 1 } }, formatTaka(t.amount))),
+                                    t.note && React.createElement("div", { style: { fontSize: 11, color: "var(--hk-text-muted)", marginTop: 1 } }, t.note)),
                                 React.createElement("button", { style: styles.taskDelete, onClick: () => { setEditingTask(t); setShowTaskForm(true); }, "aria-label": "\u09B8\u09AE\u09CD\u09AA\u09BE\u09A6\u09A8\u09BE" }, "\u270E"),
                                 React.createElement("button", { style: Object.assign(Object.assign({}, styles.taskReminderBtn), { color: t.reminderTime ? "var(--hk-gold)" : "var(--hk-border-med)" }), onClick: () => openReminderEdit(t), "aria-label": "\u09B0\u09BF\u09AE\u09BE\u0987\u09A8\u09CD\u09A1\u09BE\u09B0" }, "\u23F0"),
                                 React.createElement("button", { style: styles.taskDelete, onClick: () => onDeleteTask(t.id) }, "\u2715")),
@@ -3827,19 +3885,78 @@ function DailyMessageForm({ initial, onClose, onSave }) {
         React.createElement("button", { style: admStyles.addBtn, onClick: () => { if (!title.trim()) { setErr("শিরোনাম লিখুন"); return; } onSave({ title: title.trim(), content: content.trim(), date }); } }, "সংরক্ষণ করুন")));
 }
 function AdminSpecialDayForm({ initial, onClose, onSave }) {
+    // A special day can be created from EITHER an English date or a Hijri
+    // date (admin picks one). Either way the day is stored under its English
+    // `date` (so the calendar, notifications and sorting keep working
+    // unchanged); a Hijri-created day also keeps `hijri` + dateType so the
+    // form re-opens in Hijri mode when edited.
+    const startHijri = (initial === null || initial === void 0 ? void 0 : initial.dateType) === "hijri" && initial.hijri;
+    const [mode, setMode] = useState(startHijri ? "hijri" : "gregorian"); // gregorian | hijri
     const [date, setDate] = useState((initial === null || initial === void 0 ? void 0 : initial.date) || todayStr());
+    const seedH = startHijri ? initial.hijri : (ymdToHijriParts((initial === null || initial === void 0 ? void 0 : initial.date) || todayStr()) || { year: 1447, month: 1, day: 1 });
+    const [hDay, setHDay] = useState(String(seedH.day));
+    const [hMonth, setHMonth] = useState(String(seedH.month));
+    const [hYear, setHYear] = useState(String(seedH.year));
     const [title, setTitle] = useState((initial === null || initial === void 0 ? void 0 : initial.title) || "");
     const [description, setDescription] = useState((initial === null || initial === void 0 ? void 0 : initial.description) || "");
     const [err, setErr] = useState("");
+    const hijriYmd = mode === "hijri" ? hijriToGregorianYmd(hYear, hMonth, hDay) : null;
+    const switchMode = (next) => {
+        if (next === mode)
+            return;
+        setErr("");
+        if (next === "hijri") {
+            const hp = ymdToHijriParts(date);
+            if (hp) {
+                setHDay(String(hp.day));
+                setHMonth(String(hp.month));
+                setHYear(String(hp.year));
+            }
+        }
+        else if (hijriYmd) {
+            setDate(hijriYmd);
+        }
+        setMode(next);
+    };
+    const modeBtn = (key, label) => React.createElement("button", { key: key, type: "button", onClick: () => switchMode(key), style: { flex: 1, height: 38, border: "none", borderRadius: 8, fontFamily: "inherit", fontSize: 13.5, fontWeight: mode === key ? 700 : 500, background: mode === key ? "var(--hk-gold)" : "transparent", color: mode === key ? "#1a1a1a" : "var(--hk-text)" } }, label);
+    const hp = mode === "gregorian" ? ymdToHijriParts(date) : null;
+    const previewStyle = { fontSize: 12.5, color: "var(--hk-text-muted)", marginTop: 6 };
     return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: initial ? "বিশেষ দিবস সম্পাদনা" : "নতুন বিশেষ দিবস" },
-        React.createElement("label", { style: admStyles.label }, "তারিখ *"),
-        React.createElement("input", { style: admStyles.input, type: "date", value: date, onChange: (e) => setDate(e.target.value) }),
+        React.createElement("label", { style: admStyles.label }, "তারিখের ধরন (যেকোনো একটি বেছে নিন)"),
+        React.createElement("div", { style: { display: "flex", gap: 4, background: "var(--hk-card)", border: "1px solid var(--hk-border)", borderRadius: 10, padding: 3 } },
+            modeBtn("gregorian", "ইংরেজি তারিখ"), modeBtn("hijri", "হিজরি তারিখ")),
+        mode === "gregorian" ? (React.createElement("div", null,
+            React.createElement("label", { style: admStyles.label }, "ইংরেজি তারিখ *"),
+            React.createElement("input", { style: admStyles.input, type: "date", value: date, onChange: (e) => setDate(e.target.value) }),
+            hp && React.createElement("div", { style: previewStyle }, `হিজরি: ${toBnDigits(hp.day)} ${HIJRI_MONTHS[hp.month - 1]} ${toBnDigits(hp.year)}`))) : (React.createElement("div", null,
+            React.createElement("label", { style: admStyles.label }, "হিজরি তারিখ *"),
+            React.createElement("div", { style: { display: "flex", gap: 8 } },
+                React.createElement("select", { style: Object.assign(Object.assign({}, admStyles.input), { flex: 1 }), value: hDay, onChange: (e) => setHDay(e.target.value), "aria-label": "হিজরি দিন" },
+                    Array.from({ length: 30 }, (_, k) => k + 1).map((n) => React.createElement("option", { key: n, value: String(n) }, toBnDigits(n)))),
+                React.createElement("select", { style: Object.assign(Object.assign({}, admStyles.input), { flex: 2 }), value: hMonth, onChange: (e) => setHMonth(e.target.value), "aria-label": "হিজরি মাস" },
+                    HIJRI_MONTHS.map((nm, k) => React.createElement("option", { key: nm, value: String(k + 1) }, nm))),
+                React.createElement("input", { style: Object.assign(Object.assign({}, admStyles.input), { flex: 1.3 }), type: "number", inputMode: "numeric", value: hYear, onChange: (e) => setHYear(e.target.value), "aria-label": "হিজরি সাল" })),
+            hijriYmd
+                ? React.createElement("div", { style: previewStyle }, `ইংরেজি তারিখ: ${formatDateBn(hijriYmd).full}`)
+                : React.createElement("div", { style: Object.assign(Object.assign({}, previewStyle), { color: "var(--hk-danger)" }) }, "এই হিজরি তারিখটি সঠিক নয় (মাসে ২৯ বা ৩০ দিন থাকে)"),
+            React.createElement("div", { style: previewStyle }, "হিসাবটি আনুমানিক (tabular) — চাঁদ দেখার ওপর নির্ভর করে সরকারি তারিখ ±১ দিন আলাদা হতে পারে।"))),
         React.createElement("label", { style: admStyles.label }, "শিরোনাম *"),
         React.createElement("input", { style: admStyles.input, value: title, onChange: (e) => setTitle(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "বিস্তারিত বিবরণ"),
         React.createElement("textarea", { style: Object.assign(Object.assign({}, admStyles.input), { minHeight: 90 }), value: description, onChange: (e) => setDescription(e.target.value) }),
         err && React.createElement("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginBottom: 8 } }, err),
-        React.createElement("button", { style: admStyles.addBtn, onClick: () => { if (!date || !title.trim()) { setErr("তারিখ ও শিরোনাম আবশ্যক"); return; } onSave({ date, title: title.trim(), description: description.trim() }); } }, "সংরক্ষণ করুন")));
+        React.createElement("button", { style: admStyles.addBtn, onClick: () => {
+                const finalDate = mode === "hijri" ? hijriYmd : date;
+                if (!finalDate || !title.trim()) {
+                    setErr(mode === "hijri" && !hijriYmd ? "সঠিক হিজরি তারিখ দিন" : "তারিখ ও শিরোনাম আবশ্যক");
+                    return;
+                }
+                onSave({
+                    date: finalDate, title: title.trim(), description: description.trim(),
+                    dateType: mode,
+                    hijri: mode === "hijri" ? { year: parseInt(hYear, 10), month: parseInt(hMonth, 10), day: parseInt(hDay, 10) } : null,
+                });
+            } }, "সংরক্ষণ করুন")));
 }
 function TaskAdminForm({ initial, onClose, onSave }) {
     // same field set and same TASK_REMINDER_PRESETS / TASK_REPEAT_OPTIONS /
@@ -4032,6 +4149,7 @@ function AdminPanel({ onClose, notices, dailyMessages, adminSpecialDaysCloud, ad
             React.createElement("div", { style: admStyles.row },
                 React.createElement("div", null,
                     React.createElement("div", { style: { fontWeight: 600 } }, formatDateBn(s.date).full, " — ", s.title),
+                    s.dateType === "hijri" && s.hijri && React.createElement("div", { style: admStyles.muted }, `🌙 হিজরি: ${toBnDigits(s.hijri.day)} ${HIJRI_MONTHS[s.hijri.month - 1] || ""} ${toBnDigits(s.hijri.year)}`),
                     s.description && React.createElement("div", { style: admStyles.muted }, s.description)),
                 rowActions(s, () => { setEditingDay(s); setShowDayForm(true); }, onDeleteSpecialDay)))));
     }
@@ -4157,7 +4275,7 @@ function NotificationCenter({ onClose, notices, dailyMessages, tasks, debts, spe
         ...body);
 }
 /* ---------------- hamburger menu ---------------- */
-function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, onOpenAccounts, onOpenFamilyBazar, isAdminUser, onOpenAdmin, unreadCount, familyInvites, }) {
+function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, onOpenAccounts, onOpenFamilyBazar, onOpenKhasra, isAdminUser, onOpenAdmin, unreadCount, familyInvites, }) {
     useBackgroundScrollLock();
     const menuItemStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "13px 4px", background: "none", border: "none", borderBottom: "1px solid var(--hk-border-light)", fontSize: 14.5, color: "var(--hk-text)" };
     // half-screen drawer (not fullscreen) — this is the one exception the
@@ -4175,6 +4293,7 @@ function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCal
             React.createElement("button", { style: menuItemStyle, onClick: onOpenFamilyBazar },
                 React.createElement("span", null, "\uD83D\uDED2 \u09AB\u09CD\u09AF\u09BE\u09AE\u09BF\u09B2\u09BF \u09AC\u09BE\u099C\u09BE\u09B0"),
                 familyInvites > 0 && React.createElement("span", { style: { background: "var(--hk-gold)", color: "#1a1a1a", fontSize: 11, borderRadius: 999, padding: "1px 7px", fontWeight: 700 } }, familyInvites)),
+            React.createElement("button", { style: menuItemStyle, onClick: onOpenKhasra }, "📋 খসড়া খাতা"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenCalendar }, "\u09B9\u09BF\u099C\u09B0\u09BF \u0995\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenNotifications },
                 React.createElement("span", null, "\u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8"),
@@ -4266,6 +4385,16 @@ function TaxForm({ initial, onClose, onSave }) {
 //   • ☰ menu → "ফ্যামিলি বাজার"  → full-screen (mode "full")
 //   • bottom-nav "ফ্যামিলি" tab   → FamilyHub below (mode "embedded")
 // ---------------------------------------------------------------------
+// খসড়া খাতা — the real implementation lives in khasra-khata.js
+// (window.KhasraKhata), same split as Family Bazar
+function KhasraKhataModule({ onClose, storageId, registerBack }) {
+    const Mod = window.KhasraKhata && window.KhasraKhata.Module;
+    if (!Mod) {
+        return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "📋 খসড়া খাতা" },
+            React.createElement("div", { style: styles.taskEmpty }, "খসড়া খাতা লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
+    }
+    return React.createElement(Mod, { onClose: onClose, storageId: storageId, registerBack: registerBack });
+}
 function FamilyBazarModule({ onClose, user, onExpenseSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
     if (!Mod) {
