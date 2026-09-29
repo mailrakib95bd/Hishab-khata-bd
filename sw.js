@@ -3,12 +3,23 @@
 // below) throw away every asset it cached under the old name — including
 // the previously-cached index.html/app.js that kept serving stale code
 // no matter how many times the underlying files were updated.
-const CACHE_NAME = "hisab-khata-v7";
+const CACHE_NAME = "hisab-khata-v8";
 const CORE_ASSETS = [
   "./index.html",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png",
+  // own JS: without these here, the cache-first fetch handler below never
+  // has anything to serve offline for them (they were never in CORE_ASSETS
+  // before, so cache.match always missed and fell through to a network
+  // fetch that fails offline) — added so Hijri/calendar math (and the rest
+  // of the app) genuinely keeps working with no connection, not just the
+  // shell page.
+  "./app.js",
+  "./hijri-ummalqura.js",
+  "./khasra-khata.js",
+  "./family-bazar.js",
+  "./family-bazar-core.js",
 ];
 
 self.addEventListener("install", (event) => {

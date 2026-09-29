@@ -442,99 +442,35 @@ const HIJRI_MONTHS = [
     "মুহাররম", "সফর", "রবিউল আউয়াল", "রবিউস সানি", "জমাদিউল আউয়াল", "জমাদিউস সানি",
     "রজব", "শাবান", "রমজান", "শাওয়াল", "জিলকদ", "জিলহজ",
 ];
-function gregorianToJDN(y, m, d) {
-    const a = Math.floor((14 - m) / 12);
-    const y2 = y + 4800 - a;
-    const m2 = m + 12 * a - 3;
-    return d + Math.floor((153 * m2 + 2) / 5) + 365 * y2 + Math.floor(y2 / 4) - Math.floor(y2 / 100) + Math.floor(y2 / 400) - 32045;
-}
-// tabular ("Kuwaiti") Hijri conversion — an arithmetic approximation,
-// may differ by ~1 day from moon-sighting-based official announcements
-function jdnToHijri(jdn) {
-    const l0 = jdn - 1948440 + 10632;
-    const n = Math.floor((l0 - 1) / 10631);
-    let l = l0 - 10631 * n + 354;
-    const j = Math.floor((10985 - l) / 5316) * Math.floor((50 * l) / 17719) + Math.floor(l / 5670) * Math.floor((43 * l) / 15238);
-    l = l - Math.floor((30 - j) / 15) * Math.floor((17719 * j) / 50) - Math.floor(j / 16) * Math.floor((15238 * j) / 43) + 29;
-    const month = Math.floor((24 * l) / 709);
-    const day = l - Math.floor((709 * month) / 24);
-    const year = 30 * n + j - 30;
-    return { year, month, day };
-}
+// হিজরি তারিখের একমাত্র উৎস — hijri-ummalqura.js (window.HijriUQ), উম্মুল
+// কুরা (Umm al-Qura) সারণি-ভিত্তিক হিসাব, ঢাকার সূর্যাস্ত অনুযায়ী দিন
+// পরিবর্তন। নিচের wrapper ফাংশনগুলো শুধু আগের নাম/সিগনেচার ধরে রাখে, যাতে
+// বাকি পুরো অ্যাপ (ক্যালেন্ডার, অ্যাডমিন ফর্ম, ড্যাশবোর্ড) না বদলেও চলে।
 function gregorianToHijri(date) {
-    const jdn = gregorianToJDN(date.getFullYear(), date.getMonth() + 1, date.getDate());
-    const h = jdnToHijri(jdn);
+    const h = window.HijriUQ && window.HijriUQ.gregorianToHijri(date.getFullYear(), date.getMonth() + 1, date.getDate());
+    if (!h)
+        return { day: 0, month: "", year: 0 }; // টেবিলের সীমার বাইরে (১৯৩৭-২০৭৭ এর বাইরে) — বাস্তবে ঘটে না
     return { day: h.day, month: HIJRI_MONTHS[h.month - 1], year: h.year };
 }
-function jdnToGregorian(jdn) {
-    const a = jdn + 32044;
-    const b = Math.floor((4 * a + 3) / 146097);
-    const c = a - Math.floor((146097 * b) / 4);
-    const d = Math.floor((4 * c + 3) / 1461);
-    const e = c - Math.floor((1461 * d) / 4);
-    const m = Math.floor((5 * e + 2) / 153);
-    return {
-        day: e - Math.floor((153 * m + 2) / 5) + 1,
-        month: m + 3 - 12 * Math.floor(m / 10),
-        year: 100 * b + d - 4800 + Math.floor(m / 10),
-    };
-}
-// Hijri (year, month 1-12, day) → English "YYYY-MM-DD", or null if that
-// Hijri date doesn't exist (e.g. day 30 of a 29-day month). It is verified
-// against jdnToHijri above, so it always agrees with what the calendar shows.
 function hijriToGregorianYmd(year, month, day) {
-    const y = parseInt(year, 10), m = parseInt(month, 10), d = parseInt(day, 10);
-    if (!(y >= 1 && y <= 1600) || !(m >= 1 && m <= 12) || !(d >= 1 && d <= 30))
+    if (!window.HijriUQ)
         return null;
-    const guess = d + Math.ceil(29.5 * (m - 1)) + (y - 1) * 354 + Math.floor((3 + 11 * y) / 30) + 1948439;
-    for (let off = -2; off <= 2; off++) {
-        const h = jdnToHijri(guess + off);
-        if (h.year === y && h.month === m && h.day === d) {
-            const g = jdnToGregorian(guess + off);
-            return `${String(g.year).padStart(4, "0")}-${String(g.month).padStart(2, "0")}-${String(g.day).padStart(2, "0")}`;
-        }
-    }
-    return null;
+    return window.HijriUQ.hijriToGregorianYmd(parseInt(year, 10), parseInt(month, 10), parseInt(day, 10));
 }
-// English "YYYY-MM-DD" → { year, month (1-12), day }
 function ymdToHijriParts(ymd) {
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || "");
-    if (!m)
+    if (!m || !window.HijriUQ)
         return null;
-    return jdnToHijri(gregorianToJDN(+m[1], +m[2], +m[3]));
+    const h = window.HijriUQ.gregorianToHijri(+m[1], +m[2], +m[3]);
+    return h ? { year: h.year, month: h.month, day: h.day } : null;
 }
-// approximate sunset time (UTC instant) for given date & coordinates
-function calcSunsetInstant(date, lat, lon) {
-    const rad = Math.PI / 180;
-    const start = new Date(date.getFullYear(), 0, 0);
-    const dayOfYear = Math.floor((date - start) / 86400000);
-    const lngHour = lon / 15;
-    const t = dayOfYear + (18 - lngHour) / 24;
-    const M = 0.9856 * t - 3.289;
-    let L = M + 1.916 * Math.sin(M * rad) + 0.02 * Math.sin(2 * M * rad) + 282.634;
-    L = (L + 360) % 360;
-    let RA = (1 / rad) * Math.atan(0.91764 * Math.tan(L * rad));
-    RA = (RA + 360) % 360;
-    const Lq = Math.floor(L / 90) * 90;
-    const RAq = Math.floor(RA / 90) * 90;
-    RA = (RA + (Lq - RAq)) / 15;
-    const sinDec = 0.39782 * Math.sin(L * rad);
-    const cosDec = Math.cos(Math.asin(sinDec));
-    const cosH = (Math.cos(90.83 * rad) - sinDec * Math.sin(lat * rad)) / (cosDec * Math.cos(lat * rad));
-    if (cosH > 1 || cosH < -1)
-        return null;
-    const H = (1 / rad) * Math.acos(cosH) / 15;
-    const T = H + RA - 0.06571 * t - 6.622;
-    const UT = ((T - lngHour) % 24 + 24) % 24;
-    return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) + UT * 3600000);
-}
-// Islamic day starts at sunset — coordinates default to Dhaka
-function islamicEffectiveDate(now, lat = 23.8103, lon = 90.4125) {
-    const sunset = calcSunsetInstant(now, lat, lon);
-    if (sunset && now >= sunset) {
-        return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-    }
-    return now;
+// ইসলামি দিন শুরু হয় ঢাকার সূর্যাস্তে — শুধু হিজরি হিসাবের জন্য প্রযোজ্য;
+// ইংরেজি/বাংলা তারিখ এখনো রাত ১২টাতেই পরিবর্তিত হয় (এই ফাংশন সেগুলো ছোঁয় না)
+function islamicEffectiveDate(now) {
+    if (!window.HijriUQ)
+        return now;
+    const eff = window.HijriUQ.islamicEffectiveDate(now);
+    return new Date(eff.y, eff.m - 1, eff.d);
 }
 function monthKeyOf(dateStr) {
     return dateStr.slice(0, 7);
@@ -3886,21 +3822,34 @@ function DailyMessageForm({ initial, onClose, onSave }) {
 }
 function AdminSpecialDayForm({ initial, onClose, onSave }) {
     // A special day can be created from EITHER an English date or a Hijri
-    // date (admin picks one). Either way the day is stored under its English
+    // date (admin picks one). A one-time entry is stored under its English
     // `date` (so the calendar, notifications and sorting keep working
-    // unchanged); a Hijri-created day also keeps `hijri` + dateType so the
-    // form re-opens in Hijri mode when edited.
-    const startHijri = (initial === null || initial === void 0 ? void 0 : initial.dateType) === "hijri" && initial.hijri;
+    // unchanged); a Hijri-created one-time day also keeps `hijri` + dateType
+    // so the form re-opens in Hijri mode when edited.
+    //
+    // A RECURRING Hijri day (e.g. "১৪ রজব, প্রতি হিজরি বছর") is different:
+    // its identity is ONLY {hijriMonth, hijriDay} — no `date` field is ever
+    // saved for it, since a fixed English date must never stand in as the
+    // permanent identity of a Hijri-recurring event. Every place that reads
+    // such an entry (calendar dots, notifications, admin list) recomputes
+    // that year's matching English date live via resolveSpecialDayDate().
+    const isRecurringHijri = (initial === null || initial === void 0 ? void 0 : initial.recurrence) === "hijri";
+    const startHijri = isRecurringHijri || ((initial === null || initial === void 0 ? void 0 : initial.dateType) === "hijri" && initial.hijri);
     const [mode, setMode] = useState(startHijri ? "hijri" : "gregorian"); // gregorian | hijri
+    const [recurring, setRecurring] = useState(!!isRecurringHijri);
     const [date, setDate] = useState((initial === null || initial === void 0 ? void 0 : initial.date) || todayStr());
-    const seedH = startHijri ? initial.hijri : (ymdToHijriParts((initial === null || initial === void 0 ? void 0 : initial.date) || todayStr()) || { year: 1447, month: 1, day: 1 });
+    const seedH = isRecurringHijri ? { year: 1447, month: initial.hijriMonth, day: initial.hijriDay }
+        : startHijri ? initial.hijri
+            : (ymdToHijriParts((initial === null || initial === void 0 ? void 0 : initial.date) || todayStr()) || { year: 1447, month: 1, day: 1 });
     const [hDay, setHDay] = useState(String(seedH.day));
     const [hMonth, setHMonth] = useState(String(seedH.month));
     const [hYear, setHYear] = useState(String(seedH.year));
     const [title, setTitle] = useState((initial === null || initial === void 0 ? void 0 : initial.title) || "");
     const [description, setDescription] = useState((initial === null || initial === void 0 ? void 0 : initial.description) || "");
     const [err, setErr] = useState("");
-    const hijriYmd = mode === "hijri" ? hijriToGregorianYmd(hYear, hMonth, hDay) : null;
+    const hijriYmd = mode === "hijri" && !recurring ? hijriToGregorianYmd(hYear, hMonth, hDay) : null;
+    // recurring preview: this year's (or the next upcoming) matching English date
+    const recurringNextYmd = recurring && window.HijriUQ ? window.HijriUQ.nextHijriOccurrence(parseInt(hMonth, 10), parseInt(hDay, 10), todayStr()) : null;
     const switchMode = (next) => {
         if (next === mode)
             return;
@@ -3913,8 +3862,12 @@ function AdminSpecialDayForm({ initial, onClose, onSave }) {
                 setHYear(String(hp.year));
             }
         }
-        else if (hijriYmd) {
-            setDate(hijriYmd);
+        else {
+            if (recurring && recurringNextYmd)
+                setDate(recurringNextYmd);
+            else if (hijriYmd)
+                setDate(hijriYmd);
+            setRecurring(false); // recurring is Hijri-only
         }
         setMode(next);
     };
@@ -3929,34 +3882,83 @@ function AdminSpecialDayForm({ initial, onClose, onSave }) {
             React.createElement("label", { style: admStyles.label }, "ইংরেজি তারিখ *"),
             React.createElement("input", { style: admStyles.input, type: "date", value: date, onChange: (e) => setDate(e.target.value) }),
             hp && React.createElement("div", { style: previewStyle }, `হিজরি: ${toBnDigits(hp.day)} ${HIJRI_MONTHS[hp.month - 1]} ${toBnDigits(hp.year)}`))) : (React.createElement("div", null,
-            React.createElement("label", { style: admStyles.label }, "হিজরি তারিখ *"),
+            React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 10, marginBottom: 4, fontSize: 13.5, color: "var(--hk-text)", cursor: "pointer" } },
+                React.createElement("input", { type: "checkbox", checked: recurring, onChange: (e) => setRecurring(e.target.checked) }),
+                "🔁 পুনরাবৃত্তি: প্রতি হিজরি বছর (তারিখ প্রতি বছর স্বয়ংক্রিয়ভাবে হিসাব হবে)"),
+            React.createElement("label", { style: admStyles.label }, recurring ? "হিজরি দিন ও মাস *" : "হিজরি তারিখ *"),
             React.createElement("div", { style: { display: "flex", gap: 8 } },
                 React.createElement("select", { style: Object.assign(Object.assign({}, admStyles.input), { flex: 1 }), value: hDay, onChange: (e) => setHDay(e.target.value), "aria-label": "হিজরি দিন" },
                     Array.from({ length: 30 }, (_, k) => k + 1).map((n) => React.createElement("option", { key: n, value: String(n) }, toBnDigits(n)))),
-                React.createElement("select", { style: Object.assign(Object.assign({}, admStyles.input), { flex: 2 }), value: hMonth, onChange: (e) => setHMonth(e.target.value), "aria-label": "হিজরি মাস" },
+                React.createElement("select", { style: Object.assign(Object.assign({}, admStyles.input), { flex: recurring ? 3 : 2 }), value: hMonth, onChange: (e) => setHMonth(e.target.value), "aria-label": "হিজরি মাস" },
                     HIJRI_MONTHS.map((nm, k) => React.createElement("option", { key: nm, value: String(k + 1) }, nm))),
-                React.createElement("input", { style: Object.assign(Object.assign({}, admStyles.input), { flex: 1.3 }), type: "number", inputMode: "numeric", value: hYear, onChange: (e) => setHYear(e.target.value), "aria-label": "হিজরি সাল" })),
-            hijriYmd
-                ? React.createElement("div", { style: previewStyle }, `ইংরেজি তারিখ: ${formatDateBn(hijriYmd).full}`)
-                : React.createElement("div", { style: Object.assign(Object.assign({}, previewStyle), { color: "var(--hk-danger)" }) }, "এই হিজরি তারিখটি সঠিক নয় (মাসে ২৯ বা ৩০ দিন থাকে)"),
-            React.createElement("div", { style: previewStyle }, "হিসাবটি আনুমানিক (tabular) — চাঁদ দেখার ওপর নির্ভর করে সরকারি তারিখ ±১ দিন আলাদা হতে পারে।"))),
+                !recurring && React.createElement("input", { style: Object.assign(Object.assign({}, admStyles.input), { flex: 1.3 }), type: "number", inputMode: "numeric", value: hYear, onChange: (e) => setHYear(e.target.value), "aria-label": "হিজরি সাল" })),
+            recurring
+                ? (recurringNextYmd
+                    ? React.createElement("div", { style: previewStyle }, `এই বছর ইংরেজি তারিখ: ${formatDateBn(recurringNextYmd).full} (পরের হিজরি বছর থেকে তারিখ আবার নতুন করে হিসাব হবে)`)
+                    : React.createElement("div", { style: Object.assign(Object.assign({}, previewStyle), { color: "var(--hk-danger)" }) }, "এই হিজরি দিন/মাসের কোনো বৈধ occurrence পাওয়া যায়নি"))
+                : (hijriYmd
+                    ? React.createElement("div", { style: previewStyle }, `ইংরেজি তারিখ: ${formatDateBn(hijriYmd).full}`)
+                    : React.createElement("div", { style: Object.assign(Object.assign({}, previewStyle), { color: "var(--hk-danger)" }) }, "এই হিজরি তারিখটি সঠিক নয় (মাসে ২৯ বা ৩০ দিন থাকে)")),
+            React.createElement("div", { style: previewStyle }, "হিসাবটি উম্মুল কুরা (Umm al-Qura) সারণি অনুযায়ী — রমজান/শাওয়াল/জিলহজের প্রকৃত শুরু সরকারি চাঁদ দেখার ঘোষণার ওপর নির্ভর করে ±১ দিন আলাদা হতে পারে।"))),
         React.createElement("label", { style: admStyles.label }, "শিরোনাম *"),
         React.createElement("input", { style: admStyles.input, value: title, onChange: (e) => setTitle(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "বিস্তারিত বিবরণ"),
         React.createElement("textarea", { style: Object.assign(Object.assign({}, admStyles.input), { minHeight: 90 }), value: description, onChange: (e) => setDescription(e.target.value) }),
         err && React.createElement("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginBottom: 8 } }, err),
         React.createElement("button", { style: admStyles.addBtn, onClick: () => {
+                if (!title.trim()) {
+                    setErr("শিরোনাম আবশ্যক");
+                    return;
+                }
+                if (mode === "hijri" && recurring) {
+                    if (!recurringNextYmd) {
+                        setErr("সঠিক হিজরি দিন/মাস দিন");
+                        return;
+                    }
+                    onSave({
+                        title: title.trim(), description: description.trim(),
+                        recurrence: "hijri", hijriMonth: parseInt(hMonth, 10), hijriDay: parseInt(hDay, 10),
+                        dateType: "hijri", date: null, hijri: null,
+                    });
+                    return;
+                }
                 const finalDate = mode === "hijri" ? hijriYmd : date;
-                if (!finalDate || !title.trim()) {
-                    setErr(mode === "hijri" && !hijriYmd ? "সঠিক হিজরি তারিখ দিন" : "তারিখ ও শিরোনাম আবশ্যক");
+                if (!finalDate) {
+                    setErr(mode === "hijri" ? "সঠিক হিজরি তারিখ দিন" : "তারিখ আবশ্যক");
                     return;
                 }
                 onSave({
                     date: finalDate, title: title.trim(), description: description.trim(),
-                    dateType: mode,
+                    dateType: mode, recurrence: null,
                     hijri: mode === "hijri" ? { year: parseInt(hYear, 10), month: parseInt(hMonth, 10), day: parseInt(hDay, 10) } : null,
                 });
             } }, "সংরক্ষণ করুন")));
+}
+// একটি admin special-day রেকর্ডের (fixed বা recurring:"hijri") "কার্যকর
+// ইংরেজি তারিখ" বের করে — fixed হলে সরাসরি s.date, recurring হলে aroundYmd
+// (ডিফল্ট আজ) থেকে পরবর্তী occurrence লাইভ হিসাব করে। null মানে হিসাব
+// করা যায়নি (window.HijriUQ অনুপস্থিত বা টেবিলের সীমার বাইরে)।
+function resolveSpecialDayDate(s, aroundYmd) {
+    if (s.recurrence === "hijri") {
+        if (!window.HijriUQ)
+            return null;
+        return window.HijriUQ.nextHijriOccurrence(s.hijriMonth, s.hijriDay, aroundYmd || todayStr());
+    }
+    return s.date || null;
+}
+// একটি নির্দিষ্ট ইংরেজি মাসে (gYear-gMonth) একটি admin special-day কোন
+// তারিখে পড়ে তা বের করে — fixed হলে সেই তারিখ ওই মাসে পড়লেই তা, recurring
+// হলে সেই মাসে কোনো occurrence থাকলে তা (না থাকলে null)।
+function resolveSpecialDayInMonth(s, gYear, gMonth) {
+    if (s.recurrence === "hijri") {
+        if (!window.HijriUQ)
+            return null;
+        return window.HijriUQ.hijriOccurrenceInGregorianMonth(s.hijriMonth, s.hijriDay, gYear, gMonth);
+    }
+    if (!s.date)
+        return null;
+    const m = /^(\d{4})-(\d{2})$/.exec(s.date.slice(0, 7));
+    return m && +m[1] === gYear && +m[2] === gMonth ? s.date : null;
 }
 function TaskAdminForm({ initial, onClose, onSave }) {
     // same field set and same TASK_REMINDER_PRESETS / TASK_REPEAT_OPTIONS /
@@ -4145,10 +4147,14 @@ function AdminPanel({ onClose, notices, dailyMessages, adminSpecialDaysCloud, ad
             React.createElement("button", { style: Object.assign(Object.assign({}, admStyles.addBtn), { marginBottom: 0, flex: 1, background: "var(--hk-card)", color: "var(--hk-text)", border: "1px solid var(--hk-border)" }), onClick: () => setShowBulk(true) }, "বাল্ক ইমপোর্ট")));
         if (adminSpecialDaysCloud.length === 0)
             body.push(React.createElement(EmptyState, { key: "empty", text: "এখনও কোনো বিশেষ দিবস যোগ করা হয়নি।" }));
-        [...adminSpecialDaysCloud].sort((a, b) => (a.date < b.date ? -1 : 1)).forEach((s) => body.push(React.createElement("div", { key: s.id, style: admStyles.card },
+        [...adminSpecialDaysCloud].map((s) => Object.assign({ _resolvedDate: resolveSpecialDayDate(s) }, s)).sort((a, b) => ((a._resolvedDate || "") < (b._resolvedDate || "") ? -1 : 1)).forEach((s) => body.push(React.createElement("div", { key: s.id, style: admStyles.card },
             React.createElement("div", { style: admStyles.row },
                 React.createElement("div", null,
-                    React.createElement("div", { style: { fontWeight: 600 } }, formatDateBn(s.date).full, " — ", s.title),
+                    React.createElement("div", { style: { fontWeight: 600 } },
+                        s.recurrence === "hijri"
+                            ? `🔁 ${toBnDigits(s.hijriDay)} ${HIJRI_MONTHS[s.hijriMonth - 1] || ""} — ${s.title}`
+                            : `${formatDateBn(s.date).full} — ${s.title}`),
+                    s.recurrence === "hijri" && React.createElement("div", { style: admStyles.muted }, s._resolvedDate ? `প্রতি হিজরি বছর · এই বছর: ${formatDateBn(s._resolvedDate).full}` : "প্রতি হিজরি বছর"),
                     s.dateType === "hijri" && s.hijri && React.createElement("div", { style: admStyles.muted }, `🌙 হিজরি: ${toBnDigits(s.hijri.day)} ${HIJRI_MONTHS[s.hijri.month - 1] || ""} ${toBnDigits(s.hijri.year)}`),
                     s.description && React.createElement("div", { style: admStyles.muted }, s.description)),
                 rowActions(s, () => { setEditingDay(s); setShowDayForm(true); }, onDeleteSpecialDay)))));
@@ -4221,7 +4227,11 @@ function NotificationCenter({ onClose, notices, dailyMessages, tasks, debts, spe
                 (labels || []).forEach((label) => items.push({ id: `sd-${dateStr}-${label}`, date: dateStr, label, source: "ক্যালেন্ডার" }));
             }
         });
-        (adminSpecialDaysCloud || []).forEach((s) => s.date >= today && items.push({ id: `asd-${s.id}`, date: s.date, label: s.title, source: "বিশেষ দিবস" }));
+        (adminSpecialDaysCloud || []).forEach((s) => {
+            const d = resolveSpecialDayDate(s, today);
+            if (d && d >= today)
+                items.push({ id: `asd-${s.id}`, date: d, label: s.title, source: "বিশেষ দিবস" });
+        });
         (tasks || []).forEach((t) => t.reminderDate && t.reminderDate >= today && !t.done && items.push({ id: `tk-${t.id}`, date: t.reminderDate, label: t.title, source: "টাস্ক" }));
         (debts || []).forEach((d) => d.dueDate && d.dueDate >= today && debtRemaining(d) > 0 && items.push({ id: `db-${d.id}`, date: d.dueDate, label: `${d.person} — ${formatTaka(debtRemaining(d))}`, source: "দেনা" }));
         (taxes || []).forEach((t) => !t.paid && t.dueDate && t.dueDate >= today && items.push({ id: `tx-${t.id}`, date: t.dueDate, label: `${t.name} — ${formatTaka(t.amount)}`, source: "ট্যাক্স" }));
@@ -4569,13 +4579,21 @@ function CalendarModal({ specialDays, onSaveSpecialDays, onClose, onRegisterBack
     // here can accidentally edit or delete an admin entry
     const adminByDate = useMemo(() => {
         const map = {};
+        const gY = viewDate.getFullYear(), gM = viewDate.getMonth() + 1;
         (adminSpecialDays || []).forEach((s) => {
-            if (!map[s.date])
-                map[s.date] = [];
-            map[s.date].push(s);
+            // fixed entries: only keep them if they fall in the month currently
+            // shown (matches old behaviour, which just keyed by s.date directly);
+            // recurring Hijri entries: recompute which date (if any) in THIS
+            // shown Gregorian month matches, live, every time the month changes
+            const dateStr = resolveSpecialDayInMonth(s, gY, gM);
+            if (!dateStr)
+                return;
+            if (!map[dateStr])
+                map[dateStr] = [];
+            map[dateStr].push(s);
         });
         return map;
-    }, [adminSpecialDays]);
+    }, [adminSpecialDays, viewDate]);
     // list of this month's special days shown directly under the calendar
     // grid — reuses the exact same specialDays/adminByDate data the dot
     // markers and the tap-a-date detail view already use, just rendered as
