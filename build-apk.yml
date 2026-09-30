@@ -12,6 +12,16 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # প্রতিবার নতুন র‍্যান্ডম debug key দিয়ে সাইন হলে ফোনে আগের ভার্সনের
+      # উপর "adb install -r" (বা Play Store-এর মতো আপডেট) কাজ করে না —
+      # "signatures do not match" এরর দেয়। তাই রিপোতে কমিট করা এই একই
+      # debug.keystore সবসময় ব্যবহার করা হয়, যাতে প্রতিটা বিল্ডের স্বাক্ষর
+      # সবসময় অভিন্ন থাকে।
+      - name: Use fixed debug keystore
+        run: |
+          mkdir -p ~/.android
+          cp debug.keystore ~/.android/debug.keystore
+
       # Capacitor 7 needs Node 20+
       - name: Setup Node.js
         uses: actions/setup-node@v4
