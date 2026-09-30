@@ -253,8 +253,16 @@
   }
 
   // Inside the Android APK (Capacitor WebView) blob downloads and
-  // window.print() don't work, so the PDF is written to the app cache and
-  // handed to the system share sheet (Save to Files / WhatsApp / Print…).
+  // window.print() don't work, so both actions write the PDF natively.
+  // "প্রিন্ট" always hands the file to the system share sheet (which on
+  // most Android phones includes a "Print" entry for PDFs, plus
+  // WhatsApp/Drive/etc.) — that's the closest thing to real printing
+  // available without a dedicated native print plugin.
+  // "ডাউনলোড" instead tries to save the file directly into the device's
+  // visible Documents folder (Directory.Documents) with NO share sheet, so
+  // the two buttons actually behave differently as their labels promise.
+  // If that direct save fails for any reason, it safely falls back to the
+  // same share-sheet flow as before, so nothing regresses.
   // Uses Capacitor's global plugin proxies — no bundler needed.
   function isNative() {
     const C = window.Capacitor;
@@ -265,16 +273,32 @@
     for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     return btoa(bin);
   }
-  async function saveNative(bytes, filename) {
+  async function saveNative(bytes, filename, opts) {
     const P = window.Capacitor.Plugins || {};
     if (!P.Filesystem || !P.Share) throw new Error("native plugins missing");
+    const wantsShare = !opts || opts.share !== false;
+    if (!wantsShare) {
+      // direct-save path for the "ডাউনলোড" button — no share sheet
+      const res = await P.Filesystem.writeFile({ path: filename, data: toBase64(bytes), directory: "DOCUMENTS" });
+      return { uri: res.uri, shared: false };
+    }
     const res = await P.Filesystem.writeFile({ path: filename, data: toBase64(bytes), directory: "CACHE" });
-    await P.Share.share({ title: filename, url: res.uri, dialogTitle: "তালিকাটি সংরক্ষণ / প্রিন্ট করুন" });
+    await P.Share.share({ title: filename, url: res.uri, dialogTitle: "তালিকাটি প্রিন্ট বা শেয়ার করুন" });
+    return { uri: res.uri, shared: true };
   }
 
   function printDraft(d) {
     // on phones "print" = make the PDF and open the share/print sheet
-    if (isNative()) { downloadPdf(d).catch(() => {}); return; }
+    if (isNative()) {
+      (async () => {
+        try {
+          const pages = await renderPdfPages(d);
+          const bytes = buildPdf(pages);
+          await saveNative(bytes, "khasra-khata_" + d.date + "_" + d.id + ".pdf", { share: true });
+        } catch (e) { /* ignore — user can retry */ }
+      })();
+      return;
+    }
     const f = document.createElement("iframe");
     f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
     document.body.appendChild(f);
@@ -366,7 +390,18 @@
   async function downloadPdf(d) {
     const pages = await renderPdfPages(d);
     const bytes = buildPdf(pages);
-    if (isNative()) { await saveNative(bytes, "khasra-khata_" + d.date + "_" + d.id + ".pdf"); return; }
+    if (isNative()) {
+      const filename = "khasra-khata_" + d.date + "_" + d.id + ".pdf";
+      try {
+        const res = await saveNative(bytes, filename, { share: false });
+        return { savedTo: "Documents", uri: res.uri };
+      } catch (e) {
+        // Directory.Documents write failed on this device/Android version —
+        // fall back to the proven share-sheet flow rather than fail outright
+        await saveNative(bytes, filename, { share: true });
+        return { savedTo: "share" };
+      }
+    }
     const safe = (d.name || "list").replace(/[\\/:*?"<>|\s]+/g, "_").slice(0, 40);
     download(bytes, "খসড়া-খাতা_" + safe + "_" + d.date + ".pdf");
   }
@@ -526,7 +561,7 @@
       h("div", { style: S.footer },
         h("div", { style: { display: "flex", gap: 8 } },
           h("button", { style: S.ghost, onClick: () => printDraft(d) }, "🖨️ প্রিন্ট করুন"),
-          h("button", { style: S.ghost, disabled: busy, onClick: async () => { setBusy(true); try { await downloadPdf(d); } catch (e) { setMsg("পিডিএফ তৈরি করা যায়নি"); } setBusy(false); } }, busy ? "অপেক্ষা করুন…" : "📥 পিডিএফ ডাউনলোড")),
+          h("button", { style: S.ghost, disabled: busy, onClick: async () => { setBusy(true); try { await downloadPdf(d); setMsg(""); } catch (e) { setMsg("পিডিএফ তৈরি করা যায়নি"); } setBusy(false); } }, busy ? "অপেক্ষা করুন…" : "📥 পিডিএফ ডাউনলোড")),
         h("div", { style: { display: "flex", gap: 8, marginTop: 8 } },
           h("button", { style: S.ghost, onClick: () => editDraft(d) }, "✎ সম্পাদনা"),
           confirmDel

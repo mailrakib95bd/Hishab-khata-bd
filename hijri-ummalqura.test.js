@@ -5,7 +5,10 @@
 const fs = require("fs");
 const path = require("path");
 const assert = require("assert");
-const H = require(fs.existsSync(path.join(__dirname, "hijri-ummalqura.js")) ? "./hijri-ummalqura.js" : "../hijri-ummalqura.js");
+const vm = require("vm");
+const hijriPath = fs.existsSync(path.join(__dirname, "hijri-ummalqura.js")) ? path.join(__dirname, "hijri-ummalqura.js") : path.join(__dirname, "..", "hijri-ummalqura.js");
+const hijriUqSrc = fs.readFileSync(hijriPath, "utf8");
+const H = require(hijriPath);
 
 let passed = 0;
 function t(name, fn) {
@@ -161,6 +164,34 @@ t("the recurring date drifts earlier in the Gregorian calendar year over year (H
   const y1448 = H.hijriToGregorianYmd(1448, 7, 14);
   const days = (new Date(y1448 + "T00:00:00") - new Date(y1447 + "T00:00:00")) / 86400000;
   assert(days >= 353 && days <= 356, `expected ~354-355 days between recurrences, got ${days}`);
+});
+
+// Regression: a real Android APK build once shipped with window.HijriUQ
+// permanently undefined even though hijri-ummalqura.js was correctly bundled
+// and loaded — every admin "বিশেষ দিবস" Hijri save then failed with "date
+// not valid" (fixed date) or "no valid occurrence" (recurring), on-device
+// only. Root cause: the file set `window.HijriUQ` AFTER attempting
+// `module.exports = HijriUQ`, and something in that WebView had a global
+// `module` whose `.exports` wasn't writable — the resulting throw aborted
+// the whole IIFE partway through, before the window.HijriUQ line ever ran.
+// This proves it can never happen again: window.HijriUQ must always get set
+// even when `module` exists and assigning to `module.exports` throws.
+t("window.HijriUQ still gets set even if `module.exports = ...` throws (the exact APK-only bug this app once shipped)", () => {
+  const hostileCtx = {
+    window: {},
+    get module() { return { get exports() { return {}; }, set exports(v) { throw new Error("Cannot assign to read only property 'exports'"); } }; },
+    Intl, Math, Date, String, parseInt, isFinite,
+  };
+  vm.createContext(hostileCtx);
+  vm.runInContext(hijriUqSrc, hostileCtx, { filename: "hijri-ummalqura.js" });
+  assert(hostileCtx.window.HijriUQ, "window.HijriUQ must be set even when module.exports assignment throws");
+  assert.strictEqual(typeof hostileCtx.window.HijriUQ.hijriToGregorianYmd, "function");
+});
+t("window.HijriUQ is set even with no `module` global at all (plain browser <script> tag)", () => {
+  const browserCtx = { window: {}, Intl, Math, Date, String, parseInt, isFinite };
+  vm.createContext(browserCtx);
+  vm.runInContext(hijriUqSrc, browserCtx, { filename: "hijri-ummalqura.js" });
+  assert(browserCtx.window.HijriUQ, "window.HijriUQ must be set in a plain browser context");
 });
 
 console.log(`\n${passed} passed${process.exitCode ? " — WITH FAILURES" : ""}`);

@@ -311,7 +311,23 @@
       }
     }, [vis.prices]);
 
-    useEffect(() => { if (uid) loadTop(); }, [uid]);
+    useEffect(() => {
+      if (!uid) return undefined;
+      loadTop();
+      // window.FB (firebase-init.js) loads as a deferred ES module, so on a
+      // cold start it can still be missing at the exact instant this effect
+      // first runs — loadTop() above would then silently no-op, and since
+      // `uid` itself doesn't change again, this effect would otherwise never
+      // retry, permanently showing an empty পরিবার/family list until some
+      // unrelated action happened to call loadTop() again. Retry once FB
+      // actually becomes ready.
+      if (!window.FB) {
+        const onReady = () => loadTop();
+        window.addEventListener("fb-ready", onReady, { once: true });
+        return () => window.removeEventListener("fb-ready", onReady);
+      }
+      return undefined;
+    }, [uid]);
     useEffect(() => { if (activeId) loadStatic(activeId); }, [activeId, loadStatic]);
 
     // live family doc — a rename / new icon shows on every member's screen

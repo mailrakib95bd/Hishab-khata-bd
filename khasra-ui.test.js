@@ -152,15 +152,30 @@ assert(Module, "window.KhasraKhata.Module must be exported");
   await click("📜"); await click("বিস্তারিত দেখুন"); await click("🗑️ মুছুন"); has("নিশ্চিত? মুছে ফেলুন"); await click("নিশ্চিত? মুছে ফেলুন");
   assert.strictEqual(JSON.parse(ls["hisabkhata-khasra-v1:tester"]).length, 0); has("এখনও কোনো খসড়া সংরক্ষণ করা হয়নি"); ok("delete needs a second tap, then removes it");
 
-  // Android APK path: PDF goes to cache + system share sheet
+  // Android APK path: "প্রিন্ট" → PDF goes to cache + system share sheet;
+  // "ডাউনলোড" → PDF is saved straight to Documents, no share sheet, and
+  // falls back to the share flow if that direct write ever fails.
   const calls = [];
   win.Capacitor = { isNativePlatform: () => true, Plugins: {
     Filesystem: { writeFile: async (o) => { calls.push(["write", o]); return { uri: "file:///cache/" + o.path }; } },
     Share: { share: async (o) => { calls.push(["share", o]); } } } };
   assert.strictEqual(win.KhasraKhata._isNative(), true);
-  await win.KhasraKhata._saveNative(Uint8Array.from([37, 80, 68, 70]), "x.pdf");
+  await win.KhasraKhata._saveNative(Uint8Array.from([37, 80, 68, 70]), "x.pdf"); // default = share
   assert.strictEqual(calls[0][1].directory, "CACHE"); assert.strictEqual(calls[0][1].data, Buffer.from("%PDF").toString("base64"));
-  assert.strictEqual(calls[1][1].url, "file:///cache/x.pdf"); ok("native APK: PDF written to cache, then system share sheet opened");
+  assert.strictEqual(calls[1][1].url, "file:///cache/x.pdf"); ok("native APK প্রিন্ট: PDF written to cache, then system share sheet opened");
+
+  calls.length = 0;
+  const r = await win.KhasraKhata._saveNative(Uint8Array.from([37, 80, 68, 70]), "y.pdf", { share: false });
+  assert.strictEqual(calls.length, 1); assert.strictEqual(calls[0][0], "write"); assert.strictEqual(calls[0][1].directory, "DOCUMENTS");
+  assert.strictEqual(r.shared, false); ok("native APK ডাউনলোড: PDF saved straight to Documents, no share sheet opened");
+
+  calls.length = 0;
+  win.Capacitor.Plugins.Filesystem.writeFile = async (o) => {
+    if (o.directory === "DOCUMENTS") throw new Error("scoped storage denied");
+    calls.push(["write", o]); return { uri: "file:///cache/" + o.path };
+  };
+  const r2 = await win.KhasraKhata._saveNative(Uint8Array.from([37, 80, 68, 70]), "z.pdf", { share: false }).catch(() => "threw");
+  assert.strictEqual(r2, "threw"); ok("if a direct Documents write fails, _saveNative itself throws (downloadPdf is what falls back to share, tested at the module level in khasra-khata.test.js)");
   win.Capacitor = undefined; assert.strictEqual(win.KhasraKhata._isNative(), false); ok("in a normal browser it stays on the download path");
 
   console.log(`\n${n} passed`);

@@ -3847,6 +3847,7 @@ function AdminSpecialDayForm({ initial, onClose, onSave }) {
     const [title, setTitle] = useState((initial === null || initial === void 0 ? void 0 : initial.title) || "");
     const [description, setDescription] = useState((initial === null || initial === void 0 ? void 0 : initial.description) || "");
     const [err, setErr] = useState("");
+    const hijriModuleMissing = mode === "hijri" && !window.HijriUQ;
     const hijriYmd = mode === "hijri" && !recurring ? hijriToGregorianYmd(hYear, hMonth, hDay) : null;
     // recurring preview: this year's (or the next upcoming) matching English date
     const recurringNextYmd = recurring && window.HijriUQ ? window.HijriUQ.nextHijriOccurrence(parseInt(hMonth, 10), parseInt(hDay, 10), todayStr()) : null;
@@ -3895,10 +3896,10 @@ function AdminSpecialDayForm({ initial, onClose, onSave }) {
             recurring
                 ? (recurringNextYmd
                     ? React.createElement("div", { style: previewStyle }, `এই বছর ইংরেজি তারিখ: ${formatDateBn(recurringNextYmd).full} (পরের হিজরি বছর থেকে তারিখ আবার নতুন করে হিসাব হবে)`)
-                    : React.createElement("div", { style: Object.assign(Object.assign({}, previewStyle), { color: "var(--hk-danger)" }) }, "এই হিজরি দিন/মাসের কোনো বৈধ occurrence পাওয়া যায়নি"))
+                    : React.createElement("div", { style: Object.assign(Object.assign({}, previewStyle), { color: "var(--hk-danger)" }) }, hijriModuleMissing ? "হিজরি ক্যালেন্ডার মডিউল লোড হয়নি — অ্যাপ বন্ধ করে আবার খুলুন" : "এই হিজরি দিন/মাসের কোনো বৈধ occurrence পাওয়া যায়নি"))
                 : (hijriYmd
                     ? React.createElement("div", { style: previewStyle }, `ইংরেজি তারিখ: ${formatDateBn(hijriYmd).full}`)
-                    : React.createElement("div", { style: Object.assign(Object.assign({}, previewStyle), { color: "var(--hk-danger)" }) }, "এই হিজরি তারিখটি সঠিক নয় (মাসে ২৯ বা ৩০ দিন থাকে)")),
+                    : React.createElement("div", { style: Object.assign(Object.assign({}, previewStyle), { color: "var(--hk-danger)" }) }, hijriModuleMissing ? "হিজরি ক্যালেন্ডার মডিউল লোড হয়নি — অ্যাপ বন্ধ করে আবার খুলুন" : "এই হিজরি তারিখটি সঠিক নয় (মাসে ২৯ বা ৩০ দিন থাকে)")),
             React.createElement("div", { style: previewStyle }, "হিসাবটি উম্মুল কুরা (Umm al-Qura) সারণি অনুযায়ী — রমজান/শাওয়াল/জিলহজের প্রকৃত শুরু সরকারি চাঁদ দেখার ঘোষণার ওপর নির্ভর করে ±১ দিন আলাদা হতে পারে।"))),
         React.createElement("label", { style: admStyles.label }, "শিরোনাম *"),
         React.createElement("input", { style: admStyles.input, value: title, onChange: (e) => setTitle(e.target.value) }),

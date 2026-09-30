@@ -317,6 +317,14 @@
     nextHijriOccurrence: nextHijriOccurrence,
     hijriOccurrenceInGregorianMonth: hijriOccurrenceInGregorianMonth,
   };
-  if (typeof module !== "undefined" && module.exports) module.exports = HijriUQ;
+  // ব্রাউজার/WebView-এর জন্য window.HijriUQ সবার আগে, নিঃশর্তভাবে বসানো হয় —
+  // এর পরের module.exports চেষ্টাটা (শুধু Node টেস্টের জন্য দরকার) try/catch-এ
+  // মোড়ানো, যাতে কোনো native app WebView-তে যদি একটা আলাদা `module` global
+  // থাকে আর তাতে লেখা যায় না (assignment throw করে), সেই এরর যেন কখনোই
+  // window.HijriUQ বসানো আটকাতে না পারে — অ্যাপে হিজরি ক্যালেন্ডার ভেঙে
+  // যাওয়ার ঠিক এই কারণটা একবার দেখা গিয়েছিল বলে এই সতর্কতা।
   if (typeof window !== "undefined") window.HijriUQ = HijriUQ;
+  try {
+    if (typeof module !== "undefined" && module.exports) module.exports = HijriUQ;
+  } catch (e) { /* ignore — browser/WebView has no writable `module`, that's fine */ }
 })(typeof globalThis !== "undefined" ? globalThis : this);
