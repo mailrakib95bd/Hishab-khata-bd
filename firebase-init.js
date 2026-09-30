@@ -28,6 +28,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
   getFirestore,
+  initializeFirestore,
   doc,
   getDoc,
   setDoc,
@@ -59,7 +60,24 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+// Firestore's default streaming transport (WebChannel/gRPC-Web) is built
+// for real browsers and can silently fail inside an Android WebView (writes
+// still go through, since those use a simpler request, but reads never
+// sync — exactly "নতুন ট্রানজেকশন যোগ হয় কিন্তু পুরোনো ইতিহাস/ডেটা আসে না",
+// which only ever showed up in the packaged APK, never on the web). Forcing
+// long-polling here is the documented fix for Firestore inside WebViews —
+// it's a bit chattier than streaming but works reliably everywhere,
+// browser included, so this is safe to always turn on rather than only for
+// native builds.
+let db;
+try {
+  db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+} catch (e) {
+  // initializeFirestore throws if something (e.g. a hot-reload in dev)
+  // already initialized Firestore for this app — fall back to the
+  // already-initialized instance rather than crash the whole module.
+  db = getFirestore(app);
+}
 
 async function signInGoogle() {
   const provider = new GoogleAuthProvider();
