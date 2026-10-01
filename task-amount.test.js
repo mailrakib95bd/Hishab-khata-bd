@@ -63,4 +63,36 @@ t("the task form source no longer has a পরিমাণ field", () => {
   assert(!form.includes("পরিমাণ") && !form.includes("amount"), "TaskForm still mentions পরিমাণ/amount");
 });
 
+// All 3 places a user can add a task — Header's quick-add bar, the
+// "বিস্তারিত টাস্ক" TaskForm modal, and Admin Task Management's
+// TaskAdminForm — must all draw from the exact same category list
+// (useCategories().expenseCats), so a category created/renamed by the
+// admin shows up identically everywhere, instead of three separate lists
+// quietly drifting apart.
+t("Header's quick-add row now has its own category select, sourced from useCategories().expenseCats", () => {
+  const f0 = src.indexOf("function Header(");
+  const f1 = src.indexOf("function ", f0 + 10);
+  const header = src.slice(f0, f1);
+  assert(header.includes("const taskCats = useCategories();"), "Header no longer calls useCategories()");
+  assert(header.includes("styles.taskCatSelect") && header.includes("taskCats.expenseCats"), "quick-add row is missing its category <select>, or it isn't sourced from taskCats.expenseCats");
+});
+t("the quick-add submit passes the chosen category through to addTask (not just bare text)", () => {
+  const f0 = src.indexOf("function Header(");
+  const f1 = src.indexOf("function ", f0 + 10);
+  const header = src.slice(f0, f1);
+  const submitBlock = header.slice(header.indexOf("const submitTask = ()"), header.indexOf("const openReminderEdit"));
+  assert(submitBlock.includes("onAddTask({ text: newTask, category: newTaskCategory || null })"), "quick-add no longer forwards the selected category to onAddTask");
+});
+t("TaskForm's সাব-ক্যাটেগরি dropdown and TaskAdminForm's সাব-ক্যাটেগরি dropdown both read from the same cats.expenseCats source as the quick-add bar", () => {
+  const forms = ["function TaskForm(", "function TaskAdminForm("].map((marker) => {
+    const s0 = src.indexOf(marker);
+    const s1 = src.indexOf("function ", s0 + 10);
+    return src.slice(s0, s1);
+  });
+  forms.forEach((form, i) => {
+    assert(form.includes("const cats = useCategories();"), `form #${i} no longer calls useCategories()`);
+    assert(form.includes("(cats.expenseCats || [])"), `form #${i}'s category dropdown is no longer built from cats.expenseCats`);
+  });
+});
+
 console.log(`\n${passed} passed${process.exitCode ? " — WITH FAILURES" : ""}`);

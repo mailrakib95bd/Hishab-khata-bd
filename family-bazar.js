@@ -794,6 +794,7 @@
     const favoriteUid = others.length && freq[others[0].uid] > 0 ? others[0].uid : null;
     const [assignedTo, setAssignedTo] = useState(uid);
     const [title, setTitle] = useState("আজকের বাজার");
+    const [date, setDate] = useState(today());
     const [rows, setRows] = useState([blankShopRow()]);
     const [remindOn, setRemindOn] = useState(false);
     const [repeat, setRepeat] = useState("daily");
@@ -809,7 +810,7 @@
       setErrors([]); setBusy(true);
       try {
         await window.FB.saveShoppingList(familyId, {
-          title: v.title, createdBy: uid, assignedTo, items: v.items,
+          title: v.title, createdBy: uid, assignedTo, items: v.items, date,
           reminder: remindOn ? { enabled: true, time, repeat, date: repeat === "once" ? rdate : null } : null,
         });
         ctx.toast("তালিকা সংরক্ষণ করা হয়েছে ✓");
@@ -822,6 +823,8 @@
         h("button", { style: S.btn, disabled: busy, onClick: save }, busy ? "সংরক্ষণ হচ্ছে…" : "তালিকা সংরক্ষণ করুন")) },
       h("label", { style: S.label }, "তালিকার নাম"),
       h("input", { style: S.input, value: title, maxLength: 60, onChange: (e) => setTitle(e.target.value) }),
+      h("label", { style: S.label }, "তারিখ"),
+      h("input", { type: "date", style: S.input, value: date, onChange: (e) => setDate(e.target.value) }),
       others.length > 0 && h("div", null,
         h("label", { style: S.label }, "কার জন্য এই তালিকা?"),
         h("select", { style: S.input, value: assignedTo, onChange: (e) => setAssignedTo(e.target.value) },
@@ -830,9 +833,9 @@
       rows.map((r, i) => h("div", { key: r.key, style: Object.assign({}, S.card, { padding: "12px 12px 4px" }) },
         h("div", { style: Object.assign({}, S.row, { marginBottom: 6 }) }, h("b", { style: { fontSize: 13 } }, `পণ্য ${bn(i + 1)}`),
           rows.length > 1 && h("button", { "aria-label": "পণ্য বাদ দিন", onClick: () => setRows((rs) => rs.filter((_, j) => j !== i)), style: { background: "none", border: "none", color: "var(--hk-danger)", fontSize: 13, minHeight: 32 } }, "মুছুন")),
-        h("input", { style: S.input, placeholder: "পণ্যের নাম (যেমন: দুধ)", value: r.name, maxLength: 80, onChange: (e) => { const v = e.target.value; patch(i, { name: v, categoryId: r.categoryId || Core.guessCategoryId(v, fam.categories) || "" }); } }),
+        h("input", { style: S.input, placeholder: "পণ্যের নাম * (যেমন: দুধ)", value: r.name, maxLength: 80, onChange: (e) => { const v = e.target.value; patch(i, { name: v, categoryId: r.categoryId || Core.guessCategoryId(v, fam.categories) || "" }); } }),
         h("select", { style: S.input, value: r.categoryId, onChange: (e) => patch(i, { categoryId: e.target.value }), "aria-label": "ক্যাটাগরি" },
-          h("option", { value: "" }, "ক্যাটাগরি (ঐচ্ছিক)"),
+          h("option", { value: "" }, "ক্যাটাগরি *"),
           Core.CATEGORY_GROUPS.map((g) => h("optgroup", { key: g.key, label: g.label }, cats.filter((c) => c.group === g.key).map((c) => h("option", { key: c.id, value: c.id }, `${c.icon} ${c.name}`))))),
         h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
           h("div", null, h("label", { style: S.label }, "পরিমাণ (ঐচ্ছিক)"), h("input", { style: S.input, inputMode: "decimal", placeholder: "২", value: r.quantity, onChange: (e) => patch(i, { quantity: e.target.value }) })),
@@ -857,6 +860,7 @@
     const add = async () => {
       const name = row.name.trim();
       if (!name) { setErr("পণ্যের নাম লিখুন"); return; }
+      if (!row.categoryId) { setErr("ক্যাটাগরি বেছে নিন"); return; }
       setBusy(true); setErr("");
       try {
         await window.FB.addShoppingItems(ctx.familyId, listId, [Core.shoppingItem(row)]);
@@ -867,7 +871,7 @@
     return h("div", { style: Object.assign({}, S.card, { padding: "12px 12px 4px" }) },
       h("input", { style: S.input, placeholder: "পণ্যের নাম (যেমন: চিনি)", autoFocus: true, value: row.name, maxLength: 80, onChange: (e) => { const v = e.target.value; setRow((r) => Object.assign({}, r, { name: v, categoryId: r.categoryId || Core.guessCategoryId(v, fam.categories) || "" })); } }),
       h("select", { style: S.input, value: row.categoryId, onChange: (e) => setRow((r) => Object.assign({}, r, { categoryId: e.target.value })), "aria-label": "ক্যাটাগরি" },
-        h("option", { value: "" }, "ক্যাটাগরি (ঐচ্ছিক)"),
+        h("option", { value: "" }, "ক্যাটাগরি *"),
         Core.CATEGORY_GROUPS.map((g) => h("optgroup", { key: g.key, label: g.label }, cats.filter((c) => c.group === g.key).map((c) => h("option", { key: c.id, value: c.id }, `${c.icon} ${c.name}`))))),
       h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
         h("input", { style: S.input, inputMode: "decimal", placeholder: "পরিমাণ (ঐচ্ছিক)", value: row.quantity, onChange: (e) => setRow((r) => Object.assign({}, r, { quantity: e.target.value })) }),
@@ -878,40 +882,143 @@
         h("button", { style: S.btn2, onClick: () => { setOpen(false); setErr(""); } }, "বাতিল")));
   }
 
+  // প্রতিটা বাকি পণ্যের পরিমাণ+একক+একক দাম এখন লিস্টেই লেখা যায় (ডান পাশের
+  // খালি জায়গায়) — মোট অটো-ক্যালকুলেট হয়, আর পরিমাণ+দাম দুটোই না দেওয়া
+  // পর্যন্ত টিক-বক্সটা বন্ধ থাকে। টিক দেওয়া পণ্যগুলো "সংরক্ষণ করুন"-এ একসাথে
+  // একটা বাজার (purchase) হিসেবে সংরক্ষিত হয় — আগের আলাদা PurchaseSheet-এর
+  // ঠিক একই, পরীক্ষিত পাইপলাইন (Core.buildPurchase → window.FB.savePurchase
+  // → removeShoppingItems) পুনর্ব্যবহার করে, যাতে বাজেট/দামের-ইতিহাস/মাসিক
+  // হিসাবে কোনো ফারাক না হয় — শুধু screen-hop টা বাদ পড়ল।
   function ShoppingDetailSheet({ ctx, listId, close }) {
     const { fam, uid, familyId, vis } = ctx;
     const list = (fam.shoppingLists || []).find((l) => l.id === listId);
+    const prefs = useMemo(() => readPrefs(uid), [uid]);
+    const cats = useMemo(() => Core.allCategories(fam.categories), [fam.categories]);
     const [busy, setBusy] = useState(false);
+    const [buyRows, setBuyRows] = useState({}); // itemId -> { quantity, unit, unitPrice }
+    const [checked, setChecked] = useState({}); // itemId -> true
+    const [date, setDate] = useState((list && list.date) || today());
+    const [market, setMarket] = useState((prefs.markets && prefs.markets[0]) || "");
+    const [location, setLocation] = useState((prefs.locations && prefs.locations[0]) || "");
+    const [note, setNote] = useState("");
+    const [trackPrice, setTrackPrice] = useState(true);
+    const [errors, setErrors] = useState([]);
+    const [saving, setSaving] = useState(false);
+    const [statusOpenFor, setStatusOpenFor] = useState(null);
+    const [statusNoteDraft, setStatusNoteDraft] = useState("");
     if (!list) return h(Sheet, { title: "বাজারের তালিকা", onClose: close }, h(Empty, { icon: "📝", title: "তালিকা পাওয়া যায়নি", text: "সম্ভবত এটি মুছে ফেলা হয়েছে বা সম্পন্ন হয়ে গেছে।" }));
     const assignee = fam.members.find((m) => m.uid === list.assignedTo);
     const creator = fam.members.find((m) => m.uid === list.createdBy);
     const canManage = list.createdBy === uid || list.assignedTo === uid || vis.admin;
     const pending = Core.pendingShoppingItems(list);
-    const toggle = async (it) => { try { await window.FB.toggleShoppingItem(familyId, listId, it.id, !it.checked); } catch (e) { ctx.toast(friendlyError(e)); } };
-    const buyOne = (it) => ctx.openSheet({ type: "purchase", seed: [{ name: it.name, quantity: it.quantity, unit: it.unit, categoryId: it.categoryId }], fromList: { listId, itemIds: [it.id] } });
-    const buyAll = () => ctx.openSheet({ type: "purchase", seed: pending.map((it) => ({ name: it.name, quantity: it.quantity, unit: it.unit, categoryId: it.categoryId })), fromList: { listId, itemIds: pending.map((it) => it.id) } });
+    const rowOf = (it) => buyRows[it.id] || { quantity: it.quantity != null ? String(it.quantity) : "", unit: it.unit || "kg", unitPrice: "" };
+    const patchRow = (it, p) => setBuyRows((rs) => Object.assign({}, rs, { [it.id]: Object.assign({}, rowOf(it), p) }));
+    const rowTotal = (it) => { const r = rowOf(it); return Core.calcLineTotal(r.quantity, r.unitPrice); };
+    const rowReady = (it) => { const r = rowOf(it); return Core.parseNum(r.quantity) > 0 && Core.parseNum(r.unitPrice) > 0; };
+    const onCheck = (it, on) => {
+      if (on && !rowReady(it)) return; // পরিমাণ+একক দাম ছাড়া টিক দেওয়া যাবে না
+      setChecked((c) => Object.assign({}, c, { [it.id]: on }));
+    };
+    const deleteItem = async (it) => {
+      if (busy || !window.confirm(`"${it.name}" তালিকা থেকে মুছে ফেলবেন?`)) return;
+      setBusy(true);
+      try { await window.FB.removeShoppingItems(familyId, listId, [it.id]); ctx.toast("পণ্যটি মুছে ফেলা হয়েছে"); }
+      catch (e) { ctx.toast(friendlyError(e)); }
+      finally { setBusy(false); }
+    };
+    const saveStatus = async (it, status) => {
+      try { await window.FB.setShoppingItemStatus(familyId, listId, it.id, status, status === "note" ? statusNoteDraft.trim() : ""); }
+      catch (e) { ctx.toast(friendlyError(e)); }
+      setStatusOpenFor(null); setStatusNoteDraft("");
+    };
+    const clearStatus = (it) => window.FB.setShoppingItemStatus(familyId, listId, it.id, null, "").catch((e) => ctx.toast(friendlyError(e)));
+    const checkedItems = pending.filter((it) => checked[it.id] && rowReady(it));
+    const grandTotal = Core.round2(checkedItems.reduce((s, it) => s + rowTotal(it), 0));
     const removeList = async () => {
       if (busy || !window.confirm("এই তালিকাটি পুরোপুরি মুছে ফেলবেন?")) return;
       setBusy(true);
       try { await window.FB.deleteShoppingList(familyId, listId); ctx.toast("তালিকা মুছে ফেলা হয়েছে"); close(); }
       catch (e) { ctx.toast(friendlyError(e)); setBusy(false); }
     };
+    const saveBought = async () => {
+      if (saving || !checkedItems.length) return;
+      const draft = {
+        date,
+        items: checkedItems.map((it) => {
+          const r = rowOf(it);
+          const known = findProduct(fam.products, it.name);
+          return { itemId: it.id, productName: it.name, productId: known ? known.id : null, categoryId: it.categoryId || null,
+            categoryName: (cats.find((c) => c.id === it.categoryId) || {}).name || null,
+            quantity: r.quantity, unit: r.unit, unitPrice: r.unitPrice, total: "" };
+        }),
+      };
+      const v = Core.validatePurchaseDraft(draft, today());
+      if (!v.ok) { setErrors(v.errors); return; }
+      setErrors([]); setSaving(true);
+      const p = Core.buildPurchase({ purchaseId: Core.randomId(), memberId: uid, memberName: ctx.me.name, date, market, location, note, trackPrice, items: v.items });
+      try {
+        await window.FB.savePurchase(familyId, null, p);
+        rememberPrefs(uid, p);
+        ctx.afterPurchaseChange(null, p);
+        await window.FB.removeShoppingItems(familyId, listId, checkedItems.map((it) => it.id));
+        setBuyRows({}); setChecked({}); setNote("");
+        ctx.toast(`✓ বাজার যোগ হয়েছে (${money(grandTotal)})`);
+      } catch (e) { setErrors([friendlyError(e)]); } finally { setSaving(false); }
+    };
+    const statusBtn = { background: "none", border: "1px solid var(--hk-border-strong)", borderRadius: 6, fontSize: 11.5, padding: "3px 7px", color: "var(--hk-text-muted)", fontFamily: F };
     return h(Sheet, { title: list.title, onClose: close,
-      footer: pending.length > 1 && h("button", { style: S.btn, onClick: buyAll }, `সবগুলো (${bn(pending.length)}টি) দিয়ে একসাথে বাজার যোগ করুন`) },
+      footer: checkedItems.length > 0 && h("div", null,
+        errors.length > 0 && h("div", { style: { color: "var(--hk-danger)", fontSize: 13, marginBottom: 8, lineHeight: 1.5 } }, errors.map((e, i) => h("div", { key: i }, "• " + e))),
+        h("div", { style: Object.assign({}, S.row, { marginBottom: 8 }) }, h("span", { style: S.muted }, `সর্বমোট (${bn(checkedItems.length)}টি)`), h("span", { style: { fontFamily: SERIF, fontSize: 24 } }, money(grandTotal))),
+        h("button", { style: S.btn, disabled: saving, onClick: saveBought }, saving ? "সংরক্ষণ হচ্ছে…" : "সংরক্ষণ করুন")) },
       h("div", { style: S.muted }, list.assignedTo !== uid ? `${(assignee && assignee.name) || "একজন সদস্য"}-এর জন্য` : "আপনার জন্য",
         list.reminder && list.reminder.enabled ? ` • 🔔 ${bn(list.reminder.time)} (${REPEAT_LABEL[list.reminder.repeat] || ""})` : ""),
       list.createdBy !== uid && h("div", { style: Object.assign({}, S.card, { marginTop: 10 }) },
         h("div", { style: Object.assign({}, S.row, { marginBottom: creator && creator.phone ? 8 : 0 }) },
           h("span", null, "পাঠিয়েছেন"), h("b", null, (creator && creator.name) || "একজন সদস্য")),
         h(CallButtons, { phone: creator && creator.phone })),
+      pending.length > 0 && h("div", { style: { marginTop: 10 } },
+        h("label", { style: S.label }, "তারিখ"),
+        h("input", { type: "date", style: S.input, value: date, max: today(), onChange: (e) => setDate(e.target.value) })),
       h("div", { style: Object.assign({}, S.card, { marginTop: 10 }) },
         (list.items || []).length === 0 ? h("div", { style: S.muted }, "তালিকাটি খালি — সব কেনা হয়ে গেছে।") :
-        (list.items || []).map((it) => h("div", { key: it.id, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: "1px solid var(--hk-border-light)" } },
-          h("input", { type: "checkbox", checked: !!it.checked, onChange: () => toggle(it), style: { width: 22, height: 22, accentColor: "var(--hk-success)", flex: "none" } }),
-          h("button", { onClick: () => buyOne(it), style: { flex: 1, textAlign: "left", background: "none", border: "none", color: "var(--hk-text)", fontFamily: F, padding: 0, textDecoration: it.checked ? "line-through" : "none", opacity: it.checked ? 0.55 : 1 } },
-            h("div", { style: { fontWeight: 600, fontSize: 14.5 } }, it.name),
-            (it.quantity || it.unit) && h("div", { style: S.muted }, [it.quantity != null ? qtyText(it.quantity) : null, it.unit ? unitText(it.unit) : null].filter(Boolean).join(" ") + " — কিনতে চাপ দিন")))),
-        h("div", { style: Object.assign({}, S.muted, { marginTop: 8 }) }, "✓ দিলে শুধু সম্পন্ন হিসেবে চিহ্নিত হবে। নামের ওপর চাপ দিলে দাম সহ বাজার হিসেবে যোগ হবে ও তালিকা থেকে সরে যাবে।")),
+        (list.items || []).map((it) => {
+          const r = rowOf(it);
+          const ready = rowReady(it);
+          const isChecked = !!checked[it.id];
+          return h("div", { key: it.id, style: { padding: "9px 0", borderBottom: "1px solid var(--hk-border-light)" } },
+            h("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+              h("input", { type: "checkbox", checked: isChecked, disabled: !ready, title: ready ? "" : "আগে পরিমাণ ও একক দাম দিন", onChange: (e) => onCheck(it, e.target.checked), style: { width: 22, height: 22, accentColor: "var(--hk-success)", flex: "none", opacity: ready ? 1 : 0.4 } }),
+              h("div", { style: { flex: 1, minWidth: 0 } },
+                h("div", { style: { fontWeight: 600, fontSize: 14.5, textDecoration: isChecked ? "line-through" : "none", opacity: isChecked ? 0.55 : 1 } }, it.name),
+                it.foundStatus && h("div", { style: { display: "flex", alignItems: "center", gap: 6, marginTop: 2 } },
+                  h("span", { style: S.pill("var(--hk-track)", "var(--hk-text-muted-2)") }, Core.FOUND_STATUS_LABEL[it.foundStatus] + (it.statusNote ? `: ${it.statusNote}` : "")),
+                  canManage && h("button", { onClick: () => clearStatus(it), style: { background: "none", border: "none", color: "var(--hk-text-muted)", fontSize: 11 } }, "✕"))),
+              canManage && h("button", { "aria-label": "পণ্য মুছুন", onClick: () => deleteItem(it), disabled: busy, style: { background: "none", border: "none", color: "var(--hk-danger)", fontSize: 16, flex: "none", padding: 4 } }, "✕")),
+            !isChecked && h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginTop: 6, marginLeft: 32 } },
+              h("input", { style: Object.assign({}, S.input, { marginBottom: 0 }), inputMode: "decimal", placeholder: "পরিমাণ", value: r.quantity, onChange: (e) => patchRow(it, { quantity: e.target.value }) }),
+              h("select", { style: Object.assign({}, S.input, { marginBottom: 0 }), value: r.unit, onChange: (e) => patchRow(it, { unit: e.target.value }) }, Core.UNITS.map((u) => h("option", { key: u, value: u }, unitText(u)))),
+              h("input", { style: Object.assign({}, S.input, { marginBottom: 0 }), inputMode: "decimal", placeholder: "একক দাম", value: r.unitPrice, onChange: (e) => patchRow(it, { unitPrice: e.target.value }) })),
+            !isChecked && rowTotal(it) > 0 && h("div", { style: Object.assign({}, S.muted, { marginLeft: 32, marginTop: 3 }) }, `মোট ${money(rowTotal(it))}`),
+            !isChecked && !it.foundStatus && h("div", { style: { display: "flex", gap: 6, marginTop: 6, marginLeft: 32, flexWrap: "wrap" } },
+              h("button", { style: statusBtn, onClick: () => saveStatus(it, "not_found") }, "❌ পাওয়া যায়নি"),
+              h("button", { style: statusBtn, onClick: () => saveStatus(it, "too_expensive") }, "💸 দাম বেশি"),
+              statusOpenFor === it.id
+                ? h("div", { style: { display: "flex", gap: 4, flex: 1, minWidth: 140 } },
+                    h("input", { style: Object.assign({}, S.input, { marginBottom: 0, flex: 1, fontSize: 12 }), autoFocus: true, placeholder: "কারণ লিখুন…", value: statusNoteDraft, onChange: (e) => setStatusNoteDraft(e.target.value), onKeyDown: (e) => e.key === "Enter" && statusNoteDraft.trim() && saveStatus(it, "note") }),
+                    h("button", { style: statusBtn, disabled: !statusNoteDraft.trim(), onClick: () => saveStatus(it, "note") }, "✓"))
+                : h("button", { style: statusBtn, onClick: () => { setStatusOpenFor(it.id); setStatusNoteDraft(""); } }, "📝 নোট")));
+        })),
+      checkedItems.length > 0 && h("div", { style: Object.assign({}, S.card, { marginTop: 10 }) },
+        h("label", { style: S.label }, "বাজার/দোকান"),
+        h("input", { style: S.input, list: "fb-markets", value: market, onChange: (e) => setMarket(e.target.value) }),
+        h("datalist", { id: "fb-markets" }, (prefs.markets || []).map((n) => h("option", { key: n, value: n }))),
+        h("label", { style: S.label }, "এলাকা/শহর"),
+        h("input", { style: S.input, list: "fb-locations", value: location, onChange: (e) => setLocation(e.target.value) }),
+        h("datalist", { id: "fb-locations" }, (prefs.locations || []).map((n) => h("option", { key: n, value: n }))),
+        h("label", { style: S.label }, "নোট (ঐচ্ছিক)"),
+        h("input", { style: S.input, value: note, onChange: (e) => setNote(e.target.value) }),
+        h(Toggle, { on: trackPrice, onChange: setTrackPrice, label: "দামের ইতিহাসে যোগ হবে", hint: "বন্ধ করলে খরচ হিসেবে গণনা হবে, কিন্তু পণ্যের দামের তুলনায় আসবে না" })),
       canManage && h(AddShoppingItemForm, { ctx, listId, fam }),
       canManage && h("button", { style: S.danger, disabled: busy, onClick: removeList }, "তালিকাটি মুছে ফেলুন"));
   }

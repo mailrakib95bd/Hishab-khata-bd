@@ -1295,11 +1295,18 @@ function App() {
     // { date, title, description }. Duplicate (date+title already present
     // in adminSpecialDaysCloud) rows are skipped so re-importing the same
     // sheet twice never corrupts the calendar with repeats.
+    // fixed-date entries key by their date; Hijri-recurring entries (date is
+    // always null for those — see resolveSpecialDayDate) key by month+day
+    // instead, so a recurring "১৪ রজব" bulk-imported twice is still caught
+    // as a duplicate even though it has no fixed `date` to compare.
+    const specialDayDupKey = (s) => (s && s.recurrence === "hijri"
+        ? `hijri:${s.hijriMonth}-${s.hijriDay}|${(s.title || "").trim()}`
+        : `${s.date}|${(s.title || "").trim()}`);
     const adminBulkImportSpecialDays = async (rows) => {
         if (!isAdmin(user))
             return { added: 0, skipped: 0, ok: false, message: "অ্যাডমিন অনুমতি নেই।" };
-        const existingKey = new Set(adminSpecialDaysCloud.map((s) => `${s.date}|${(s.title || "").trim()}`));
-        const fresh = rows.filter((r) => !existingKey.has(`${r.date}|${(r.title || "").trim()}`));
+        const existingKey = new Set(adminSpecialDaysCloud.map(specialDayDupKey));
+        const fresh = rows.filter((r) => !existingKey.has(specialDayDupKey(r)));
         try {
             if (fresh.length)
                 await window.FB.batchAddTo("adminSpecialDays", fresh);
@@ -1312,9 +1319,9 @@ function App() {
             // just wrote, wait a moment and fetch once more before
             // reporting success. Uses fetchAdminContent's own return
             // value directly — never a stale closure of local state.
-            const freshKeys = new Set(fresh.map((r) => `${r.date}|${r.title.trim()}`));
+            const freshKeys = new Set(fresh.map(specialDayDupKey));
             const missingAfter = (list) => {
-                const currentKeys = new Set((list || []).map((s) => `${s.date}|${(s.title || "").trim()}`));
+                const currentKeys = new Set((list || []).map(specialDayDupKey));
                 return [...freshKeys].some((k) => !currentKeys.has(k));
             };
             if (fresh.length && missingAfter(latest)) {
@@ -2430,6 +2437,7 @@ function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onTo
     useBackOverlay(showTaskForm, () => setShowTaskForm(false));
     const taskCats = useCategories();
     const [newTask, setNewTask] = useState("");
+    const [newTaskCategory, setNewTaskCategory] = useState("");
     const [reminderEditId, setReminderEditId] = useState(null);
     const [reminderDateVal, setReminderDateVal] = useState("");
     const [reminderTimeVal, setReminderTimeVal] = useState("");
@@ -2443,8 +2451,12 @@ function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onTo
     const submitTask = () => {
         if (!newTask.trim() || tasks.length >= MAX_TASKS)
             return;
-        onAddTask(newTask);
+        // quick-add now offers the same সাব-ক্যাটেগরি list as "বিস্তারিত
+        // টাস্ক" and Admin Task Management (taskCats.expenseCats, below) —
+        // so all 3 places a user can add a task share one identical list.
+        onAddTask({ text: newTask, category: newTaskCategory || null });
         setNewTask("");
+        setNewTaskCategory("");
     };
     const openReminderEdit = (t) => {
         setReminderEditId(t.id);
@@ -2520,6 +2532,9 @@ function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onTo
                                 t.dueDate && React.createElement("span", { style: { fontSize: 11, color: "var(--hk-text-muted)" } }, formatDateBn(t.dueDate).full))))))),
                         React.createElement("div", { style: styles.reminderHint }, "\u0985\u09CD\u09AF\u09BE\u09AA \u0996\u09CB\u09B2\u09BE \u09A5\u09BE\u0995\u09BE \u0985\u09AC\u09B8\u09CD\u09A5\u09BE\u09AF\u09BC \u09A8\u09BF\u09B0\u09CD\u09A6\u09BF\u09B7\u09CD\u099F \u09B8\u09AE\u09AF\u09BC\u09C7 \u09B8\u09CD\u0995\u09CD\u09B0\u09BF\u09A8\u09C7 \u09B8\u09A4\u09B0\u09CD\u0995\u09A4\u09BE \u09A6\u09C7\u0996\u09BE\u09AC\u09C7\u0964"),
                         tasks.length < MAX_TASKS && (React.createElement("div", { style: styles.taskAddRow },
+                            React.createElement("select", { style: styles.taskCatSelect, value: newTaskCategory, onChange: (e) => setNewTaskCategory(e.target.value), "aria-label": "সাব-ক্যাটেগরি" },
+                                React.createElement("option", { value: "" }, "ক্যাটেগরি"),
+                                (taskCats.expenseCats || []).map((c) => React.createElement("option", { key: c.key, value: c.key }, c.label))),
                             React.createElement("input", { style: styles.taskInput, placeholder: "\u09A8\u09A4\u09C1\u09A8 \u0995\u09BE\u099C \u09B2\u09BF\u0996\u09C1\u09A8\u2026", value: newTask, onChange: (e) => setNewTask(e.target.value), onKeyDown: (e) => e.key === "Enter" && submitTask() }),
                             React.createElement("button", { style: styles.taskAddBtn, onClick: submitTask }, "+")),
                         tasks.length < MAX_TASKS && (React.createElement("button", { style: { fontSize: 11.5, color: "var(--hk-gold)", background: "none", border: "none", marginTop: 6, padding: 0 }, onClick: () => { setEditingTask(null); setShowTaskForm(true); } }, "+ \u09AC\u09BF\u09B8\u09CD\u09A4\u09BE\u09B0\u09BF\u09A4 \u099F\u09BE\u09B8\u09CD\u0995 (\u09A4\u09BE\u09B0\u09BF\u0996, \u09B8\u09BE\u09AC-\u0995\u09CD\u09AF\u09BE\u099F\u09C7\u0997\u09B0\u09BF, \u09B0\u09BF\u09AE\u09BE\u0987\u09A8\u09CD\u09A1\u09BE\u09B0)")),
@@ -4027,49 +4042,106 @@ function FaqAdminForm({ initial, onClose, onSave }) {
         err && React.createElement("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginBottom: 8 } }, err),
         React.createElement("button", { style: admStyles.addBtn, onClick: () => { if (!question.trim() || !answer.trim()) { setErr("প্রশ্ন ও উত্তর দুটোই আবশ্যক"); return; } onSave({ question: question.trim(), answer: answer.trim() }); } }, "সংরক্ষণ করুন")));
 }
-// bulk import: "Date | Title | Description" — one row per line. Validates
-// each row (parseable date, non-empty title), separates valid/invalid, and
-// leaves duplicate-detection against the current adminSpecialDaysCloud list
-// to the parent's onBulkImport (which also re-checks at commit time).
-function BulkSpecialDayImport({ onClose, onImport, existing }) {
-    const [text, setText] = useState("");
-    const [result, setResult] = useState(null);
-    const parse = () => {
-        const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-        const valid = [];
-        const invalid = [];
-        const seenKeys = new Set();
-        let dupCount = 0;
-        const existingKeys = new Set((existing || []).map((s) => `${s.date}|${(s.title || "").trim()}`));
-        lines.forEach((line) => {
-            const parts = line.split("|").map((p) => p.trim());
-            const [date, title, description] = parts;
-            const validDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date);
-            if (!validDate || !title) {
-                invalid.push(line);
-                return;
-            }
-            const key = `${date}|${title}`;
-            if (existingKeys.has(key) || seenKeys.has(key)) {
-                dupCount++;
-                return;
-            }
-            seenKeys.add(key);
-            valid.push({ date, title, description: description || "" });
-        });
-        setResult({ valid, invalid, dupCount });
+// বাল্ক ইমপোর্ট — খসড়া হিসাব খাতার মতো সারি-ভিত্তিক দ্রুত এন্ট্রি: ১০টা
+// সিরিয়াল/লাইন দিয়ে শুরু, বিবরণ/শিরোনাম ঘরে লেখা থাকা অবস্থায় Enter চাপলে
+// পরের নতুন লাইন যোগ হয় (খালি রাখলে হয় না) — খসড়া খাতার enterNav()-এর
+// ঠিক একই নিয়ম, শুধু "desc" কলামের বদলে এখানে "title" কলামে প্রযোজ্য।
+// উপরে একটা global টগল দিয়ে পুরো টেবিলের তারিখ ইংরেজি না হিজরি ঠিক হয়:
+// হিজরি মোডে প্রতিটা সারি দিন+মাস (বছর ছাড়া) নেয় এবং সবসময় "প্রতি হিজরি
+// বছর" recurring হিসেবেই সংরক্ষিত হয় — এটাই বাল্কে যোগ করা ইসলামি দিবসের
+// (রমজান, ঈদ, আশুরা...) স্বাভাবিক ব্যবহার, তাই প্রতি সারিতে আলাদা
+// recurring-টগল রাখেনি জটিলতা কমাতে।
+function newBulkSpecialDayRow() { return { id: uid(), gDate: "", hDay: "", hMonth: "", title: "", details: "" }; }
+function newBulkSpecialDayRows(n) { return Array.from({ length: n || 10 }, newBulkSpecialDayRow); }
+function isBlankBulkSpecialDayRow(row) { return !String((row && row.title) || "").trim(); }
+// Enter-key rule (খসড়া খাতার enterNav()-এর মতোই): বিবরণ/শিরোনাম ঘরে Enter →
+// পরের সারির একই ঘরে ফোকাস; শেষ সারিতে থাকলে এবং সেই সারির শিরোনাম খালি না
+// থাকলে একটা নতুন সারি যোগ হয়ে সেখানে ফোকাস যায়; খালি থাকলে কিছু হয় না।
+function bulkSpecialDayEnterNav(index, rows) {
+    const last = rows.length - 1;
+    if (index < last) return { type: "focus", index: index + 1 };
+    if (String(rows[index].title || "").trim()) return { type: "add", index: index + 1 };
+    return { type: "none" };
+}
+function BulkSpecialDayImport({ onClose, onImport }) {
+    const [dateMode, setDateMode] = useState("gregorian"); // "gregorian" | "hijri"
+    const [rows, setRows] = useState(() => newBulkSpecialDayRows(10));
+    const [err, setErr] = useState("");
+    const [msg, setMsg] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [focusReq, setFocusReq] = useState(null);
+    const refs = useRef({});
+    useEffect(() => {
+        if (!focusReq) return;
+        const el = refs.current["title-" + focusReq];
+        if (el && el.focus) el.focus();
+        setFocusReq(null);
+    }, [focusReq]);
+    const setCell = (i, field, value) => { setErr(""); setMsg(""); setRows((rs) => rs.map((r, k) => (k === i ? Object.assign({}, r, { [field]: value }) : r))); };
+    const addRow = () => setRows((rs) => [...rs, newBulkSpecialDayRow()]);
+    const removeRow = (i) => setRows((rs) => (rs.length > 1 ? rs.filter((_, k) => k !== i) : rs));
+    const onTitleEnter = (i) => (e) => {
+        if (e.key !== "Enter" || (e.nativeEvent && e.nativeEvent.isComposing)) return;
+        e.preventDefault();
+        const act = bulkSpecialDayEnterNav(i, rows);
+        if (act.type === "add") setRows((rs) => [...rs, newBulkSpecialDayRow()]);
+        if (act.type !== "none") setFocusReq(act.index);
     };
-    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "\u09AC\u09BE\u09B2\u09CD\u0995 \u0987\u09AE\u09CD\u09AA\u09CB\u09B0\u09CD\u099F \u2014 \u09AC\u09BF\u09B6\u09C7\u09B7 \u09A6\u09BF\u09AC\u09B8" },
-        React.createElement("div", { style: admStyles.muted }, "\u09AA\u09CD\u09B0\u09A4\u09BF \u09B2\u09BE\u0987\u09A8: Date | Title | Description  (\u09AF\u09C7\u09AE\u09A8: 2026-09-10 | \u09C7\u0987\u09A6 \u09AE\u09BF\u09B2\u09BE\u09A6 | \u099B\u09C1\u099F\u09BF\u09B0 \u09A6\u09BF\u09A8)"),
-        React.createElement("textarea", { style: Object.assign(Object.assign({}, admStyles.input), { minHeight: 140, fontFamily: "monospace", fontSize: 12.5, marginTop: 8 }), placeholder: "2026-09-10 | \u09C7\u0987\u09A6 \u09AE\u09BF\u09B2\u09BE\u09A6 | \u099B\u09C1\u099F\u09BF\u09B0 \u09A6\u09BF\u09A8", value: text, onChange: (e) => { setText(e.target.value); setResult(null); } }),
-        !result && React.createElement("button", { style: admStyles.addBtn, onClick: parse }, "\u09AF\u09BE\u099A\u09BE\u0987 \u0995\u09B0\u09C1\u09A8"),
-        result && (React.createElement("div", null,
-            React.createElement("div", { style: admStyles.totalsBar },
-                React.createElement("span", null, "\u09B8\u09A0\u09BF\u0995: ", result.valid.length),
-                React.createElement("span", null, "\u09AD\u09C1\u09B2: ", result.invalid.length),
-                React.createElement("span", null, "\u09A1\u09C1\u09AA\u09B2\u09BF\u0995\u09C7\u099F: ", result.dupCount)),
-            result.invalid.length > 0 && (React.createElement("div", { style: { fontSize: 12, color: "var(--hk-danger)", marginTop: 8 } }, "\u09AD\u09C1\u09B2 \u09B2\u09BE\u0987\u09A8: ", result.invalid.join(" · "))),
-            React.createElement("button", { style: Object.assign(Object.assign({}, admStyles.addBtn), { marginTop: 12 }), disabled: result.valid.length === 0, onClick: async () => { await onImport(result.valid); onClose(); } }, `\u0986\u09AE\u09A6\u09BE\u09A8\u09BF \u0995\u09B0\u09C1\u09A8 (${result.valid.length})`)))));
+    const usedRows = rows.filter((r) => !isBlankBulkSpecialDayRow(r));
+    const save = async () => {
+        if (usedRows.length === 0) { setErr("অন্তত একটি লাইনে শিরোনাম দিন"); return; }
+        const incomplete = [];
+        const payload = [];
+        usedRows.forEach((r, k) => {
+            const serial = rows.indexOf(r) + 1;
+            if (dateMode === "gregorian") {
+                if (!r.gDate) { incomplete.push(serial); return; }
+                payload.push({ date: r.gDate, title: r.title.trim(), description: (r.details || "").trim() });
+            }
+            else {
+                const hm = parseInt(r.hMonth, 10), hd = parseInt(r.hDay, 10);
+                if (!hm || !hd) { incomplete.push(serial); return; }
+                payload.push({ recurrence: "hijri", hijriMonth: hm, hijriDay: hd, title: r.title.trim(), description: (r.details || "").trim(), date: null, hijri: null });
+            }
+        });
+        if (incomplete.length) { setErr(`লাইন ${incomplete.join(", ")}-এ তারিখ দেওয়া হয়নি`); return; }
+        setBusy(true);
+        const result = await onImport(payload);
+        setBusy(false);
+        if (result && result.ok === false) { setErr(result.message || "সংরক্ষণ ব্যর্থ হয়েছে"); return; }
+        const skipped = (result && result.skipped) || 0;
+        setMsg(`✓ ${(result && result.added) || payload.length}টি যোগ হয়েছে${skipped ? ` (${skipped}টি আগে থেকেই ছিল, বাদ দেওয়া হয়েছে)` : ""}`);
+        setRows(newBulkSpecialDayRows(10));
+    };
+    const rowStyle = { display: "grid", gridTemplateColumns: "26px 1fr 1fr 1fr 22px", gap: 5, alignItems: "center", padding: "4px 0", borderBottom: "1px solid var(--hk-border-light)" };
+    const cellInput = { width: "100%", padding: "5px 6px", borderRadius: 5, border: "1px solid var(--hk-border-strong)", background: "var(--hk-surface-soft)", fontSize: 12, fontFamily: "'Hind Siliguri', sans-serif", minWidth: 0, boxSizing: "border-box" };
+    return (React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "বাল্ক ইমপোর্ট — বিশেষ দিবস" },
+        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10, fontSize: 12.5 } },
+            React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 4 } },
+                React.createElement("input", { type: "radio", name: "bulkDateMode", checked: dateMode === "gregorian", onChange: () => setDateMode("gregorian") }), "ইংরেজি তারিখ"),
+            React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 4 } },
+                React.createElement("input", { type: "radio", name: "bulkDateMode", checked: dateMode === "hijri", onChange: () => setDateMode("hijri") }), "হিজরি তারিখ (প্রতি হিজরি বছর পুনরাবৃত্তি)")),
+        React.createElement("div", { style: Object.assign({}, rowStyle, { fontWeight: 700, fontSize: 11, color: "var(--hk-text-muted)", borderBottom: "2px solid var(--hk-border-strong)" }) },
+            React.createElement("span", null, "#"), React.createElement("span", null, "তারিখ"), React.createElement("span", null, "বিবরণ/শিরোনাম"), React.createElement("span", null, "বিস্তারিত"), React.createElement("span", null)),
+        rows.map((r, i) => React.createElement("div", { key: r.id, style: rowStyle },
+            React.createElement("span", { style: { fontSize: 11, color: "var(--hk-text-muted)" } }, i + 1),
+            dateMode === "gregorian"
+                ? React.createElement("input", { style: cellInput, type: "date", value: r.gDate, onChange: (e) => setCell(i, "gDate", e.target.value) })
+                : React.createElement("div", { style: { display: "flex", gap: 3 } },
+                    React.createElement("select", { style: Object.assign({}, cellInput, { width: 48, padding: "5px 2px" }), value: r.hDay, onChange: (e) => setCell(i, "hDay", e.target.value) },
+                        React.createElement("option", { value: "" }, "দিন"),
+                        Array.from({ length: 30 }, (_, d) => d + 1).map((d) => React.createElement("option", { key: d, value: d }, toBnDigits(d)))),
+                    React.createElement("select", { style: Object.assign({}, cellInput, { padding: "5px 2px" }), value: r.hMonth, onChange: (e) => setCell(i, "hMonth", e.target.value) },
+                        React.createElement("option", { value: "" }, "মাস"),
+                        HIJRI_MONTHS.map((mName, mi) => React.createElement("option", { key: mi, value: mi + 1 }, mName)))),
+            React.createElement("input", { ref: (el) => { refs.current["title-" + i] = el; }, style: cellInput, value: r.title, onChange: (e) => setCell(i, "title", e.target.value), onKeyDown: onTitleEnter(i), placeholder: "যেমন: ঈদ মিলাদুন্নবী" }),
+            React.createElement("input", { style: cellInput, value: r.details, onChange: (e) => setCell(i, "details", e.target.value), placeholder: "বিস্তারিত (ঐচ্ছিক)" }),
+            React.createElement("button", { style: { border: "none", background: "none", color: "var(--hk-danger)", fontSize: 15, cursor: "pointer", padding: 0 }, onClick: () => removeRow(i), "aria-label": "সারি মুছুন", type: "button" }, "✕"))),
+        React.createElement("button", { style: { fontSize: 12, color: "var(--hk-gold)", background: "none", border: "none", marginTop: 8, padding: 0 }, onClick: addRow, type: "button" }, "+ আরেকটি লাইন"),
+        React.createElement("div", { style: admStyles.totalsBar }, React.createElement("span", null, `মোট পূরণ করা লাইন: ${toBnDigits(usedRows.length)}`)),
+        err && React.createElement("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginTop: 6 } }, err),
+        msg && React.createElement("div", { style: { color: "var(--hk-success, #1a7f37)", fontSize: 12.5, marginTop: 6 } }, msg),
+        React.createElement("button", { style: Object.assign(Object.assign({}, admStyles.addBtn), { marginTop: 12 }), disabled: busy, onClick: save }, busy ? "সংরক্ষণ হচ্ছে…" : `সংরক্ষণ করুন (${toBnDigits(usedRows.length)})`)));
 }
 function AdminPanel({ onClose, notices, dailyMessages, adminSpecialDaysCloud, adminTasksCloud, faqCloud, loading, error, onRefresh, onAddNotice, onUpdateNotice, onDeleteNotice, onAddDailyMessage, onUpdateDailyMessage, onDeleteDailyMessage, onAddSpecialDay, onUpdateSpecialDay, onDeleteSpecialDay, onBulkImport, onAddTask, onUpdateTask, onDeleteTask, onAddFaq, onUpdateFaq, onDeleteFaq, }) {
     const [tab, setTab] = useState("notices"); // notices | daily | special | task | faq
@@ -6253,6 +6325,16 @@ const styles = {
         fontSize: 12,
         fontFamily: "'Hind Siliguri', sans-serif",
         minWidth: 0,
+    },
+    taskCatSelect: {
+        width: 74,
+        flexShrink: 0,
+        padding: "6px 2px",
+        borderRadius: 6,
+        border: "1px solid var(--hk-border-strong)",
+        background: "var(--hk-surface-soft)",
+        fontSize: 11,
+        fontFamily: "'Hind Siliguri', sans-serif",
     },
     taskAddBtn: {
         width: 26,

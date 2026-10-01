@@ -120,6 +120,8 @@
   ];
 
   const UNITS = ["kg", "g", "L", "ml", "pcs", "হালি", "ডজন", "প্যাকেট"];
+  // প্রাপক কোনো পণ্য না কিনে কারণ জানালে — তালিকা পাঠানো ব্যক্তি এটা দেখতে পাবে
+  const FOUND_STATUS_LABEL = { not_found: "❌ পাওয়া যায়নি", too_expensive: "💸 দাম বেশি", note: "📝 নোট" };
 
   const BUDGET_LEVELS = { ok: "ok", w80: "w80", w90: "w90", over: "over" };
 
@@ -662,6 +664,11 @@
       quantity: row && row.quantity != null && row.quantity !== "" ? round2(parseNum(row.quantity)) : null,
       unit: (row && row.unit) || null, categoryId: (row && row.categoryId) || null,
       note: (row && row.note) || "", checked: !!(row && row.checked),
+      // প্রাপক পণ্যটি না কিনে কেন রেখে দিল, তার কারণ — তালিকা যিনি পাঠিয়েছেন
+      // তিনিও এটা দেখতে পাবেন। purchased হয়ে গেলে (অর্থাৎ removeShoppingItems
+      // দিয়ে তালিকা থেকে সরে গেলে) আর প্রাসঙ্গিক থাকে না।
+      foundStatus: (row && row.foundStatus) || null, // null | "not_found" | "too_expensive" | "note"
+      statusNote: (row && row.statusNote) || "",
     };
   }
 
@@ -677,10 +684,11 @@
     const items = [];
     (draft && draft.items || []).forEach((row, i) => {
       const name = String(row.name || "").trim();
-      if (!name && !String(row.quantity || "").trim()) return; // blank trailing row
+      if (!name && !String(row.quantity || "").trim() && !row.categoryId) return; // blank trailing row
       const n = i + 1;
       if (!name) { errors.push(`${n} নম্বর পণ্যের নাম লিখুন`); return; }
       if (name.length > 80) { errors.push(`${n} নম্বর পণ্যের নাম অনেক বড়`); return; }
+      if (!row.categoryId) { errors.push(`${n} নম্বর পণ্যের ক্যাটাগরি বেছে নিন`); return; }
       items.push(shoppingItem(Object.assign({}, row, { name })));
     });
     if (!items.length) errors.push("অন্তত একটি পণ্য যোগ করুন");
@@ -720,7 +728,7 @@
   }
 
   return {
-    RELATIONS, INVITE_RELATIONS, ROLES, INVITABLE_ROLES, PERMISSIONS, PERMISSION_KEYS, DEFAULT_CATEGORIES, CATEGORY_GROUPS, UNITS, BUDGET_LEVELS, INVITE_STATUS_LABEL,
+    RELATIONS, INVITE_RELATIONS, ROLES, INVITABLE_ROLES, PERMISSIONS, PERMISSION_KEYS, DEFAULT_CATEGORIES, CATEGORY_GROUPS, UNITS, BUDGET_LEVELS, INVITE_STATUS_LABEL, FOUND_STATUS_LABEL,
     permissionPreset, normalizePermissions,
     parseNum, round2, nameKey, hash36, productIdFor, locKey, isValidEmail, randomId,
     ymdToDate, dateToYmd, isValidYmd, addDays, monthOf, addMonths, daysInMonth, weekStart, monthsBack,

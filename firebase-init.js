@@ -590,6 +590,17 @@ window.FB = {
     await updateDoc(ref, { items, updatedAt: Date.now() });
   },
 
+  // প্রাপক কোনো পণ্য কিনতে না পারলে কারণ জানায় (পাওয়া যায়নি/দাম বেশি/নোট) —
+  // আইটেমটা তালিকায় থেকেই যায় (checked হয় না), শুধু স্ট্যাটাস/নোট যোগ হয়,
+  // যাতে তালিকা পাঠানো ব্যক্তি পরে দেখতে পারে কী হয়নি আর কেন
+  async setShoppingItemStatus(familyId, listId, itemId, foundStatus, statusNote) {
+    const ref = doc(db, "families", familyId, "shoppingLists", listId);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    const items = (snap.data().items || []).map((it) => (it.id === itemId ? { ...it, foundStatus: foundStatus || null, statusNote: statusNote || "" } : it));
+    await updateDoc(ref, { items, updatedAt: Date.now() });
+  },
+
   // called once those item(s) turn into an actual purchase — removes them
   // from the list entirely; whatever wasn't bought stays for next time
   async removeShoppingItems(familyId, listId, itemIds) {

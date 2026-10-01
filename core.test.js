@@ -222,15 +222,18 @@ t("dashboard: Rakib 320 + Abbu 350 = 670 (spec scenarios 4-6)", () => {
   assert.deepStrictEqual(C.memberMonthTotals(docs, "2026-09"), { rakib: 320, abbu: 350 });
 });
 t("shopping list: valid draft cleans rows, drops a blank trailing row", () => {
-  const v = C.validateShoppingDraft({ title: "আজকের বাজার", assignedTo: "u2", items: [{ name: "চাল", quantity: "5", unit: "kg" }, { name: "", quantity: "" }] });
+  // নাম ও ক্যাটাগরি দুটোই এখন বাধ্যতামূলক (সমস্যা ২) — categoryId ছাড়া রো আর বৈধ না
+  const v = C.validateShoppingDraft({ title: "আজকের বাজার", assignedTo: "u2", items: [{ name: "চাল", quantity: "5", unit: "kg", categoryId: "cat1" }, { name: "", quantity: "" }] });
   assert.ok(v.ok, JSON.stringify(v.errors));
   assert.strictEqual(v.items.length, 1);
   assert.strictEqual(v.items[0].quantity, 5);
+  assert.strictEqual(v.items[0].categoryId, "cat1");
 });
-t("shopping list: rejects no title / no assignee / no items", () => {
-  assert.ok(!C.validateShoppingDraft({ title: "", assignedTo: "u2", items: [{ name: "চাল" }] }).ok);
-  assert.ok(!C.validateShoppingDraft({ title: "X", assignedTo: null, items: [{ name: "চাল" }] }).ok);
+t("shopping list: rejects no title / no assignee / no items / no category", () => {
+  assert.ok(!C.validateShoppingDraft({ title: "", assignedTo: "u2", items: [{ name: "চাল", categoryId: "cat1" }] }).ok);
+  assert.ok(!C.validateShoppingDraft({ title: "X", assignedTo: null, items: [{ name: "চাল", categoryId: "cat1" }] }).ok);
   assert.ok(!C.validateShoppingDraft({ title: "X", assignedTo: "u2", items: [] }).ok);
+  assert.ok(!C.validateShoppingDraft({ title: "X", assignedTo: "u2", items: [{ name: "চাল" }] }).ok, "name without a category must now fail too");
 });
 t("shopping list: pending count only counts unchecked items assigned to me", () => {
   const lists = [
