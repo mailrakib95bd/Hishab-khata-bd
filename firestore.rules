@@ -373,33 +373,73 @@ service cloud.firestore {
       allow delete: if isMember(familyId) && (docId.matches(request.auth.uid + "_.*") || isOwner(familyId));
     }
 
-    // a household "to-buy" list assigned to one member, optionally with a
-    // reminder. Only the creator, the assignee, or an owner/admin may see or
-    // touch it — nobody else in the family can read someone's private list.
-    match /families/{familyId}/shoppingLists/{listId} {
-      allow read: if isMember(familyId) &&
-        (resource.data.assignedTo == request.auth.uid || resource.data.createdBy == request.auth.uid || isOwnerOrAdmin(familyId));
+    // ============================================================
+    // FAMILY PLANNING — goal-based family savings plans with Owner
+    // approval (see family-planning-core.js for the full lifecycle).
+    //
+    // A plan is visible to the WHOLE family, not just its creator — every
+    // screen (Home, All Plans, Owner Approval Center) shows plans
+    // family-wide. contributions/expenses/auditLog are embedded arrays on
+    // the plan document; this rule validates WHICH fields each kind of
+    // update may touch (same affectedKeys().hasOnly(...) technique already
+    // used above for families/{id}), not the detailed shape of every array
+    // element — that's a deliberately coarse trust boundary, same as this
+    // file draws elsewhere for other embedded-array documents.
+    // Rule 4 from the spec ("only Owner-approved amounts affect the
+    // official total") is enforced in the APP's own math
+    // (FPCore.approvedTotal), not here — this file's job is only to gate
+    // WHO may write WHICH fields, never to recompute money.
+    // ============================================================
+    match /families/{familyId}/plans/{planId} {
+      allow read: if isMember(familyId);
 
       allow create: if canWrite(familyId) &&
         request.resource.data.createdBy == request.auth.uid &&
-        request.resource.data.assignedTo is string &&
-        exists(/databases/$(database)/documents/families/$(familyId)/members/$(request.resource.data.assignedTo)) &&
-        get(/databases/$(database)/documents/families/$(familyId)/members/$(request.resource.data.assignedTo)).data.status == "active" &&
+        request.resource.data.status == "pending_approval" &&
         request.resource.data.title is string && request.resource.data.title.size() > 0 && request.resource.data.title.size() <= 60 &&
-        request.resource.data.items is list && request.resource.data.items.size() <= 60;
+        request.resource.data.targetAmount is number && request.resource.data.targetAmount > 0 &&
+        request.resource.data.contributions == [] && request.resource.data.expenses == [];
 
-      // assignee/creator/manager can edit items & reminder; who created or
-      // who it's assigned to can never be changed after creation (delete +
-      // recreate instead, keeps the read-access rule above simple and safe)
-      allow update: if isMember(familyId) &&
-        (resource.data.assignedTo == request.auth.uid || resource.data.createdBy == request.auth.uid || isOwnerOrAdmin(familyId)) &&
-        request.resource.data.createdBy == resource.data.createdBy &&
-        request.resource.data.assignedTo == resource.data.assignedTo &&
-        request.resource.data.title is string && request.resource.data.title.size() > 0 && request.resource.data.title.size() <= 60 &&
-        request.resource.data.items is list && request.resource.data.items.size() <= 60;
+      allow update: if isMember(familyId) && (
+        // owner/admin: approve / reject / request changes — only while pending
+        (isOwnerOrAdmin(familyId) && resource.data.status == "pending_approval" &&
+          request.resource.data.status in ["active", "rejected", "changes_requested"] &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+            ["status", "approvedBy", "approvedByName", "approvedAt", "rejectedBy", "rejectedAt", "rejectionReason",
+             "changesRequestedBy", "changesRequestedAt", "changesRequestNote", "auditLog"])) ||
+        // creator: resubmit after changes requested, optionally editing the plan fields at the same time
+        (resource.data.createdBy == request.auth.uid && resource.data.status == "changes_requested" &&
+          request.resource.data.status == "pending_approval" &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+            ["status", "changesRequestedBy", "changesRequestedAt", "changesRequestNote", "auditLog",
+             "title", "type", "icon", "targetAmount", "perMemberTarget", "startDate", "endDate", "description",
+             "participantMode", "participantUids", "contributionMode", "lastModifiedBy", "lastModifiedAt"])) ||
+        // creator or owner/admin: plain edit while the plan is already active — never changes status
+        ((resource.data.createdBy == request.auth.uid || isOwnerOrAdmin(familyId)) &&
+          resource.data.status in ["active", "target_achieved"] &&
+          request.resource.data.status == resource.data.status &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+            ["title", "type", "icon", "targetAmount", "perMemberTarget", "startDate", "endDate", "description",
+             "participantMode", "participantUids", "contributionMode", "expenseApprovalRequired",
+             "lastModifiedBy", "lastModifiedAt", "auditLog"])) ||
+        // any non-viewer member: add their OWN contribution while the plan is collecting
+        (canWrite(familyId) && resource.data.status in ["active", "target_achieved"] &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["contributions", "auditLog"]) &&
+          request.resource.data.contributions.size() == resource.data.contributions.size() + 1) ||
+        // owner/admin: verify a contribution (approve / reject / partial) — may also flip target_achieved
+        (isOwnerOrAdmin(familyId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["contributions", "status", "auditLog"])) ||
+        // any non-viewer member: add an expense
+        (canWrite(familyId) && resource.data.status in ["active", "target_achieved", "completed"] &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["expenses", "auditLog"]) &&
+          request.resource.data.expenses.size() == resource.data.expenses.size() + 1) ||
+        // owner/admin: complete / pause / cancel / reactivate
+        (isOwnerOrAdmin(familyId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "completedAt", "auditLog"]) &&
+          request.resource.data.status in ["completed", "paused", "cancelled", "active"])
+      );
 
-      allow delete: if isMember(familyId) &&
-        (resource.data.assignedTo == request.auth.uid || resource.data.createdBy == request.auth.uid || isOwnerOrAdmin(familyId));
+      allow delete: if isMember(familyId) && (resource.data.createdBy == request.auth.uid || isOwnerOrAdmin(familyId));
     }
 
     // everything else is denied by default (no wildcard match below this)

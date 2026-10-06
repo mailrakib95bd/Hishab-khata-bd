@@ -55,10 +55,11 @@ function hasNot(s) { assert(!text(tree).includes(s), `unexpected "${s}"`); }
 
 /* ---------------- environment ---------------- */
 const Core = require("../family-bazar-core.js");
+const FPCore = require("../family-planning-core.js");
 const today = Core.dateToYmd(new Date());
 const cm = Core.monthOf(today), pm = Core.addMonths(cm, -1);
 const ls = {};
-const win = { location: { origin: "https://example.test", pathname: "/" }, history: { pushState() {}, back() {} }, addEventListener() {}, removeEventListener() {}, confirm: () => true, prompt: () => "", FBCore: Core, localStorage: null };
+const win = { location: { origin: "https://example.test", pathname: "/" }, history: { pushState() {}, back() {}, go() {} }, addEventListener() {}, removeEventListener() {}, confirm: () => true, prompt: () => "", FBCore: Core, FPCore, localStorage: null };
 const ctxObj = {
   React, window: win, console, setTimeout, clearTimeout, setInterval, clearInterval, Promise, Math, Date, Object, Array, JSON, Number, String, Set, Map, isNaN, parseFloat, Symbol, Error,
   Notification: undefined, navigator: { serviceWorker: null },
@@ -86,14 +87,9 @@ function fakeFB(me) {
     { id: "p1_i_চাল", productId: Core.productIdFor("চাল"), productName: "চাল", memberId: "u1", price: 64, unit: "kg", date: today, month: cm },
   ];
   const calls = [];
-  const shoppingLists = [
-    { id: "sl1", title: "আজকের বাজার", createdBy: "u1", assignedTo: "u2", items: [Core.shoppingItem({ id: "it1", name: "দুধ", quantity: 1, unit: "l", categoryId: "def_milk" }), Core.shoppingItem({ id: "it2", name: "ডিম", quantity: 12, unit: "pcs", categoryId: "def_egg" })], reminder: { enabled: true, time: "18:00", repeat: "daily" }, status: "active" },
-  ];
-  // real Firestore listeners re-fire on every write, including the writer's
-  // own — this mock mirrors that so a save-then-reopen-the-list flow (point
-  // 8) sees the updated list, not a frozen first snapshot
-  const listSubs = [];
-  const emitLists = () => listSubs.forEach((cb) => cb(shoppingLists.slice()));
+  const plans = [];
+  const planSubs = [];
+  const emitPlans = () => planSubs.forEach((cb) => cb(plans.slice()));
   const memberSubs = [];
   const emitMembers = () => memberSubs.forEach((cb) => cb(members.slice()));
   const fb = {
@@ -127,15 +123,49 @@ function fakeFB(me) {
     priceRows: async () => rows, locationRows: async () => [{ id: "l1", productId: Core.productIdFor("চাল"), productName: "চাল", location: "গাইবান্ধা", market: "সুন্দরগঞ্জ", price: 64, unit: "kg", date: today, memberId: "u1" }, { id: "l2", productId: Core.productIdFor("চাল"), productName: "চাল", location: "ঢাকা", market: null, price: 70, unit: "kg", date: today, memberId: "u2" }],
     purchasesForMonth: async (fid, m, all) => [P1, P2].filter((p) => p.month === m && (all || p.memberId === me)),
     familySentInvitations: async () => [{ id: "inv1", familyId: "f1", familyName: "হোসেন পরিবার", invitedEmail: "sis@gmail.com", relation: "sister", role: "member", permissions: perms({}), status: "pending", createdAt: Date.now(), expiresAt: Date.now() + 1e9 }],
-    familyShoppingLists: async () => shoppingLists,
-    subscribeShoppingLists: (fid, cb) => { listSubs.push(cb); cb(shoppingLists.slice()); return () => { listSubs.splice(listSubs.indexOf(cb), 1); }; },
-    addShoppingItems: async (fid, listId, newItems) => { calls.push(["addShoppingItems", fid, listId, newItems]); const l = shoppingLists.find((x) => x.id === listId); if (l) l.items = l.items.concat(newItems); emitLists(); },
+    familyPlans: async () => plans,
+    subscribePlans: (fid, cb) => { planSubs.push(cb); cb(plans.slice()); return () => { planSubs.splice(planSubs.indexOf(cb), 1); }; },
+    // mirrors the real window.FB Family Planning functions exactly: read →
+    // apply the SAME FPCore pure transform the real app uses → write back —
+    // so this mock exercises the real approve/verify/etc logic, not a
+    // simplified stand-in for it.
+    createPlan: async (fid, p) => { calls.push(["createPlan", fid, p]); const id = "pl" + (plans.length + 1); plans.push(Object.assign({}, p, { id })); emitPlans(); return id; },
+    // every real window.FB.* Family Planning method is async (reads
+    // Firestore first) — family-bazar.js chains .then()/await on all of
+    // them, so this mock must return real Promises too, not plain values
+    async _mutatePlan(fid, planId, mutate) { const i = plans.findIndex((p) => p.id === planId); if (i === -1) return null; const next = mutate(plans[i]); plans[i] = Object.assign({}, plans[i], next); emitPlans(); return plans[i]; },
+    approvePlan(fid, id, uid2, name) { calls.push(["approvePlan", fid, id]); return this._mutatePlan(fid, id, (p) => FPCore.approvePlan(p, uid2, name)); },
+    rejectPlan(fid, id, uid2, name, reason) { calls.push(["rejectPlan", fid, id, reason]); return this._mutatePlan(fid, id, (p) => FPCore.rejectPlan(p, uid2, name, reason)); },
+    requestPlanChanges(fid, id, uid2, name, note) { calls.push(["requestPlanChanges", fid, id, note]); return this._mutatePlan(fid, id, (p) => FPCore.requestPlanChanges(p, uid2, name, note)); },
+    resubmitPlan(fid, id, uid2, name, patch) { calls.push(["resubmitPlan", fid, id, patch]); return this._mutatePlan(fid, id, (p) => Object.assign(FPCore.resubmitPlan(p, uid2, name), patch || {})); },
+    editPlan(fid, id, uid2, name, patch) { calls.push(["editPlan", fid, id, patch]); return this._mutatePlan(fid, id, (p) => Object.assign({}, p, patch)); },
+    completePlan(fid, id, uid2, name) { calls.push(["completePlan", fid, id]); return this._mutatePlan(fid, id, (p) => FPCore.completePlan(p, uid2, name)); },
+    deletePlan: async (fid, id) => { calls.push(["deletePlan", fid, id]); const i = plans.findIndex((p) => p.id === id); if (i !== -1) plans.splice(i, 1); emitPlans(); },
+    addContribution(fid, id, draft, uid2, name) {
+      calls.push(["addContribution", fid, id, draft]);
+      return this._mutatePlan(fid, id, (p) => {
+        const c = FPCore.contribution(Object.assign({}, draft, { memberUid: uid2, memberName: name }));
+        return { contributions: [...(p.contributions || []), c] };
+      });
+    },
+    verifyContribution(fid, id, cid, status, receivedAmount, uid2, name, reason) {
+      calls.push(["verifyContribution", fid, id, cid, status, receivedAmount]);
+      return this._mutatePlan(fid, id, (p) => {
+        const contributions = (p.contributions || []).map((c) => (c.id !== cid ? c : Object.assign({}, c, {
+          status, receivedAmount: status === "rejected" ? null : FPCore.round2(receivedAmount != null ? receivedAmount : c.claimedAmount),
+          verifiedBy: uid2, verifiedByName: name, rejectionReason: status === "rejected" ? (reason || "") : "",
+        })));
+        return FPCore.refreshAchievedStatus(Object.assign({}, p, { contributions }));
+      });
+    },
+    addExpense(fid, id, draft, uid2, name, autoApprove) {
+      calls.push(["addExpense", fid, id, draft]);
+      return this._mutatePlan(fid, id, (p) => {
+        const e = FPCore.expense(Object.assign({}, draft, { addedBy: uid2, addedByName: name, status: (autoApprove || !p.expenseApprovalRequired) ? "approved" : "pending" }));
+        return { expenses: [...(p.expenses || []), e] };
+      });
+    },
     setProductCategory: async (fid, pid, catId) => { calls.push(["setProductCategory", fid, pid, catId]); },
-    saveShoppingList: async (fid, list) => { const id = "sl" + (shoppingLists.length + 1); shoppingLists.push(Object.assign({ id }, list)); calls.push(["saveShoppingList", fid, list]); emitLists(); return id; },
-    deleteShoppingList: async (fid, id) => { calls.push(["deleteShoppingList", fid, id]); shoppingLists.splice(shoppingLists.findIndex((l) => l.id === id), 1); emitLists(); },
-    toggleShoppingItem: async (fid, listId, itemId, checked) => { calls.push(["toggleShoppingItem", fid, listId, itemId, checked]); const l = shoppingLists.find((x) => x.id === listId); if (l) l.items = l.items.map((it) => (it.id === itemId ? Object.assign({}, it, { checked }) : it)); emitLists(); },
-    removeShoppingItems: async (fid, listId, itemIds) => { calls.push(["removeShoppingItems", fid, listId, itemIds]); const l = shoppingLists.find((x) => x.id === listId); if (l) l.items = l.items.filter((it) => !itemIds.includes(it.id)); emitLists(); },
-    markShoppingReminderFired: async (fid, listId, reminder, d) => { calls.push(["markShoppingReminderFired", fid, listId, d]); const l = shoppingLists.find((x) => x.id === listId); if (l) l.reminder = Object.assign({}, reminder, { lastFiredDate: d }); },
     savePurchase: async (...a) => { calls.push(["savePurchase", ...a]); },
     setFamilyBudget: async (...a) => calls.push(["budget", ...a]),
     rebuildMyStats: async () => 2,
@@ -207,53 +237,50 @@ async function boot(userUid, extra) {
   await back();
   await clickTab("হোম"); await click("বাজার যোগ করুন"); has("নতুন বাজার যোগ করুন"); ok("add-purchase sheet"); await back();
 
-  // ---- shopping lists: owner made a list ("আজকের বাজার") for Abbu ----------
-  await click("📝"); has("আজকের বাজার তালিকা"); has("আজকের বাজার"); has("আপনি অন্যদের জন্য তৈরি করেছেন"); ok("shopping overview: list I made for Abbu shows up");
-  await click("আজকের বাজার"); has("দুধ"); has("ডিম"); ok("shopping list detail: both items visible");
-  await back(); // sheets aren't stacked — one back() returns straight to the app
-  await clickTab("আরও"); await click("‹ আরও"); await click("বাজারের তালিকা"); has("আজকের বাজার তালিকা"); ok("more-tab entry opens the same overview");
-  await click("+ নতুন তালিকা"); has("নতুন বাজার তালিকা"); ok("create-list sheet");
-  await click("তালিকা সংরক্ষণ করুন"); has("অন্তত একটি পণ্য"); ok("empty create-list is rejected");
-  await setv("পণ্যের নাম (যেমন: দুধ)", "চিনি");
-  const sel = find(tree, (x) => x.host === "select" && text(x).includes("নিজের জন্য"))[0];
-  assert(sel, "assignee select not found");
-  has("⭐ আব্বু"); ok("point 7: sl1 (created by Rakib for Abbu) makes Abbu the ★ favorite assignee");
-  sel.props.onChange({ target: { value: "u2" } }); await tick();
-  await click("তালিকা সংরক্ষণ করুন"); await tick(6);
-  const savedList = win.FB.calls.find((c) => c[0] === "saveShoppingList");
-  assert(savedList, "saveShoppingList not called");
-  assert.strictEqual(savedList[2].assignedTo, "u2"); assert.strictEqual(savedList[2].items[0].name, "চিনি");
-  ok("new list created, assigned to Abbu, with one item");
+  // ---- Family Planning: create → approve → contribute → verify → complete ----
+  await click("🏠"); has("Family Planning"); has("মোট পরিকল্পনা"); ok("plan-home opens from the header button");
+  await click("+ নতুন পরিকল্পনা তৈরি করুন"); has("নতুন পরিকল্পনা তৈরি করুন"); ok("create-plan sheet");
+  await click("পরিকল্পনা জমা দিন"); has("নাম লিখুন"); ok("empty create-plan draft is rejected with field-level errors");
+  await setv("যেমন: Family Tour 2027", "Family Tour 2027");
+  { const typeSel = find(tree, (x) => x.host === "select")[0]; assert(typeSel, "plan type select not found");
+    typeSel.props.onChange({ target: { value: "travel" } }); await tick(); }
+  await setv("যেমন: 50000", "60000");
+  { const dateInputs = find(tree, (x) => x.host === "input" && x.props.type === "date");
+    assert.strictEqual(dateInputs.length, 2, "expected exactly start+end date inputs");
+    dateInputs[1].props.onChange({ target: { value: "2027-06-30" } }); await tick(); }
+  await click("পরিকল্পনা জমা দিন"); await tick(6);
+  const createCall = win.FB.calls.find((c) => c[0] === "createPlan");
+  assert(createCall, "createPlan not called");
+  assert.strictEqual(createCall[2].status, "pending_approval"); assert.strictEqual(createCall[2].targetAmount, 60000);
+  has("Family Tour 2027"); ok("new plan created (pending_approval) and shown back on the home screen");
 
-  // ---- Abbu opens his list, buys দুধ from it -------------------------------
-  await boot("u2");
-  has("আজকের বাজার"); has("২টি পণ্য বাকি"); ok("home tab: pending-shopping prompt card for the assignee");
-  await click("📝"); has("আপনার জন্য"); ok("header badge opens shopping overview, count shown");
-  await click("প্রতিদিন"); has("দুধ"); has("ডিম"); ok("Abbu sees the list Rakib made for him");
-  has("পাঠিয়েছেন"); has("রাকিব"); ok("point 10: shows who sent the list");
-  { const callLink = find(tree, (x) => x.host === "a" && text(x).includes("কল করুন"))[0];
-    assert(callLink, "call button not found");
-    assert(callLink.props.href.includes("01711111111"), "tel: link should carry the sender's phone number");
-    const waLink = find(tree, (x) => x.host === "a" && text(x).includes("WhatsApp"))[0];
-    assert(waLink && waLink.props.href.startsWith("https://wa.me/"), "WhatsApp link not found");
-  }
-  ok("point 10: call/WhatsApp buttons for the sender's phone number");
-  await click("+ নতুন পণ্য যোগ করুন");
-  await setv("পণ্যের নাম (যেমন: চিনি)", "লবণ");
-  await click("তালিকায় যোগ করুন"); await tick(6);
-  const addItemCall = win.FB.calls.find((c) => c[0] === "addShoppingItems");
-  assert(addItemCall, "addShoppingItems not called");
-  assert.strictEqual(addItemCall[3][0].name, "লবণ");
-  has("লবণ"); ok("point 6: the assignee (Abbu) can add a new item to a list someone else made for him");
-  await click("দুধ"); has("নতুন বাজার যোগ করুন"); ok("tapping an item opens the normal add-purchase form, seeded");
-  await setv("৬৪", "70"); await click("সংরক্ষণ করুন"); await tick(8);
-  const removeCall = win.FB.calls.find((c) => c[0] === "removeShoppingItems");
-  assert(removeCall, "removeShoppingItems not called after buying from a list");
-  assert.strictEqual(removeCall[3].length, 1); assert.strictEqual(removeCall[3][0], "it1"); // cross-realm array (vm context) — compare by value, not deepStrictEqual
-  const boughtPurchase = win.FB.calls.find((c) => c[0] === "savePurchase");
-  assert.strictEqual(boughtPurchase[3].items[0].productName, "দুধ");
-  ok("buying দুধ from the list creates the purchase and removes just that item");
-  has("ডিম"); hasNot("দুধ"); ok("point 8: after buying, returns to the list (বাকি ডিম দেখা যাচ্ছে), not the dashboard");
+  await click("Family Tour 2027"); has("পেন্ডিং"); has("অনুমোদনের অপেক্ষায়"); ok("plan details: pending-approval banner shown");
+  await click("অনুমোদন করুন"); has("পরিকল্পনা অনুমোদন"); has("Family Tour 2027"); ok("plan-approval screen (owner view)");
+  await click("অনুমোদন করুন"); await tick(6);
+  assert(win.FB.calls.find((c) => c[0] === "approvePlan"), "approvePlan not called");
+  has("সক্রিয়"); has("টাকা যোগ করুন"); ok("point: approving moves pending_approval → active, back on plan details, contribute button now shown");
+
+  await click("টাকা যোগ করুন"); has("অবদান যোগ করুন");
+  { const amt = find(tree, (x) => x.host === "input" && x.props.inputMode === "decimal")[0]; assert(amt, "contribution amount input not found");
+    amt.props.onChange({ target: { value: "60000" } }); await tick(); }
+  await click("জমা দিন"); await tick(6);
+  const contribCall = win.FB.calls.find((c) => c[0] === "addContribution");
+  assert(contribCall, "addContribution not called"); assert.strictEqual(contribCall[3].claimedAmount, 60000);
+  ok("Rule 3: a submitted contribution starts pending, and does not need to be checked here — verified via Owner Approval Center next");
+
+  await click("🏠"); await click("🔔 অনুমোদন কেন্দ্র"); has("অনুমোদন কেন্দ্র");
+  await click("অবদান যাচাই (১)"); has("রাকিব"); has("Family Tour 2027"); ok("Owner Approval Center: pending contribution listed under অবদান যাচাই");
+  await click("যাচাই করুন ›"); has("অবদান যাচাই"); ok("opens the verification screen for that plan");
+  await click("✓ টাকা পেয়েছি"); await tick(6);
+  const verifyCall = win.FB.calls.find((c) => c[0] === "verifyContribution");
+  assert(verifyCall, "verifyContribution not called");
+  assert.strictEqual(verifyCall[4], "approved"); assert.strictEqual(verifyCall[5], 60000);
+  ok("Rule 4: Owner confirming ৳60,000 received moves it from pending straight to the official (approved) total");
+
+  await click("🏠"); await click("Family Tour 2027"); has("লক্ষ্য পূর্ণ"); has("সম্পন্ন করুন"); ok("point: approved collection reaching the target auto-flips status to target_achieved, and shows সম্পন্ন করুন for the owner");
+  await click("সম্পন্ন করুন"); await tick(6);
+  assert(win.FB.calls.find((c) => c[0] === "completePlan"), "completePlan not called on opening the Complete Plan screen");
+  has("🎉"); has("সম্পন্ন"); ok("Complete Plan screen auto-finalizes and shows the celebration summary");
 
   // member with limited permissions: no purchase details for others
   await boot("u2");
@@ -282,6 +309,6 @@ async function boot(userUid, extra) {
 
   console.log(`\n${n} UI smoke checks passed`);
   process.exit(0); // the fake renderer never runs real effect cleanups, so
-                    // Module's setInterval (shopping reminders) is still
-                    // live and would otherwise keep the process open forever
+                    // any live subscription/listener is still "open" and
+                    // would otherwise keep the process open forever
 })().catch((e) => { console.error("\nFAIL:", e.message); process.exit(1); });

@@ -12,7 +12,7 @@ const path = require("path");
 const root = path.join(__dirname, "..");
 const out = path.join(root, "www");
 const WEB_FILES = [
-  "index.html", "app.js", "family-bazar.js", "family-bazar-core.js", "khasra-khata.js", "hijri-ummalqura.js",
+  "index.html", "app.js", "family-bazar.js", "family-bazar-core.js", "family-planning-core.js", "khasra-khata.js", "hijri-ummalqura.js",
   "firebase-init.js", "sw.js", "manifest.json", "icon-192.png", "icon-512.png",
 ];
 const VENDOR = [

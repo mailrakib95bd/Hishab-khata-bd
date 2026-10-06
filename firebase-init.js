@@ -521,112 +521,111 @@ window.FB = {
     return wrote;
   },
 
-  // ---- shopping lists ---------------------------------------------------
-  // A household "to-buy" list assigned to one member, with an optional
-  // reminder. Small collection; the security rules already filter every
-  // read down to lists this account created, is assigned, or manages, so a
-  // plain collection read is enough (a `where` here couldn't add privacy
-  // beyond what the rule already enforces).
-  // IMPORTANT: Firestore security rules are not filters. The rule lets you
-  // read a list only if you created it or it's assigned to you, so a query
-  // over the WHOLE collection is rejected outright for anyone but an
-  // owner/admin (that's why lists "weren't showing" for ordinary members).
-  // The query itself has to prove it: one query per condition, merged here.
-  async familyShoppingLists(familyId) {
-    const uid = auth.currentUser.uid;
-    const col = collection(db, "families", familyId, "shoppingLists");
-    const [a, c] = await Promise.all([
-      getDocs(query(col, where("assignedTo", "==", uid))),
-      getDocs(query(col, where("createdBy", "==", uid))),
-    ]);
-    const map = {};
-    a.docs.concat(c.docs).forEach((d) => { map[d.id] = { id: d.id, ...d.data() }; });
-    return Object.values(map);
+  // ============================================================
+  // FAMILY PLANNING — goal-based family savings plans with Owner approval.
+  // A plan is visible to the WHOLE family (see firestore.rules), not
+  // restricted to any one member. Contributions / expenses / the audit log
+  // are embedded arrays on the plan document, mutated with the pure
+  // FPCore.* transforms so the exact same approve/reject/verify logic that
+  // family-planning.test.js checks is what actually runs here — this file
+  // never recomputes that logic itself, only reads-transforms-writes.
+  // ============================================================
+
+  async familyPlans(familyId) {
+    const snap = await getDocs(collection(db, "families", familyId, "plans"));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   },
 
-  // live version of the above — the person a list was made FOR (or who made
-  // it) sees it, and every later edit, immediately
-  subscribeShoppingLists(familyId, cb) {
-    const uid = auth.currentUser.uid;
-    const col = collection(db, "families", familyId, "shoppingLists");
-    const parts = { a: [], c: [] };
-    const emit = () => {
-      const map = {};
-      parts.a.concat(parts.c).forEach((l) => { map[l.id] = l; });
-      cb(Object.values(map));
-    };
-    const grab = (key) => (snap) => { parts[key] = snap.docs.map((d) => ({ id: d.id, ...d.data() })); emit(); };
-    const fail = (key) => () => { parts[key] = []; emit(); };
-    const u1 = onSnapshot(query(col, where("assignedTo", "==", uid)), grab("a"), fail("a"));
-    const u2 = onSnapshot(query(col, where("createdBy", "==", uid)), grab("c"), fail("c"));
-    return () => { u1(); u2(); };
+  subscribePlans(familyId, cb) {
+    return onSnapshot(collection(db, "families", familyId, "plans"), (snap) => {
+      cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, () => cb([]));
   },
 
-  async saveShoppingList(familyId, list) {
-    const now = Date.now();
-    const id = list.id || doc(collection(db, "families", familyId, "shoppingLists")).id;
-    const items = list.items || [];
-    const data = {
-      title: list.title || "আজকের বাজার", createdBy: list.createdBy, assignedTo: list.assignedTo,
-      items, reminder: list.reminder || null,
-      status: !items.length || items.some((it) => !it.checked) ? "active" : "done",
-      createdAt: list.createdAt || now, updatedAt: now,
-    };
-    await setDoc(doc(db, "families", familyId, "shoppingLists", id), data);
-    return id;
+  async createPlan(familyId, p) {
+    const ref = doc(collection(db, "families", familyId, "plans"));
+    await setDoc(ref, Object.assign({}, p, { id: ref.id }));
+    return ref.id;
   },
 
-  async deleteShoppingList(familyId, listId) {
-    await deleteDoc(doc(db, "families", familyId, "shoppingLists", listId));
-  },
-
-  // manual checkbox — marks an item done without buying it (stays in the
-  // list, struck through) or un-marks it
-  async toggleShoppingItem(familyId, listId, itemId, checked) {
-    const ref = doc(db, "families", familyId, "shoppingLists", listId);
+  async _mutatePlan(familyId, planId, mutate) {
+    const ref = doc(db, "families", familyId, "plans", planId);
     const snap = await getDoc(ref);
-    if (!snap.exists()) return;
-    const items = (snap.data().items || []).map((it) => (it.id === itemId ? { ...it, checked } : it));
-    await updateDoc(ref, { items, updatedAt: Date.now() });
+    if (!snap.exists()) return null;
+    const current = { id: snap.id, ...snap.data() };
+    const next = mutate(current);
+    await updateDoc(ref, next);
+    return next;
   },
 
-  // প্রাপক কোনো পণ্য কিনতে না পারলে কারণ জানায় (পাওয়া যায়নি/দাম বেশি/নোট) —
-  // আইটেমটা তালিকায় থেকেই যায় (checked হয় না), শুধু স্ট্যাটাস/নোট যোগ হয়,
-  // যাতে তালিকা পাঠানো ব্যক্তি পরে দেখতে পারে কী হয়নি আর কেন
-  async setShoppingItemStatus(familyId, listId, itemId, foundStatus, statusNote) {
-    const ref = doc(db, "families", familyId, "shoppingLists", listId);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) return;
-    const items = (snap.data().items || []).map((it) => (it.id === itemId ? { ...it, foundStatus: foundStatus || null, statusNote: statusNote || "" } : it));
-    await updateDoc(ref, { items, updatedAt: Date.now() });
+  approvePlan(familyId, planId, actorUid, actorName) {
+    return this._mutatePlan(familyId, planId, (p) => window.FPCore.approvePlan(p, actorUid, actorName));
+  },
+  rejectPlan(familyId, planId, actorUid, actorName, reason) {
+    return this._mutatePlan(familyId, planId, (p) => window.FPCore.rejectPlan(p, actorUid, actorName, reason));
+  },
+  requestPlanChanges(familyId, planId, actorUid, actorName, note) {
+    return this._mutatePlan(familyId, planId, (p) => window.FPCore.requestPlanChanges(p, actorUid, actorName, note));
+  },
+  resubmitPlan(familyId, planId, actorUid, actorName, patch) {
+    return this._mutatePlan(familyId, planId, (p) => Object.assign(
+      window.FPCore.resubmitPlan(p, actorUid, actorName), patch || {}, { lastModifiedBy: actorUid, lastModifiedAt: Date.now() }
+    ));
+  },
+  editPlan(familyId, planId, actorUid, actorName, patch) {
+    return this._mutatePlan(familyId, planId, (p) => Object.assign({}, p, patch, {
+      lastModifiedBy: actorUid, lastModifiedAt: Date.now(),
+      auditLog: window.FPCore.appendPlanAudit(p.auditLog, window.FPCore.auditEntry(actorUid, actorName, "plan_edited", "পরিকল্পনা সম্পাদনা করেছেন")),
+    }));
+  },
+  completePlan(familyId, planId, actorUid, actorName) {
+    return this._mutatePlan(familyId, planId, (p) => window.FPCore.completePlan(p, actorUid, actorName));
+  },
+  setPlanStatus(familyId, planId, actorUid, actorName, status, actionLabel) {
+    return this._mutatePlan(familyId, planId, (p) => Object.assign({}, p, { status },
+      { auditLog: window.FPCore.appendPlanAudit(p.auditLog, window.FPCore.auditEntry(actorUid, actorName, "status_changed", actionLabel || `স্ট্যাটাস বদলেছে: ${status}`)) }));
+  },
+  deletePlan(familyId, planId) {
+    return deleteDoc(doc(db, "families", familyId, "plans", planId));
   },
 
-  // called once those item(s) turn into an actual purchase — removes them
-  // from the list entirely; whatever wasn't bought stays for next time
-  async removeShoppingItems(familyId, listId, itemIds) {
-    const ref = doc(db, "families", familyId, "shoppingLists", listId);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) return;
-    const items = (snap.data().items || []).filter((it) => !itemIds.includes(it.id));
-    await updateDoc(ref, { items, status: items.length ? "active" : "done", updatedAt: Date.now() });
+  addContribution(familyId, planId, draft, actorUid, actorName) {
+    return this._mutatePlan(familyId, planId, (p) => {
+      const c = window.FPCore.contribution(Object.assign({}, draft, { memberUid: actorUid, memberName: actorName }));
+      return {
+        contributions: [...(p.contributions || []), c],
+        auditLog: window.FPCore.appendPlanAudit(p.auditLog, window.FPCore.auditEntry(actorUid, actorName, "contribution_added", `${actorName} ৳${c.claimedAmount} অবদান যোগ করেছেন`)),
+      };
+    });
+  },
+  // status: "approved" | "rejected" | "partial"; receivedAmount only matters for approved/partial
+  verifyContribution(familyId, planId, contributionId, status, receivedAmount, actorUid, actorName, rejectionReason) {
+    return this._mutatePlan(familyId, planId, (p) => {
+      const contributions = (p.contributions || []).map((c) => (c.id !== contributionId ? c : Object.assign({}, c, {
+        status, receivedAmount: status === "rejected" ? null : window.FPCore.round2(receivedAmount != null ? receivedAmount : c.claimedAmount),
+        verifiedBy: actorUid, verifiedByName: actorName, verifiedAt: Date.now(), rejectionReason: status === "rejected" ? (rejectionReason || "") : "",
+      })));
+      const c = contributions.find((x) => x.id === contributionId);
+      const label = status === "rejected" ? `${c.memberName}-এর ৳${c.claimedAmount} অবদান প্রত্যাখ্যান করেছেন`
+        : status === "partial" ? `${c.memberName}-এর ৳${c.claimedAmount} দাবির মধ্যে ৳${c.receivedAmount} গ্রহণ করেছেন`
+        : `${c.memberName}-এর ৳${c.claimedAmount} অবদান পেয়েছেন বলে নিশ্চিত করেছেন`;
+      const withLog = Object.assign({}, p, { contributions, auditLog: window.FPCore.appendPlanAudit(p.auditLog, window.FPCore.auditEntry(actorUid, actorName, "contribution_verified", label)) });
+      return window.FPCore.refreshAchievedStatus(withLog);
+    });
   },
 
-  // creator, assignee, or a manager can add more items to an existing list
-  // (e.g. "also need onions" while the list is already out with someone) —
-  // appended, existing items untouched
-  async addShoppingItems(familyId, listId, newItems) {
-    const ref = doc(db, "families", familyId, "shoppingLists", listId);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) return;
-    const items = [...(snap.data().items || []), ...newItems];
-    await updateDoc(ref, { items, status: "active", updatedAt: Date.now() });
-  },
-
-  // records that today's reminder already fired, so the 20-second check
-  // loop (see family-bazar.js) doesn't show the same notification twice
-  async markShoppingReminderFired(familyId, listId, reminder, dateStr) {
-    await updateDoc(doc(db, "families", familyId, "shoppingLists", listId), {
-      reminder: Object.assign({}, reminder, { lastFiredDate: dateStr }), updatedAt: Date.now(),
+  // autoApprove: caller (family-bazar.js) already knows the actor's role —
+  // true for owner/admin, or when the plan doesn't require expense approval
+  addExpense(familyId, planId, draft, actorUid, actorName, autoApprove) {
+    return this._mutatePlan(familyId, planId, (p) => {
+      const e = window.FPCore.expense(Object.assign({}, draft, {
+        addedBy: actorUid, addedByName: actorName,
+        status: (autoApprove || !p.expenseApprovalRequired) ? "approved" : "pending",
+      }));
+      return {
+        expenses: [...(p.expenses || []), e],
+        auditLog: window.FPCore.appendPlanAudit(p.auditLog, window.FPCore.auditEntry(actorUid, actorName, "expense_added", `${actorName} "${e.title}"-এ ৳${e.amount} খরচ যোগ করেছেন${e.status === "pending" ? " (অনুমোদন অপেক্ষায়)" : ""}`)),
+      };
     });
   },
 };

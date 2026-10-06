@@ -1,8 +1,0 @@
-{
-  "appId": "com.hisabkhata.family",
-  "appName": "হিসাব-খাতা",
-  "webDir": "www",
-  "server": {
-    "androidScheme": "https"
-  }
-}
