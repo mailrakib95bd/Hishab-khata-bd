@@ -1,0 +1,64 @@
+// bumping this string is what forces every visitor's browser to notice
+// sw.js changed, install the new worker, and (via the activate handler
+// below) throw away every asset it cached under the old name — including
+// the previously-cached index.html/app.js that kept serving stale code
+// no matter how many times the underlying files were updated.
+const CACHE_NAME = "hisab-khata-v10";
+const CORE_ASSETS = [
+  "./index.html",
+  "./manifest.json",
+  "./icon-192.png",
+  "./icon-512.png",
+  // own JS: without these here, the cache-first fetch handler below never
+  // has anything to serve offline for them (they were never in CORE_ASSETS
+  // before, so cache.match always missed and fell through to a network
+  // fetch that fails offline) — added so Hijri/calendar math (and the rest
+  // of the app) genuinely keeps working with no connection, not just the
+  // shell page.
+  "./app.js",
+  "./hijri-ummalqura.js",
+  "./family-planning-core.js",
+  "./khasra-khata.js",
+  "./family-bazar.js",
+  "./family-bazar-core.js",
+];
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE_ASSETS)).catch(() => {})
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys().then((names) =>
+      Promise.all(names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n)))
+    )
+  );
+  self.clients.claim();
+});
+
+// cache-first for our own files, network-first (with cache fallback) for
+// everything else (e.g. the CDN-hosted React/Babel scripts) so the app
+// still opens offline once those have been fetched at least once
+self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+  const isOwnAsset = url.origin === self.location.origin;
+
+  if (isOwnAsset) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => cached || fetch(event.request))
+    );
+  } else {
+    event.respondWith(
+      fetch(event.request)
+        .then((res) => {
+          const clone = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          return res;
+        })
+        .catch(() => caches.match(event.request))
+    );
+  }
+});
