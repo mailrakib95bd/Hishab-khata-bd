@@ -1322,7 +1322,7 @@
     const pendingApprovals = FPCore.pendingApprovalPlans(ctx.fam.plans).length;
     const items = [
       ["🔎", "খুঁজুন", "পণ্য, সদস্য, বাজার বা এলাকা", () => setView("search")],
-      ["🏠", "Family Planning", "পরিবারের পরিকল্পনা, লক্ষ্য ও অবদান", () => ctx.openSheet({ type: "plan-home" }), pendingApprovals],
+      ["🎯", "Family Planning", "পরিবারের পরিকল্পনা, লক্ষ্য ও অবদান", () => ctx.openSheet({ type: "plan-home" }), pendingApprovals],
       ["📦", "পণ্য তালিকা", "সব পণ্য ও তাদের দামের ইতিহাস", () => setView("products")],
       ["🏷️", "ক্যাটাগরি", "গ্রোসারি ও গৃহস্থালির ক্যাটাগরি", () => setView("categories")],
       ["💰", "মাসিক বাজেট", "সীমা ঠিক করুন, সতর্কতা দেখুন", () => setView("budget")],
@@ -1958,7 +1958,7 @@
     const switcher = h("div", { style: { display: "flex", alignItems: "center" } },
       h("button", { onClick: () => setSheet({ type: "switcher" }), "aria-label": "পরিবার বদলান", style: { background: "none", border: "none", color: "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } }, D.top.families.length > 1 || D.top.incoming.length ? "🔁" : ""),
       h("button", { onClick: () => setSheet({ type: "plan-home" }), "aria-label": "Family Planning", style: { position: "relative", background: "none", border: "none", color: "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } },
-        "🏠", pendingApprovals > 0 && h("span", { style: { position: "absolute", top: 2, right: 2, minWidth: 16, height: 16, borderRadius: 999, background: "var(--hk-gold)", color: "#1a1a1a", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" } }, bn(pendingApprovals))),
+        "🎯", pendingApprovals > 0 && h("span", { style: { position: "absolute", top: 2, right: 2, minWidth: 16, height: 16, borderRadius: 999, background: "var(--hk-gold)", color: "#1a1a1a", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px" } }, bn(pendingApprovals))),
       h("button", { onClick: () => { setTab("more"); setMoreView("search"); }, "aria-label": "খুঁজুন", style: { background: "none", border: "none", color: "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } }, "🔎"),
       closeBtn);
     const famTitle = `${(D.family.settings && D.family.settings.icon) || "🏠"} ${D.family.name}`;

@@ -238,7 +238,7 @@ async function boot(userUid, extra) {
   await clickTab("হোম"); await click("বাজার যোগ করুন"); has("নতুন বাজার যোগ করুন"); ok("add-purchase sheet"); await back();
 
   // ---- Family Planning: create → approve → contribute → verify → complete ----
-  await click("🏠"); has("Family Planning"); has("মোট পরিকল্পনা"); ok("plan-home opens from the header button");
+  await click("🎯"); has("Family Planning"); has("মোট পরিকল্পনা"); ok("plan-home opens from the header button");
   await click("+ নতুন পরিকল্পনা তৈরি করুন"); has("নতুন পরিকল্পনা তৈরি করুন"); ok("create-plan sheet");
   await click("পরিকল্পনা জমা দিন"); has("নাম লিখুন"); ok("empty create-plan draft is rejected with field-level errors");
   await setv("যেমন: Family Tour 2027", "Family Tour 2027");
@@ -268,7 +268,7 @@ async function boot(userUid, extra) {
   assert(contribCall, "addContribution not called"); assert.strictEqual(contribCall[3].claimedAmount, 60000);
   ok("Rule 3: a submitted contribution starts pending, and does not need to be checked here — verified via Owner Approval Center next");
 
-  await click("🏠"); await click("🔔 অনুমোদন কেন্দ্র"); has("অনুমোদন কেন্দ্র");
+  await click("🎯"); await click("🔔 অনুমোদন কেন্দ্র"); has("অনুমোদন কেন্দ্র");
   await click("অবদান যাচাই (১)"); has("রাকিব"); has("Family Tour 2027"); ok("Owner Approval Center: pending contribution listed under অবদান যাচাই");
   await click("যাচাই করুন ›"); has("অবদান যাচাই"); ok("opens the verification screen for that plan");
   await click("✓ টাকা পেয়েছি"); await tick(6);
@@ -277,7 +277,7 @@ async function boot(userUid, extra) {
   assert.strictEqual(verifyCall[4], "approved"); assert.strictEqual(verifyCall[5], 60000);
   ok("Rule 4: Owner confirming ৳60,000 received moves it from pending straight to the official (approved) total");
 
-  await click("🏠"); await click("Family Tour 2027"); has("লক্ষ্য পূর্ণ"); has("সম্পন্ন করুন"); ok("point: approved collection reaching the target auto-flips status to target_achieved, and shows সম্পন্ন করুন for the owner");
+  await click("🎯"); await click("Family Tour 2027"); has("লক্ষ্য পূর্ণ"); has("সম্পন্ন করুন"); ok("point: approved collection reaching the target auto-flips status to target_achieved, and shows সম্পন্ন করুন for the owner");
   await click("সম্পন্ন করুন"); await tick(6);
   assert(win.FB.calls.find((c) => c[0] === "completePlan"), "completePlan not called on opening the Complete Plan screen");
   has("🎉"); has("সম্পন্ন"); ok("Complete Plan screen auto-finalizes and shows the celebration summary");
