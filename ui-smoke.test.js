@@ -179,9 +179,10 @@ async function boot(userUid, extra) {
   store.clear(); pending.length = 0;
   const src = fs.readFileSync(path.join(__dirname, "..", "family-bazar.js"), "utf8");
   vm.runInContext(src, ctxObj, { filename: "family-bazar.js" });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "family-planning.js"), "utf8"), ctxObj, { filename: "family-planning.js" });
   const { Module, useFamilyAlerts } = win.FamilyBazar;
   assert(Module && useFamilyAlerts, "exports");
-  root = h(Module, { user: extra === "none" ? null : { uid: userUid, displayName: "x", email: "x@gmail.com" }, mode: "full", onClose() {} });
+  root = h(Module, { user: extra === "none" ? null : { uid: userUid, displayName: "x", email: "x@gmail.com" }, mode: /^embedded/.test(extra || "") ? "embedded" : "full", section: /planning$/.test(extra || "") ? "planning" : "bazar", onClose() {} });
   render(); await tick(10);
 }
 
@@ -190,6 +191,18 @@ async function boot(userUid, extra) {
 
   // signed out → sign-in entry
   await boot("u1", "none"); has("Google দিয়ে Sign In"); ok("signed-out entry screen");
+
+  // ফ্যামিলি বাজার and ফ্যামিলি প্লানিং are two separate places (separate files too)
+  await boot("u1", "embedded");
+  has("কে কত খরচ করেছে"); has("বাজার"); ok("embedded ফ্যামিলি বাজার section renders the bazar tabs");
+  { const t = text(tree); assert(!t.includes("ব্যক্তিগত তালিকা"), "personal list must be gone"); assert(!t.includes("ফ্যামিলি প্লানিং"), "no planning entry inside the bazar section"); assert(!t.includes("🎯"), "no 🎯 inside the bazar section"); }
+  ok("bazar section has no ব্যক্তিগত তালিকা and no planning entry (planning has its own place)");
+  await boot("u1", "embedded-planning");
+  has("মোট পরিকল্পনা"); has("+ নতুন পরিকল্পনা তৈরি করুন");
+  { const t = text(tree); assert(!t.includes("কে কত খরচ করেছে"), "bazar content must not show in the planning section"); assert(!t.includes("পণ্য তালিকা"), "no bazar tabs in the planning section"); }
+  ok("embedded ফ্যামিলি প্লানিং section renders the planning dashboard only");
+  await boot("u1", "full-planning"); has("মোট পরিকল্পনা"); ok("full-screen ফ্যামিলি প্লানিং (☰ menu) renders the planning dashboard");
+  assert(win.FamilyPlanning && typeof win.FamilyPlanning.renderSheet === "function", "window.FamilyPlanning exported by family-planning.js"); ok("family-planning.js exports window.FamilyPlanning");
 
   // owner sees everything
   await boot("u1");
@@ -238,7 +251,7 @@ async function boot(userUid, extra) {
   await clickTab("হোম"); await click("বাজার যোগ করুন"); has("নতুন বাজার যোগ করুন"); ok("add-purchase sheet"); await back();
 
   // ---- Family Planning: create → approve → contribute → verify → complete ----
-  await click("🎯"); has("Family Planning"); has("মোট পরিকল্পনা"); ok("plan-home opens from the header button");
+  await boot("u1", "full-planning"); has("মোট পরিকল্পনা"); ok("planning dashboard opens from its own place");
   await click("+ নতুন পরিকল্পনা তৈরি করুন"); has("নতুন পরিকল্পনা তৈরি করুন"); ok("create-plan sheet");
   await click("পরিকল্পনা জমা দিন"); has("নাম লিখুন"); ok("empty create-plan draft is rejected with field-level errors");
   await setv("যেমন: Family Tour 2027", "Family Tour 2027");
@@ -268,7 +281,7 @@ async function boot(userUid, extra) {
   assert(contribCall, "addContribution not called"); assert.strictEqual(contribCall[3].claimedAmount, 60000);
   ok("Rule 3: a submitted contribution starts pending, and does not need to be checked here — verified via Owner Approval Center next");
 
-  await click("🎯"); await click("🔔 অনুমোদন কেন্দ্র"); has("অনুমোদন কেন্দ্র");
+  await click("🔔 অনুমোদন কেন্দ্র"); has("অনুমোদন কেন্দ্র");
   await click("অবদান যাচাই (১)"); has("রাকিব"); has("Family Tour 2027"); ok("Owner Approval Center: pending contribution listed under অবদান যাচাই");
   await click("যাচাই করুন ›"); has("অবদান যাচাই"); ok("opens the verification screen for that plan");
   await click("✓ টাকা পেয়েছি"); await tick(6);
@@ -277,7 +290,7 @@ async function boot(userUid, extra) {
   assert.strictEqual(verifyCall[4], "approved"); assert.strictEqual(verifyCall[5], 60000);
   ok("Rule 4: Owner confirming ৳60,000 received moves it from pending straight to the official (approved) total");
 
-  await click("🎯"); await click("Family Tour 2027"); has("লক্ষ্য পূর্ণ"); has("সম্পন্ন করুন"); ok("point: approved collection reaching the target auto-flips status to target_achieved, and shows সম্পন্ন করুন for the owner");
+  await click("Family Tour 2027"); has("লক্ষ্য পূর্ণ"); has("সম্পন্ন করুন"); ok("point: approved collection reaching the target auto-flips status to target_achieved, and shows সম্পন্ন করুন for the owner");
   await click("সম্পন্ন করুন"); await tick(6);
   assert(win.FB.calls.find((c) => c[0] === "completePlan"), "completePlan not called on opening the Complete Plan screen");
   has("🎉"); has("সম্পন্ন"); ok("Complete Plan screen auto-finalizes and shows the celebration summary");

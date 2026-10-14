@@ -85,13 +85,14 @@
 
 **কোথায় আছে:** ☰ মেনু → *ফ্যামিলি বাজার* (ফুল-স্ক্রিন)। হেডারের 🏠 আইকন ও "আরও" ট্যাবের প্রথম আইটেম থেকে এর ভেতরের **Family Planning** মডিউল খোলে (নিচে আলাদা সেকশনে বিস্তারিত)।
 
-> **"ফ্যামিলি" ট্যাবের আগের "📝 ব্যক্তিগত তালিকা" (FamilyView — পুরনো, লোকাল, নন-cloud-synced বাজার তালিকা; চাল/ডাল/মুদি ইত্যাদি ক্যাটাগরি, নিজস্ব সদস্য-তালিকা) সম্পূর্ণ সরিয়ে ফেলা হয়েছে — কম্পোনেন্ট, তার ফর্ম (MemberForm/BazarItemForm/PriceHistoryModal), state, ও cloud-sync থেকে প্রতিটা রেফারেন্স।** "ফ্যামিলি বাজার / ব্যক্তিগত তালিকা" টগলটাও সরিয়ে ফেলা হয়েছে — এখন "ফ্যামিলি" ট্যাব সরাসরি নিচের **Family Bazar** মডিউল দেখায়, যার হেডারেই **🎯 Family Planning** বাটন আছে। (এর আগে একটা ভুল হয়েছিল — family-bazar.js মডিউলের ভেতরের ভিন্ন একটা "shoppingLists" ফিচার মোছা হয়েছিল, যেটা আসলে এই FamilyView থেকে সম্পূর্ণ আলাদা জিনিস ছিল — সেটাও রয়ে গেছে, কিন্তু এবার আসল জিনিসটাই মোছা হয়েছে।)
+> **"ফ্যামিলি" ট্যাবের আগের "📝 ব্যক্তিগত তালিকা" (FamilyView — পুরনো, লোকাল, নন-cloud-synced বাজার তালিকা; চাল/ডাল/মুদি ইত্যাদি ক্যাটাগরি, নিজস্ব সদস্য-তালিকা) সম্পূর্ণ সরিয়ে ফেলা হয়েছে — কম্পোনেন্ট, তার ফর্ম (MemberForm/BazarItemForm/PriceHistoryModal), state, ও cloud-sync থেকে প্রতিটা রেফারেন্স।** "ফ্যামিলি বাজার / ব্যক্তিগত তালিকা" টগলটাও সরিয়ে ফেলা হয়েছে — এখন **ফ্যামিলি বাজার** ও **ফ্যামিলি প্লানিং** দুটো সম্পূর্ণ আলাদা জায়গায়, আলাদা ফাইলে, আলাদা আইকনে: 🛒 "ফ্যামিলি" ট্যাব (+ ☰ মেনু) → `family-bazar.js`; 🎯 "প্লানিং" ট্যাব (+ ☰ মেনু) → `family-planning.js`। (এর আগে একটা ভুল হয়েছিল — family-bazar.js মডিউলের ভেতরের ভিন্ন একটা "shoppingLists" ফিচার মোছা হয়েছিল, যেটা আসলে এই FamilyView থেকে সম্পূর্ণ আলাদা জিনিস ছিল — সেটাও রয়ে গেছে, কিন্তু এবার আসল জিনিসটাই মোছা হয়েছে।)
 
 | ফাইল | কাজ |
 | --- | --- |
 | `family-bazar-core.js` | ফ্যামিলি বাজারের লজিক (টাকার হিসাব, অনুমতি, দামের বিশ্লেষণ) — Node-এ টেস্টযোগ্য |
 | `family-planning-core.js` | Family Planning-এর লজিক (plan/contribution/expense, অনুমোদন-প্রবাহ, টাকার হিসাব) |
-| `family-bazar.js` | সব স্ক্রিন — ফ্যামিলি বাজার (Home, Bazar, Reports, Family, More) ও Family Planning-এর ১৪টা sheet, একই ফাইলে |
+| `family-bazar.js` | ফ্যামিলি বাজারের সব স্ক্রিন (Home, Bazar, Reports, Family, More) + দুই সেকশনের শেয়ার্ড Module/ctx (`section: "bazar" \| "planning"`) |
+| `family-planning.js` | ফ্যামিলি প্লানিং-এর সব UI (ড্যাশবোর্ড + ১৪টা sheet), আলাদা ফাইলে — `window.FamilyPlanning`; `family-bazar.js`-এর `window.FBShared` থেকে শেয়ার্ড UI ব্লক নেয় |
 | `firebase-init.js` | Firestore ডেটা-লেয়ার (`window.FB`) — দুটো ফিচারেরই |
 | `firestore.rules` | **আসল সিকিউরিটি** — ফ্রন্টএন্ড লুকানোর ওপর ভরসা নেই |
 | `tests/` | `npm test` — core + family-planning + expense-sync + task-amount + tax-reminder + special-day-hijri + special-day-bulk-import + hijri-ummalqura + khasra-khata + khasra-ui + UI smoke — ২৩০+টি |
@@ -137,7 +138,7 @@
 
 পরিবারের যেকোনো সদস্য একটা লক্ষ্য/স্বপ্নের জন্য পরিকল্পনা তৈরি করতে পারে (ভ্রমণ, ঘর মেরামত, ল্যাপটপ তহবিল, জরুরি তহবিল...), পরিবার মিলে টাকা জমায়, আর পরিবারের মালিক/এডমিন সবকিছু যাচাই করে অনুমোদন দেন — কোনো টাকা Owner-এর নিশ্চিতকরণ ছাড়া "অফিসিয়াল" সংগ্রহে যোগ হয় না।
 
-**কোথায় আছে:** ফ্যামিলি বাজারের হেডারে 🏠 আইকন, অথবা "আরও" ট্যাবের প্রথম আইটেম। লজিক `family-planning-core.js`-এ (৩৫টা টেস্ট, `family-planning.test.js`), স্ক্রিনগুলো `family-bazar.js`-এর ভেতরেই (একই ctx/Sheet/role-সিস্টেম পুনর্ব্যবহার করে), Firestore ফাংশন `firebase-init.js`-এ, সিকিউরিটি `firestore.rules`-এ।
+**কোথায় আছে:** নিচের নেভিগেশনে আলাদা 🎯 "প্লানিং" ট্যাব, অথবা ☰ মেনুর "🎯 ফ্যামিলি প্লানিং" (ফ্যামিলি বাজার থেকে সম্পূর্ণ আলাদা)। লজিক `family-planning-core.js`-এ (৩৫টা টেস্ট, `family-planning.test.js`), স্ক্রিনগুলো `family-planning.js`-এ (`family-bazar.js`-এর ctx/Sheet/role-সিস্টেম পুনর্ব্যবহার করে), Firestore ফাংশন `firebase-init.js`-এ, সিকিউরিটি `firestore.rules`-এ।
 
 ### মূল প্রবাহ (Lifecycle)
 
