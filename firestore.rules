@@ -374,6 +374,38 @@ service cloud.firestore {
     }
 
     // ============================================================
+    // FAMILY SHOPPING LIST (family-shopping.js) — a member writes a bazar
+    // list and sends it to another ACTIVE member of the same family.
+    //   * everyone in the family can read (the app only shows a member the
+    //     lists they sent / received; owner/admin see all);
+    //   * create: a non-viewer, as themselves, addressed to an existing member;
+    //   * update: the sender, the recipient, or owner/admin (tick items, enter
+    //     real prices, mark done) — never changing who sent it / who it is for;
+    //   * delete: the sender or owner/admin.
+    // ============================================================
+    match /families/{familyId}/shoppingLists/{listId} {
+      allow read: if isMember(familyId);
+
+      allow create: if canWrite(familyId) &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.title is string && request.resource.data.title.size() > 0 && request.resource.data.title.size() <= 60 &&
+        request.resource.data.items is list && request.resource.data.items.size() > 0 && request.resource.data.items.size() <= 100 &&
+        request.resource.data.assignedToUid is string &&
+        exists(/databases/$(database)/documents/families/$(familyId)/members/$(request.resource.data.assignedToUid)) &&
+        request.resource.data.status == "sent";
+
+      allow update: if isMember(familyId) &&
+        (resource.data.createdBy == request.auth.uid || resource.data.assignedToUid == request.auth.uid || isOwnerOrAdmin(familyId)) &&
+        canWrite(familyId) &&
+        request.resource.data.createdBy == resource.data.createdBy &&
+        request.resource.data.assignedToUid == resource.data.assignedToUid &&
+        request.resource.data.items is list && request.resource.data.items.size() <= 100;
+
+      allow delete: if isMember(familyId) &&
+        (resource.data.createdBy == request.auth.uid || isOwnerOrAdmin(familyId));
+    }
+
+    // ============================================================
     // FAMILY PLANNING — goal-based family savings plans with Owner
     // approval (see family-planning-core.js for the full lifecycle).
     //

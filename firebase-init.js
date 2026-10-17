@@ -31,15 +31,14 @@ import {
   initializeFirestore,
   doc,
   getDoc,
-  setDoc,
+  setDoc as _setDoc,
   collection,
   getDocs,
-  addDoc,
-  updateDoc,
-  deleteDoc,
+  updateDoc as _updateDoc,
+  deleteDoc as _deleteDoc,
   query,
   orderBy,
-  writeBatch,
+  writeBatch as _writeBatch,
   where,
   limit,
   increment,
@@ -47,6 +46,9 @@ import {
   arrayRemove,
   onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+// the whole namespace too, so the offline-cache helpers below are optional
+// (a missing export must never break the module's static link)
+import * as FSNS from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCdP50tFbtAH5vPT8fAr6c6H0DUY6TrJk0",
@@ -71,13 +73,50 @@ const auth = getAuth(app);
 // native builds.
 let db;
 try {
-  db = initializeFirestore(app, { experimentalAutoDetectLongPolling: true });
+  // OFFLINE SUPPORT: keep a persistent copy of everything the person has
+  // opened (family, members, plans, shopping lists, purchases…) on the device
+  // (IndexedDB). With it, reads keep working with no internet and every write
+  // is queued locally and uploaded automatically when the connection returns.
+  // Falls back to the plain (memory-only) cache if the browser/WebView can't
+  // do persistence.
+  const baseOpts = { experimentalAutoDetectLongPolling: true };
+  let opts = baseOpts;
+  try {
+    if (FSNS.persistentLocalCache) {
+      opts = Object.assign({}, baseOpts, {
+        localCache: FSNS.persistentLocalCache(FSNS.persistentMultipleTabManager ? { tabManager: FSNS.persistentMultipleTabManager() } : {}),
+      });
+    }
+  } catch (e) { opts = baseOpts; }
+  db = initializeFirestore(app, opts);
 } catch (e) {
   // initializeFirestore throws if something (e.g. a hot-reload in dev)
   // already initialized Firestore for this app — fall back to the
   // already-initialized instance rather than crash the whole module.
   db = getFirestore(app);
 }
+
+// Offline-safe writes. With the persistent cache a write is applied locally
+// at once and snapshot listeners already show it, but the write PROMISE only
+// settles after the server acknowledges — which never happens while offline,
+// so every "Save" button would hang forever. settle() lets the caller carry on
+// when the device is offline (or the server is slow): the write stays queued
+// and uploads by itself later. Real errors (e.g. permission-denied) that come
+// back while we are still waiting are still thrown to the caller.
+const SETTLE_MS = 4000;
+function settle(p) {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) { p.catch(() => {}); return Promise.resolve(); }
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(resolve, SETTLE_MS);
+    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+  });
+}
+const setDoc = (...a) => settle(_setDoc(...a));
+const updateDoc = (...a) => settle(_updateDoc(...a));
+const deleteDoc = (...a) => settle(_deleteDoc(...a));
+// addDoc waits for the server too; make the id locally instead (same result)
+const addDoc = async (colRef, data) => { const ref = doc(colRef); await setDoc(ref, data); return ref; };
+const writeBatch = (d) => { const b = _writeBatch(d); const commit = b.commit.bind(b); b.commit = () => settle(commit()); return b; };
 
 async function signInGoogle() {
   const provider = new GoogleAuthProvider();
@@ -587,6 +626,28 @@ window.FB = {
   },
   deletePlan(familyId, planId) {
     return deleteDoc(doc(db, "families", familyId, "plans", planId));
+  },
+
+  // ============================================================
+  // FAMILY SHOPPING LIST (family-shopping.js) — a member writes a bazar list
+  // and sends it to another member. families/{f}/shoppingLists/{id}; items[]
+  // are embedded; visible to the family (see firestore.rules).
+  // ============================================================
+  subscribeShoppingLists(familyId, cb) {
+    return onSnapshot(collection(db, "families", familyId, "shoppingLists"), (snap) => {
+      cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, () => cb([]));
+  },
+  async createShoppingList(familyId, l) {
+    const ref = doc(collection(db, "families", familyId, "shoppingLists"));
+    await setDoc(ref, Object.assign({}, l, { id: ref.id }));
+    return ref.id;
+  },
+  updateShoppingList(familyId, listId, patch) {
+    return updateDoc(doc(db, "families", familyId, "shoppingLists", listId), Object.assign({}, patch, { updatedAt: new Date().toISOString() }));
+  },
+  deleteShoppingList(familyId, listId) {
+    return deleteDoc(doc(db, "families", familyId, "shoppingLists", listId));
   },
 
   addContribution(familyId, planId, draft, actorUid, actorName) {

@@ -224,7 +224,7 @@
    * data hook — loads only what THIS member is allowed to see
    * ------------------------------------------------------------------ */
   const safe = async (p, fallback) => { try { return await p; } catch (e) { return fallback; } };
-  const EMPTY_FAM = { loading: false, error: "", members: [], budget: null, categories: [], products: [], stats: { monthly: [], cats: [], other: [] }, prices: [], plans: [] };
+  const EMPTY_FAM = { loading: false, error: "", members: [], budget: null, categories: [], products: [], stats: { monthly: [], cats: [], other: [] }, prices: [], plans: [], shopLists: [] };
 
   function useFamilyData(user) {
     const uid = user && user.uid;
@@ -276,7 +276,12 @@
         if (dead) return;
         setFam((f) => Object.assign({}, f, { plans }));
       });
-      return () => { dead = true; unsubMembers(); unsubPlans(); };
+      // বাজারের তালিকা (family-shopping.js) — older/mock FB objects may not have it
+      const unsubShop = window.FB.subscribeShoppingLists ? window.FB.subscribeShoppingLists(activeId, (shopLists) => {
+        if (dead) return;
+        setFam((f) => Object.assign({}, f, { shopLists }));
+      }) : () => {};
+      return () => { dead = true; unsubMembers(); unsubPlans(); unsubShop(); };
     }, [activeId]);
 
     const myMember = fam.members.find((m) => m.uid === uid) || null;
@@ -538,7 +543,10 @@
         h("div", { style: { fontSize: 13, opacity: 0.85 } }, `এই মাসে ${scope} বাজার খরচ`),
         h("div", { style: Object.assign({}, S.big, { margin: "4px 0 6px" }) }, taka(N.totals.thisMonth)),
         h("div", { style: { fontSize: 13 } }, pct == null ? "গত মাসের সাথে তুলনার তথ্য নেই" : h("span", null, h("b", null, pctText(pct)), " গত মাসের তুলনায় (গত মাস ", taka(N.totals.prevMonth), ")")),
-        vis.write && h("button", { style: Object.assign({}, S.btn, { marginTop: 14 }), onClick: () => ctx.openSheet({ type: "purchase" }) }, "+ বাজার যোগ করুন")),
+        vis.write && h("button", { style: Object.assign({}, S.btn, { marginTop: 14 }), onClick: () => ctx.openSheet({ type: "purchase" }) }, "+ বাজার যোগ করুন"),
+        // বাজারের তালিকা তৈরি করে আরেকজনকে পাঠানো (family-shopping.js)
+        window.FamilyShopping && vis.write && h("button", { style: Object.assign({}, S.btn2, { width: "100%", marginTop: 8 }), onClick: () => ctx.openSheet({ type: "shop-create" }) }, "🧾 বাজারের তালিকা তৈরি করে পাঠান"),
+        window.FamilyShopping && window.FamilyShopping.pendingForMe(ctx.fam.shopLists, ctx.uid) > 0 && h("button", { style: Object.assign({}, S.btn2, { width: "100%", marginTop: 8, borderColor: "var(--hk-gold)" }), onClick: () => ctx.goTab("shop") }, `🧾 আপনার জন্য ${bn(window.FamilyShopping.pendingForMe(ctx.fam.shopLists, ctx.uid))}টি বাজারের তালিকা — দেখুন`)),
       !vis.totals && h("div", { style: Object.assign({}, S.card, { padding: "10px 14px" }) }, h("div", { style: S.muted }, "🔒 অন্যদের মোট খরচ দেখার অনুমতি নেই, তাই শুধু আপনার নিজের খরচ দেখাচ্ছে।")),
       !has && h("div", { style: S.card }, h(Empty, { icon: "🛒", title: "কোনো বাজার এখনো যোগ হয়নি", text: "আজকের বাজারের হিসাব এখনো যোগ করা হয়নি।", action: vis.write ? "+ বাজার যোগ করুন" : null, onAction: () => ctx.openSheet({ type: "purchase" }) })),
       fam.members.length <= 1 && vis.manage && h("div", { style: Object.assign({}, S.card, { borderColor: "var(--hk-gold)" }) },
@@ -1339,7 +1347,7 @@
    *   mode "full"     — opened from the ☰ menu: own full-screen frame + bottom nav
    *   mode "embedded" — the Family tab: sits inside the app page, nav on top
    * ------------------------------------------------------------------ */
-  const TABS = [["home", "🏠", "হোম"], ["bazar", "🛒", "বাজার"], ["reports", "📊", "রিপোর্ট"], ["family", "👥", "পরিবার"], ["more", "⚙️", "আরও"]];
+  const TABS = [["home", "🏠", "হোম"], ["bazar", "🛒", "বাজার"], ["shop", "🧾", "তালিকা"], ["reports", "📊", "রিপোর্ট"], ["family", "👥", "পরিবার"], ["more", "⚙️", "আরও"]];
 
   function useToast() {
     const [t, setT] = useState(null);
@@ -1359,6 +1367,13 @@
     // section "bazar" (default) = ফ্যামিলি বাজার, "planning" = ফ্যামিলি প্লানিং — two separate places, same family data
     const planningSection = section === "planning";
     const FPl = window.FamilyPlanning;
+    const [online, setOnline] = useState(typeof navigator === "undefined" || navigator.onLine !== false);
+    useEffect(() => {
+      const on = () => setOnline(true), off = () => setOnline(false);
+      window.addEventListener("online", on); window.addEventListener("offline", off);
+      return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+    }, []);
+    const FS = window.FamilyShopping;
     const D = useFamilyData(user);
     const [tab, setTab] = useState("home");
     const [moreView, setMoreView] = useState(null);
@@ -1389,6 +1404,7 @@
       myOther: otherByMonth || null, toast, openSheet: setSheet, closeAll, loadTop: D.loadTop, reload: D.reload,
       setActive: (id) => { D.setActive(id); setStack([]); setTab("home"); setMoreView(null); },
       goMore: (v) => { setTab("more"); setMoreView(v); },
+      goTab: (k) => { setTab(k); },
       bumpInvites: () => setInviteTick((n) => n + 1),
       afterAccept: async (fid) => { await D.loadTop(fid); D.setActive(fid); setStack([]); setTab("home"); },
       afterPurchaseChange: (oldP, newP) => {
@@ -1415,8 +1431,10 @@
 
     // ---- not signed in / loading / error / no family -------------------
     const modTitle = planningSection ? "🎯 ফ্যামিলি প্লানিং" : "🛒 ফ্যামিলি বাজার";
-    const header = (title, sub, right) => h("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: embedded ? "4px 2px 10px" : "calc(10px + env(safe-area-inset-top)) 14px 10px", background: embedded ? "transparent" : "var(--hk-header-bg)", color: embedded ? "var(--hk-text)" : "var(--hk-text-on-dark)" } },
-      h("div", { style: { flex: 1, minWidth: 0 } }, h("div", { style: { fontFamily: SERIF, fontSize: 18, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title), sub && h("div", { style: { fontSize: 12, opacity: 0.8 } }, sub)), right);
+    // 📴 offline banner — the Family section keeps working from the device; changes sync by themselves
+    const offlineBanner = online ? null : h("div", { role: "status", style: { margin: embedded ? "0 0 8px" : "0", padding: "8px 12px", fontSize: 12.5, background: "var(--hk-gold)", color: "#1a1a1a", textAlign: "center", borderRadius: embedded ? 10 : 0, paddingTop: embedded ? 8 : "calc(8px + env(safe-area-inset-top))" } }, "📴 ইন্টারনেট নেই — আপনি কাজ চালিয়ে যান, নেট এলে নিজে থেকেই সিঙ্ক হবে");
+    const header = (title, sub, right) => h(R_Fragment, null, offlineBanner, h("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: embedded ? "4px 2px 10px" : "calc(10px + env(safe-area-inset-top)) 14px 10px", background: embedded ? "transparent" : "var(--hk-header-bg)", color: embedded ? "var(--hk-text)" : "var(--hk-text-on-dark)" } },
+      h("div", { style: { flex: 1, minWidth: 0 } }, h("div", { style: { fontFamily: SERIF, fontSize: 18, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title), sub && h("div", { style: { fontSize: 12, opacity: 0.8 } }, sub)), right));
     const closeBtn = !embedded && onClose ? h("button", { onClick: onClose, "aria-label": "বন্ধ করুন", style: { background: "none", border: "none", fontSize: 22, color: "inherit", minHeight: 44, minWidth: 44 } }, "✕") : null;
     const scroller = (children) => h("div", { style: embedded ? {} : { flex: 1, overflowY: "auto", overscrollBehaviorY: "contain", padding: "12px 14px 24px" } }, children);
 
@@ -1435,7 +1453,7 @@
         sheet.type === "purchase" ? h(PurchaseSheet, { ctx, initial: sheet.initial || null, seed: sheet.seed || null, close: closeSheet }) :
         sheet.type === "purchase-details" ? h(PurchaseDetailsSheet, { ctx, purchase: sheet.purchase, close: closeSheet }) :
         sheet.type === "settings" ? h(SettingsSheet, { ctx, close: closeSheet }) :
-        (FPl ? FPl.renderSheet(sheet, ctx, closeSheet) : null))));
+        (FS && FS.isShopSheet(sheet) ? FS.renderSheet(sheet, ctx, closeSheet) : FPl ? FPl.renderSheet(sheet, ctx, closeSheet) : null))));
     const toastEl = toastObj && h("div", { key: toastObj.k, role: "status", style: { position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: "calc(90px + env(safe-area-inset-bottom))", zIndex: 90, background: "var(--hk-header-bg)", color: "var(--hk-text-on-dark)", padding: "10px 18px", borderRadius: 999, fontSize: 14, fontFamily: F, maxWidth: "90vw", textAlign: "center", boxShadow: "0 4px 16px rgba(0,0,0,.25)" } }, toastObj.msg);
 
     if (!D.family) return h(R_Fragment, null, wrap(h("div", null, header(modTitle, null, closeBtn), scroller(h(NoFamily, { ctx })))), sheetEl, toastEl);
@@ -1458,6 +1476,7 @@
       !D.myMember ? h(Loading) :
       tab === "home" ? h(HomeTab, { ctx }) :
       tab === "bazar" ? h(BazarTab, { ctx }) :
+      tab === "shop" ? (FS ? h(FS.Tab, { ctx }) : h("div", { style: S.muted }, "বাজারের তালিকা লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।")) :
       tab === "reports" ? (D.vis.reports ? h(ReportsTab, { ctx }) : h(Lock, { text: "পরিবারের রিপোর্ট দেখার অনুমতি আপনাকে দেওয়া হয়নি। মালিক/এডমিনকে বলুন।" })) :
       tab === "family" ? h(FamilyTab, { ctx }) :
       h(MoreTab, { ctx, view: moreView, setView: setMoreView });
@@ -1498,6 +1517,6 @@
   }
 
   // building blocks the separate Family Planning file (family-planning.js) reuses
-  window.FBShared = { h, R_Fragment, FPCore, bn, today, F, SERIF, S, Sheet, Toggle, Avatar, Empty, HBar, friendlyError };
+  window.FBShared = { Core, taka, unitText, qtyText, dateBn, h, R_Fragment, FPCore, bn, today, F, SERIF, S, Sheet, Toggle, Avatar, Empty, HBar, friendlyError };
   window.FamilyBazar = { Module, useFamilyAlerts };
 })();

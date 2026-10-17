@@ -3,7 +3,7 @@
 // below) throw away every asset it cached under the old name — including
 // the previously-cached index.html/app.js that kept serving stale code
 // no matter how many times the underlying files were updated.
-const CACHE_NAME = "hisab-khata-v14";
+const CACHE_NAME = "hisab-khata-v16";
 const CORE_ASSETS = [
   "./index.html",
   "./manifest.json",
@@ -21,7 +21,9 @@ const CORE_ASSETS = [
   "./khasra-khata.js",
   "./family-bazar.js",
   "./family-planning.js",
+  "./family-shopping.js",
   "./family-bazar-core.js",
+  "./firebase-init.js",
 ];
 
 self.addEventListener("install", (event) => {
@@ -40,26 +42,46 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// cache-first for our own files, network-first (with cache fallback) for
-// everything else (e.g. the CDN-hosted React/Babel scripts) so the app
-// still opens offline once those have been fetched at least once
-self.addEventListener("fetch", (event) => {
-  const url = new URL(event.request.url);
-  const isOwnAsset = url.origin === self.location.origin;
+// OFFLINE: the whole app (our files, React and the Firebase scripts) must load
+// with no internet once it has been opened online one time.
+//  * our own files: served from the cache straight away (ignoring the ?v=
+//    version suffix, which is what used to make every lookup miss), and
+//    refreshed in the background while online (a new deploy = a new
+//    CACHE_NAME, which also drops the old cache); a file that was never
+//    cached is fetched and stored the first time.
+//  * opening the site (a "navigate" request, e.g. "/") falls back to index.html
+//  * CDN scripts/fonts (React, Firebase JS, Google Fonts): network-first, with
+//    the cached copy as the offline fallback
+//  * everything else — above all Firestore/Auth API traffic — is NOT touched,
+//    so Firebase does its own offline handling (see firebase-init.js).
+const CDN_HOSTS = /(^|\.)(gstatic\.com|unpkg\.com|fonts\.googleapis\.com|cdn\.jsdelivr\.net|cdnjs\.cloudflare\.com)$/;
 
-  if (isOwnAsset) {
+self.addEventListener("fetch", (event) => {
+  const req = event.request;
+  if (req.method !== "GET") return;
+  const url = new URL(req.url);
+
+  if (url.origin === self.location.origin) {
     event.respondWith(
-      caches.match(event.request).then((cached) => cached || fetch(event.request))
+      caches.open(CACHE_NAME).then(async (cache) => {
+        const cached = await cache.match(req, { ignoreSearch: true })
+          || (req.mode === "navigate" ? await cache.match("./index.html") : undefined);
+        const refresh = fetch(req).then((res) => {
+          if (res && res.ok) cache.put(req, res.clone()).catch(() => {});
+          return res;
+        });
+        if (cached) { refresh.catch(() => {}); return cached; }
+        return refresh.catch(() => cache.match("./index.html").then((r) => r || Response.error()));
+      })
     );
-  } else {
+  } else if (CDN_HOSTS.test(url.hostname)) {
     event.respondWith(
-      fetch(event.request)
+      fetch(req)
         .then((res) => {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          if (res && (res.ok || res.type === "opaque")) { const clone = res.clone(); caches.open(CACHE_NAME).then((cache) => cache.put(req, clone)).catch(() => {}); }
           return res;
         })
-        .catch(() => caches.match(event.request))
+        .catch(() => caches.match(req).then((r) => r || Response.error()))
     );
   }
 });
