@@ -12,8 +12,8 @@ const path = require("path");
 const root = path.join(__dirname, "..");
 const out = path.join(root, "www");
 const WEB_FILES = [
-  "index.html", "app.js", "family-bazar.js", "family-planning.js", "family-shopping.js", "family-bazar-core.js", "family-planning-core.js", "khasra-khata.js", "hijri-ummalqura.js",
-  "firebase-init.js", "sw.js", "manifest.json", "icon-192.png", "icon-512.png",
+  "index.html", "js/app/styles.js", "js/app/admin.js", "js/app/debts.js", "js/app/tax.js", "js/app/settings.js", "js/app/calendar-tasks.js", "js/app/reports-search.js", "js/app/app.js", "js/family/family-bazar.js", "js/family/family-planning.js", "js/family/family-bazar-core.js", "js/family/family-planning-core.js", "js/features/khasra-khata.js", "js/features/hijri-ummalqura.js",
+  "js/services/firebase-init.js", "sw.js", "manifest.json", "assets/icons/icon-192.png", "assets/icons/icon-512.png",
 ];
 const VENDOR = [
   { from: "react/umd/react.production.min.js", to: "react.production.min.js", cdn: "https://unpkg.com/react@18/umd/react.production.min.js" },
@@ -26,6 +26,7 @@ fs.mkdirSync(path.join(out, "vendor"), { recursive: true });
 WEB_FILES.forEach((f) => {
   const src = path.join(root, f);
   if (!fs.existsSync(src)) throw new Error("missing web file: " + f);
+  fs.mkdirSync(path.dirname(path.join(out, f)), { recursive: true });
   fs.copyFileSync(src, path.join(out, f));
 });
 

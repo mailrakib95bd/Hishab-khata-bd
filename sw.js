@@ -3,27 +3,33 @@
 // below) throw away every asset it cached under the old name — including
 // the previously-cached index.html/app.js that kept serving stale code
 // no matter how many times the underlying files were updated.
-const CACHE_NAME = "hisab-khata-v16";
+const CACHE_NAME = "hisab-khata-v19";
 const CORE_ASSETS = [
   "./index.html",
   "./manifest.json",
-  "./icon-192.png",
-  "./icon-512.png",
+  "./assets/icons/icon-192.png",
+  "./assets/icons/icon-512.png",
   // own JS: without these here, the cache-first fetch handler below never
   // has anything to serve offline for them (they were never in CORE_ASSETS
   // before, so cache.match always missed and fell through to a network
   // fetch that fails offline) — added so Hijri/calendar math (and the rest
   // of the app) genuinely keeps working with no connection, not just the
   // shell page.
-  "./app.js",
-  "./hijri-ummalqura.js",
-  "./family-planning-core.js",
-  "./khasra-khata.js",
-  "./family-bazar.js",
-  "./family-planning.js",
-  "./family-shopping.js",
-  "./family-bazar-core.js",
-  "./firebase-init.js",
+  "./js/app/app.js",
+  "./js/app/styles.js",
+  "./js/app/admin.js",
+  "./js/app/debts.js",
+  "./js/app/tax.js",
+  "./js/app/settings.js",
+  "./js/app/calendar-tasks.js",
+  "./js/app/reports-search.js",
+  "./js/features/hijri-ummalqura.js",
+  "./js/family/family-planning-core.js",
+  "./js/features/khasra-khata.js",
+  "./js/family/family-bazar.js",
+  "./js/family/family-planning.js",
+  "./js/family/family-bazar-core.js",
+  "./js/services/firebase-init.js",
 ];
 
 self.addEventListener("install", (event) => {

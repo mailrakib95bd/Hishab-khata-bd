@@ -217,16 +217,6 @@ Plan তৈরি → Owner Approval → Active Plan → Contribution → Verifi
 
 ট্যাক্স ফর্মে এখন Task ফর্মের মতোই সময়, রিমাইন্ডার প্রিসেট (নেই/ঠিক সময়ে/৫ মিনিট আগে/১০ মিনিট আগে/১ ঘণ্টা আগে/১ দিন আগে/কাস্টম) ও রিপিট (দৈনিক/সাপ্তাহিক/মাসিক/বাৎসরিক/কাস্টম) আছে — একই `computeTaskReminderFields`/`TASK_REMINDER_PRESETS`/`TASK_REPEAT_OPTIONS` কোড পুনর্ব্যবহার করে, আলাদা কপি নয়। ট্যাক্সের রিমাইন্ডারও ঠিক Task-এর মতো একই ২০-সেকেন্ড চেক-লুপে যাচাই হয়, পরিশোধিত (`paid`) ট্যাক্সের জন্য রিমাইন্ডার বাজে না।
 
-## 🧾 ফ্যামিলি বাজারের তালিকা (নতুন — `family-shopping.js`)
-
-একজন সদস্য বাজারের তালিকা (পণ্য, পরিমাণ, আনুমানিক খরচ) বানিয়ে পরিবারের আরেকজনকে পাঠাতে পারেন।
-
-- **কোথায়:** ফ্যামিলি ট্যাবের ভেতরে 🧾 "তালিকা" ট্যাব; হোমেও "🧾 বাজারের তালিকা তৈরি করে পাঠান" বাটন। আপনার জন্য কোনো তালিকা এলে হোমে ব্যানার দেখায়।
-- **প্রাপক:** তালিকা খুলে কেনা পণ্যে টিক দেন, আসল দাম লেখেন, শেষে "সম্পন্ন" করেন; চাইলে "💰 খরচ হিসাবে বাজার যোগ করুন" চেপে কেনা পণ্যসহ বাজারের ফর্ম খোলেন।
-- **শেয়ার:** তালিকা WhatsApp ইত্যাদিতেও শেয়ার করা যায়।
-- **ডেটা:** `families/{familyId}/shoppingLists/{id}` — `firebase-init.js` (`subscribeShoppingLists`, `createShoppingList`, `updateShoppingList`, `deleteShoppingList`)।
-- **⚠️ জরুরি:** `firestore.rules` ফাইলে নতুন নিয়ম যোগ হয়েছে। Firebase Console → Firestore → Rules-এ পুরো ফাইল পেস্ট করে **Publish** না করলে তালিকা সেভ/লোড হবে না।
-
 ## 📴 অফলাইন সাপোর্ট (ফ্যামিলি, ফ্যামিলি প্লানিং, বাজারের তালিকা)
 
 ইন্টারনেট ছাড়াও এই অংশগুলো কাজ করে; নেট এলে নিজে থেকে সিঙ্ক হয়।
@@ -236,3 +226,60 @@ Plan তৈরি → Owner Approval → Active Plan → Contribution → Verifi
 - `sw.js` — অ্যাপ, React ও Firebase স্ক্রিপ্ট একবার খোলার পর অফলাইনেও লোড হয় (cache `v16`)। Firestore/Auth-এর API ট্রাফিকে হাত দেওয়া হয় না।
 - ফ্যামিলি স্ক্রিনের ওপরে 📴 "ইন্টারনেট নেই" ব্যানার দেখায়।
 - **সীমা:** প্রথমবার ফ্যামিলি খুলতে একবার অনলাইন লাগবে; অফলাইনে ইনভাইট পাঠানো/গ্রহণ ও নতুন পরিবার তৈরির মতো কাজ নেট এলে সম্পূর্ণ হয়।
+
+## 🧩 `app.js` ভাগ করা হয়েছে (৮টা ফাইল)
+
+আগে ৭,৮৯৪ লাইনের এক ফাইল ছিল; এখন কোড হুবহু একই, শুধু আলাদা ফাইলে (সাধারণ `<script>`, global শেয়ার করে)।
+
+| ফাইল | লাইন | কী আছে |
+|---|---|---|
+| `styles.js` | ~২,১৮০ | `styles` অবজেক্ট, `admStyles`/`fvStyles`, থিম CSS (লাইট/ডার্ক) |
+| `admin.js` | ~৪১০ | AdminPanel, নোটিশ, দৈনিক বার্তা, বিশেষ দিন (ফর্ম + বাল্ক ইমপোর্ট), FAQ ফর্ম |
+| `debts.js` | ~৪৯০ | দেনা তালিকা/ফর্ম/বিস্তারিত, ট্রান্সফার ফর্ম ও ইতিহাস |
+| `tax.js` | ~১২৫ | TaxForm, TaxPanel |
+| `settings.js` | ~৫৬০ | SettingsModal, CategoryManager, BudgetModal |
+| `calendar-tasks.js` | ~৪৩৫ | CalendarModal, NotificationCenter, TaskForm, TaskAdminForm |
+| `reports-search.js` | ~৫০০ | Reports, SearchView, Timeline, মাসিক রিভিউ |
+| `app.js` | ~৩,২৭৫ | constants, helpers, hooks, `App`, Dashboard, Header, Login/Lock, TransactionForm, AccountPanel, ModalShell, শেষে `<App/>` রেন্ডার |
+
+**নিয়ম (ভাঙলে সাইট ফাঁকা হয়ে যাবে):**
+- `index.html`-এ লোড ক্রম: `styles.js → admin.js → debts.js → tax.js → settings.js → calendar-tasks.js → reports-search.js → app.js`। **`app.js` সবার শেষে**, কারণ ওটাই `<App/>` রেন্ডার করে।
+- নতুন ফাইল যোগ করলে `index.html`, `sw.js` (`CORE_ASSETS` + `CACHE_NAME` বাড়ান) ও `scripts/build-web.js`-এ যোগ করুন।
+- একাধিক ফাইলে একই নামের `const/function` রাখা যাবে না।
+- যে হেল্পারগুলো একাধিক ফাইল ব্যবহার করে (`debtRemaining`, `debtDueInfo`, `taxDueInfo`, `QUICK_AMOUNTS`, `resolveSpecialDayDate` ইত্যাদি) সেগুলো `app.js`-এ রাখা আছে।
+- টেস্টগুলো সব অংশ জুড়ে পড়ে (`readAppSource()`), ফাংশন নাম ধরে খোঁজে।
+
+## 📁 ফোল্ডার কাঠামো
+
+```
+├── index.html            ← সাইটের প্রবেশদ্বার (রুটেই থাকতে হবে)
+├── sw.js                 ← সার্ভিস ওয়ার্কার/অফলাইন (রুটেই থাকতে হবে, নইলে পুরো সাইট কভার করে না)
+├── manifest.json         ← ফোনে ইনস্টল করার তথ্য
+├── vercel.json  package.json  capacitor.config.json  .gitignore  README.md
+├── js/
+│   ├── app/              ← মূল অ্যাপ (app.js ভেঙে ৮ ফাইল)
+│   │     app.js  styles.js  admin.js  debts.js  tax.js  settings.js
+│   │     calendar-tasks.js  reports-search.js
+│   ├── family/           ← ফ্যামিলি অংশ
+│   │     family-bazar.js  family-bazar-core.js
+│   │     family-planning.js  family-planning-core.js
+│   ├── features/         ← আলাদা ফিচার
+│   │     khasra-khata.js  hijri-ummalqura.js
+│   └── services/         ← ডেটাবেস/লগইন
+│         firebase-init.js
+├── assets/icons/         ← icon-192.png  icon-512.png
+├── firebase/             ← firestore.rules  (Firebase Console-এ পেস্ট করে Publish করতে হয়)
+├── config/               ← debug.keystore  (APK সাইনিং)
+├── scripts/              ← build-web.js
+├── tests/                ← সব *.test.js   (চালান: npm test)
+└── .github/workflows/    ← build-apk.yml
+```
+
+**নিয়ম:**
+- `index.html`-এর `<script src>`, `sw.js`-এর `CORE_ASSETS` ও `scripts/build-web.js`-এর তালিকায় এখন পুরো পাথ লিখতে হয় (যেমন `./js/family/family-bazar.js`)। নতুন ফাইল যোগ করলে তিন জায়গাতেই যোগ করুন এবং `sw.js`-এর `CACHE_NAME` বাড়ান।
+- `index.html` ও `sw.js` রুট থেকে সরাবেন না।
+- আগের অংশগুলোতে লেখা ফাইলের নাম (যেমন `family-bazar.js`) এখন ওপরের ফোল্ডারগুলোর ভেতরে আছে।
+
+## 📦 তালিকা আইকন (ফ্যামিলি)
+
+ফ্যামিলি স্ক্রিনের ওপরে 🔎 সার্চ আইকনের ঠিক বাম পাশে 📦 আইকন আছে (কোনো লেখা নেই)। চাপলে "পণ্য তালিকা" খোলে — সব পণ্য, ক্যাটেগরি ফিল্টার ও দামের ইতিহাস। কোড: `js/family/family-bazar.js` (`ProductsView`, header `switcher`)। ফ্যামিলি প্লানিং পেজে এই দুই আইকন নেই।
