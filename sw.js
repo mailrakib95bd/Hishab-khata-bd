@@ -3,7 +3,7 @@
 // below) throw away every asset it cached under the old name — including
 // the previously-cached index.html/app.js that kept serving stale code
 // no matter how many times the underlying files were updated.
-const CACHE_NAME = "hisab-khata-v19";
+const CACHE_NAME = "hisab-khata-v20";
 const CORE_ASSETS = [
   "./index.html",
   "./manifest.json",
@@ -17,6 +17,7 @@ const CORE_ASSETS = [
   // shell page.
   "./js/app/app.js",
   "./js/app/styles.js",
+  "./js/app/family-list.js",
   "./js/app/admin.js",
   "./js/app/debts.js",
   "./js/app/tax.js",

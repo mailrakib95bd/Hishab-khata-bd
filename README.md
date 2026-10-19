@@ -258,7 +258,7 @@ Plan তৈরি → Owner Approval → Active Plan → Contribution → Verifi
 ├── vercel.json  package.json  capacitor.config.json  .gitignore  README.md
 ├── js/
 │   ├── app/              ← মূল অ্যাপ (app.js ভেঙে ৮ ফাইল)
-│   │     app.js  styles.js  admin.js  debts.js  tax.js  settings.js
+│   │     app.js  styles.js  family-list.js  admin.js  debts.js  tax.js  settings.js
 │   │     calendar-tasks.js  reports-search.js
 │   ├── family/           ← ফ্যামিলি অংশ
 │   │     family-bazar.js  family-bazar-core.js
@@ -280,6 +280,12 @@ Plan তৈরি → Owner Approval → Active Plan → Contribution → Verifi
 - `index.html` ও `sw.js` রুট থেকে সরাবেন না।
 - আগের অংশগুলোতে লেখা ফাইলের নাম (যেমন `family-bazar.js`) এখন ওপরের ফোল্ডারগুলোর ভেতরে আছে।
 
-## 📦 তালিকা আইকন (ফ্যামিলি)
+## 📦 তালিকা (ফ্যামিলি) — আগের "ব্যক্তিগত তালিকা" হুবহু ফিরিয়ে আনা হয়েছে
 
-ফ্যামিলি স্ক্রিনের ওপরে 🔎 সার্চ আইকনের ঠিক বাম পাশে 📦 আইকন আছে (কোনো লেখা নেই)। চাপলে "পণ্য তালিকা" খোলে — সব পণ্য, ক্যাটেগরি ফিল্টার ও দামের ইতিহাস। কোড: `js/family/family-bazar.js` (`ProductsView`, header `switcher`)। ফ্যামিলি প্লানিং পেজে এই দুই আইকন নেই।
+ফ্যামিলি স্ক্রিনের ওপরে 🔎 সার্চ আইকনের ঠিক বাম পাশে 📦 আইকন (কোনো লেখা নেই)। চাপলে সেই পেজেই পুরনো তালিকা খোলে (আবার 📦 বা "‹ ফিরে যান" চাপলে ফ্যামিলি বাজারে ফেরে):
+🛒 বাজার (আইটেম, পরিমাণ, দর, আনুমানিক/প্রকৃত দাম, কেনা বাকি/কেনা হয়েছে, ক্যাটেগরি ফিল্টার, দামের ইতিহাস, "খরচ হিসেবে যোগ করুন") · 👪 সদস্য · 📊 সারাংশ।
+
+- **কোড:** `js/app/family-list.js` (`FamilyView`, `BazarItemForm`, `MemberForm`, `PriceHistoryModal` + `BAZAR_CATS`, `BAZAR_UNITS`, `computeBazarTotal` …)।
+- **ডেটা:** `app.js`-এর state `familyMembers` / `bazarItems` (ডিভাইসে + ক্লাউড ব্যাকআপে, `persistAll` দিয়ে); ড্যাশবোর্ডে "এই মাসে বাজার খরচ (ফ্যামিলি)", সার্চে "সব সদস্য" ফিল্টার ও সেটিংসের রিস্টোর তুলনায় সদস্য/আইটেম সংখ্যা আগের মতোই আছে।
+- **Firebase লাগে না:** এই তালিকা ইউজারের নিজের ডেটায় থাকে, তাই `firestore.rules` বদলাতে হয় না। (অন্য ইউজারকে পাঠানোর কোনো ফিচার এই কোডে ছিল না।)
+- ফ্যামিলি প্লানিং পেজে এই আইকন নেই।
