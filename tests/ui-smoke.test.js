@@ -56,10 +56,11 @@ function hasNot(s) { assert(!text(tree).includes(s), `unexpected "${s}"`); }
 /* ---------------- environment ---------------- */
 const Core = require("../js/family/family-bazar-core.js");
 const FPCore = require("../js/family/family-planning-core.js");
+const FSCore = require("../js/family/family-shopping-core.js");
 const today = Core.dateToYmd(new Date());
 const cm = Core.monthOf(today), pm = Core.addMonths(cm, -1);
 const ls = {};
-const win = { location: { origin: "https://example.test", pathname: "/" }, history: { pushState() {}, back() {}, go() {} }, addEventListener() {}, removeEventListener() {}, confirm: () => true, prompt: () => "", FBCore: Core, FPCore, localStorage: null };
+const win = { location: { origin: "https://example.test", pathname: "/" }, history: { pushState() {}, back() {}, go() {} }, addEventListener() {}, removeEventListener() {}, confirm: () => true, prompt: () => "", FBCore: Core, FPCore, FSCore, localStorage: null };
 const ctxObj = {
   React, window: win, console, setTimeout, clearTimeout, setInterval, clearInterval, Promise, Math, Date, Object, Array, JSON, Number, String, Set, Map, isNaN, parseFloat, Symbol, Error,
   Notification: undefined, navigator: { serviceWorker: null },
@@ -89,6 +90,19 @@ function fakeFB(me) {
   const calls = [];
   const plans = [];
   const planSubs = [];
+  // বাজার তালিকা: L1 আব্বু → রাকিব (running) · L2 রাকিব → আব্বু (running) · L3 রাকিব → আব্বু (completed)
+  const mkItem = (id, name, q, unit, est, extra) => Object.assign(FSCore.item({ id, name, categoryId: Core.DEFAULT_CATEGORIES[0].id, quantity: q, unit, estUnitPrice: est, note: "" }), extra || {});
+  const shopItems = {
+    L1: [mkItem("i1", "চাল", 5, "kg", 70), mkItem("i2", "আলু", 2, "kg", 30), mkItem("i3", "মাছ", 1, "kg", 250), mkItem("i4", "ডিম", 12, "pcs", 12), mkItem("i5", "পেঁয়াজ", 1, "kg", 60)],
+    L2: [mkItem("j1", "সেমাই", 1, "kg", 180), mkItem("j2", "দুধ", 2, "L", 90)],
+    L3: [mkItem("k1", "চিনি", 2, "kg", 120, { status: "bought", actualUnitPrice: 125 }), mkItem("k2", "লবণ", 1, "kg", 40, { status: "not_found", reason: "দোকানে নেই" })],
+  };
+  const mkList = (id, title, by, byName, to, toName, status) => ({ id, familyId: "f1", title, shoppingDate: today, shoppingTime: null, note: id === "L1" ? "ব্যাগ নিও" : "", createdBy: by, createdByName: byName, assignedToUid: to, assignedToName: toName, status, createdAt: "2026-10-16T08:0" + id.slice(1) + ":00.000Z", completedAt: null, completedBy: null });
+  const shopLists = [mkList("L1", "সাপ্তাহিক বাজার", "u2", "আব্বু", "u1", "রাকিব", "in_progress"), mkList("L2", "ঈদের বাজার", "u1", "রাকিব", "u2", "আব্বু", "in_progress"), mkList("L3", "গত মাসের বাজার", "u1", "রাকিব", "u2", "আব্বু", "completed")];
+  shopLists.forEach((l) => { l.stats = FSCore.listStats(shopItems[l.id]); });
+  const shopSubs = [], itemSubs = {};
+  const emitShop = () => shopSubs.forEach((cb) => cb(shopLists.map((l) => Object.assign({}, l))));
+  const emitItems = (id) => (itemSubs[id] || []).forEach((cb) => cb((shopItems[id] || []).map((i) => Object.assign({}, i))));
   const emitPlans = () => planSubs.forEach((cb) => cb(plans.slice()));
   const memberSubs = [];
   const emitMembers = () => memberSubs.forEach((cb) => cb(members.slice()));
@@ -123,6 +137,13 @@ function fakeFB(me) {
     priceRows: async () => rows, locationRows: async () => [{ id: "l1", productId: Core.productIdFor("চাল"), productName: "চাল", location: "গাইবান্ধা", market: "সুন্দরগঞ্জ", price: 64, unit: "kg", date: today, memberId: "u1" }, { id: "l2", productId: Core.productIdFor("চাল"), productName: "চাল", location: "ঢাকা", market: null, price: 70, unit: "kg", date: today, memberId: "u2" }],
     purchasesForMonth: async (fid, m, all) => [P1, P2].filter((p) => p.month === m && (all || p.memberId === me)),
     familySentInvitations: async () => [{ id: "inv1", familyId: "f1", familyName: "হোসেন পরিবার", invitedEmail: "sis@gmail.com", relation: "sister", role: "member", permissions: perms({}), status: "pending", createdAt: Date.now(), expiresAt: Date.now() + 1e9 }],
+    subscribeShoppingLists: (fid, cb) => { shopSubs.push(cb); cb(shopLists.map((l) => Object.assign({}, l))); return () => { shopSubs.splice(shopSubs.indexOf(cb), 1); }; },
+    subscribeShoppingItems: (fid, id, cb) => { (itemSubs[id] = itemSubs[id] || []).push(cb); cb((shopItems[id] || []).map((i) => Object.assign({}, i))); return () => { itemSubs[id].splice(itemSubs[id].indexOf(cb), 1); }; },
+    createShoppingList: async (fid, list, items) => { calls.push(["createShoppingList", fid, list, items]); shopLists.push(Object.assign({}, list)); shopItems[list.id] = (items || []).map((i) => Object.assign({}, i)); emitShop(); return list.id; },
+    addShoppingItem: async (fid, id, item, stats) => { calls.push(["addShoppingItem", fid, id, item, stats]); (shopItems[id] = shopItems[id] || []).push(Object.assign({}, item)); shopLists.find((l) => l.id === id).stats = stats; emitItems(id); emitShop(); },
+    updateShoppingItem: async (fid, id, itemId, patch, stats) => { calls.push(["updateShoppingItem", fid, id, itemId, patch, stats]); const k = shopItems[id].findIndex((i) => i.id === itemId); shopItems[id][k] = Object.assign({}, shopItems[id][k], patch, { updatedBy: me, updatedAt: "now" }); shopLists.find((l) => l.id === id).stats = stats; emitItems(id); emitShop(); },
+    updateShoppingList: async (fid, id, patch) => { calls.push(["updateShoppingList", fid, id, patch]); const k = shopLists.findIndex((l) => l.id === id); shopLists[k] = Object.assign({}, shopLists[k], patch); emitShop(); },
+    deleteShoppingList: async (fid, id, itemIds) => { calls.push(["deleteShoppingList", fid, id, itemIds]); const k = shopLists.findIndex((l) => l.id === id); if (k !== -1) shopLists.splice(k, 1); delete shopItems[id]; emitShop(); },
     familyPlans: async () => plans,
     subscribePlans: (fid, cb) => { planSubs.push(cb); cb(plans.slice()); return () => { planSubs.splice(planSubs.indexOf(cb), 1); }; },
     // mirrors the real window.FB Family Planning functions exactly: read →
@@ -180,9 +201,10 @@ async function boot(userUid, extra) {
   const src = fs.readFileSync(path.join(__dirname, "..", "js", "family", "family-bazar.js"), "utf8");
   vm.runInContext(src, ctxObj, { filename: "family-bazar.js" });
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "js", "family", "family-planning.js"), "utf8"), ctxObj, { filename: "family-planning.js" });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "js", "family", "family-shopping.js"), "utf8"), ctxObj, { filename: "family-shopping.js" });
   const { Module, useFamilyAlerts } = win.FamilyBazar;
   assert(Module && useFamilyAlerts, "exports");
-  root = h(Module, { user: extra === "none" ? null : { uid: userUid, displayName: "x", email: "x@gmail.com" }, mode: /^embedded/.test(extra || "") ? "embedded" : "full", section: /planning$/.test(extra || "") ? "planning" : "bazar", onClose() {} });
+  root = h(Module, { user: extra === "none" ? null : { uid: userUid, displayName: "x", email: "x@gmail.com" }, mode: /^embedded/.test(extra || "") ? "embedded" : "full", startView: /dashboard$/.test(extra || "") ? "dashboard" : /planning$/.test(extra || "") ? "planning" : /lists$/.test(extra || "") ? "lists" : "bazar", legacyProps: { marker: "LEGACY-PROPS-OK" }, onClose() {} });
   render(); await tick(10);
 }
 
@@ -192,31 +214,104 @@ async function boot(userUid, extra) {
   // signed out → sign-in entry
   await boot("u1", "none"); has("Google দিয়ে Sign In"); ok("signed-out entry screen");
 
-  // ফ্যামিলি বাজার and ফ্যামিলি প্লানিং are two separate places (separate files too)
-  await boot("u1", "embedded");
-  has("কে কত খরচ করেছে"); has("বাজার"); ok("embedded ফ্যামিলি বাজার section renders the bazar tabs");
-  { const t = text(tree); assert(!t.includes("ব্যক্তিগত তালিকা"), "personal list must be gone"); assert(!t.includes("ফ্যামিলি প্লানিং"), "no planning entry inside the bazar section"); assert(!t.includes("🎯"), "no 🎯 inside the bazar section"); }
-  ok("bazar section has no ব্যক্তিগত তালিকা and no planning entry (planning has its own place)");
-  await boot("u1", "embedded-planning");
-  has("মোট পরিকল্পনা"); has("+ নতুন পরিকল্পনা তৈরি করুন");
-  { const t = text(tree); assert(!t.includes("কে কত খরচ করেছে"), "bazar content must not show in the planning section"); assert(!t.includes("পণ্য তালিকা"), "no bazar tabs in the planning section"); }
-  ok("embedded ফ্যামিলি প্লানিং section renders the planning dashboard only");
-  await boot("u1", "full-planning"); has("মোট পরিকল্পনা"); ok("full-screen ফ্যামিলি প্লানিং (☰ menu) renders the planning dashboard");
-  assert(win.FamilyPlanning && typeof win.FamilyPlanning.renderSheet === "function", "window.FamilyPlanning exported by family-planning.js"); ok("family-planning.js exports window.FamilyPlanning");
+  const dig = (x) => String(x).replace(/[\u09e6-\u09ef]/g, (d) => "\u09e6\u09e7\u09e8\u09e9\u09ea\u09eb\u09ec\u09ed\u09ee\u09ef".indexOf(d));
+  const lastCall = (name) => { const c = win.FB.calls.filter((x) => x[0] === name); return c[c.length - 1]; };
+  const byAria = (a, root) => find(root || tree, (n) => n.host === "button" && n.props["aria-label"] === a)[0];
+  const clickAria = async (a) => { const b = byAria(a); assert(b, "button (aria) not found: " + a); b.props.onClick({ stopPropagation() {}, preventDefault() {} }); await tick(); };
+  const clickExact = async (label) => { const b = find(tree, (n) => n.host === "button" && text(n).trim() === label)[0]; assert(b, "exact button not found: " + label); b.props.onClick({ stopPropagation() {}, preventDefault() {} }); await tick(); };
+  const setAria = async (a, v, host) => { const el = find(tree, (n) => n.host === (host || "input") && n.props["aria-label"] === a)[0]; assert(el, "field " + a); el.props.onChange({ target: { value: v } }); await tick(); };
+  const pickStatus = async (label) => { const lab = find(tree, (n) => n.host === "label" && text(n).includes(label))[0]; assert(lab, "status " + label); find(lab, (n) => n.host === "input")[0].props.onChange({ target: { checked: true } }); await tick(); };
+  const setTextarea = async (ph, v) => { const el = find(tree, (n) => n.host === "textarea" && n.props.placeholder === ph)[0]; assert(el, "textarea " + ph); el.props.onChange({ target: { value: v } }); await tick(); };
 
-  // তালিকা: an icon-only button (📦, no text) right beside the 🔎 search icon; it opens the product list (পণ্য তালিকা)
-  await boot("u1", "embedded");
-  { const list = find(tree, (n) => n.host === "button" && n.props["aria-label"] === "তালিকা")[0];
-    const search = find(tree, (n) => n.host === "button" && n.props["aria-label"] === "খুঁজুন")[0];
-    assert(list, "তালিকা icon button is missing"); assert(search, "search icon button is missing");
-    assert.strictEqual(text(list).trim(), "📦", "তালিকা button must show only the icon, no text");
-    const row = find(tree, (n) => n.host === "div" && Array.isArray(n.kids) && n.kids.includes(list))[0];
-    assert(row && row.kids.indexOf(list) === row.kids.indexOf(search) - 1, "তালিকা icon must sit directly left of the search icon");
-    await list.props.onClick(); await tick(); }
-  has("পণ্য তালিকা"); has("চাল"); ok("তালিকা: icon-only 📦 button sits right beside 🔎 and opens the product list");
-  await boot("u1", "embedded-planning");
-  assert(!find(tree, (n) => n.host === "button" && n.props["aria-label"] === "তালিকা").length, "no তালিকা icon in the planning section"); ok("planning section has no তালিকা/search icons");
+  // ===== 📦 ফ্যামিলি — the single Family entrance: dashboard with every Family feature =====
+  await boot("u1", "embedded-dashboard");
+  ["ফ্যামিলি বাজার", "বাজার তালিকা", "খরচ ও রিপোর্ট", "ফ্যামিলি প্লানিং", "ব্যক্তিগত তালিকা", "সদস্য ও অনুমতি", "আরও"].forEach(has);
+  has("আপনার ভূমিকা: মালিক"); ok("📦 dashboard lists every Family feature (and shows the member's role)");
+  { const tile = find(tree, (n) => n.host === "button" && text(n).includes("বাজার তালিকা") && text(n).includes("তালিকা বানান"))[0]; assert(tile && dig(text(tile)).includes("1"), "the list waiting for me shows as a badge"); }
+  ok("dashboard badge: 1 shopping list is waiting for me");
+  { const fam = byAria("ফ্যামিলি"), search = byAria("খুঁজুন");
+    assert(fam && search, "📦 and 🔎 buttons"); assert.strictEqual(text(fam).trim(), "📦", "icon only — no text label"); assert.strictEqual(fam.props["aria-pressed"], true);
+    const row = find(tree, (n) => n.host === "div" && Array.isArray(n.kids) && n.kids.includes(fam))[0];
+    assert(row && row.kids.indexOf(fam) === row.kids.indexOf(search) - 1, "📦 sits directly left of the search icon"); }
+  ok("📦 is an icon-only button directly beside 🔎 and is the dashboard's home button");
+  await click("খরচ ও রিপোর্ট"); has("রিপোর্ট"); await back(); await click("ফ্যামিলি বাজার"); has("কে কত খরচ করেছে"); ok("tile → ফ্যামিলি বাজার (all its tabs) · ‹ ফ্যামিলি returns to the dashboard");
+  await click("‹ ফ্যামিলি"); has("আপনার ভূমিকা: মালিক");
+  await click("ফ্যামিলি প্লানিং"); has("মোট পরিকল্পনা"); await click("‹ ফ্যামিলি"); ok("tile → ফ্যামিলি প্লানিং works and returns");
+  win.FamilyView = (props) => h("div", null, "FAMILYVIEW-STUB " + props.marker);
+  await click("ব্যক্তিগত তালিকা"); has("FAMILYVIEW-STUB LEGACY-PROPS-OK"); await click("ফিরে যান"); ok("tile → ব্যক্তিগত তালিকা (the old FamilyView with the App's data/handlers)");
+  await click("সদস্য ও অনুমতি"); has("আব্বু"); ok("tile → সদস্য ও অনুমতি shows the members");
+  { const titles = (u) => find(tree, (n) => n.host === "button" && /ফ্যামিলি বাজার|বাজার তালিকা|খরচ ও রিপোর্ট|ফ্যামিলি প্লানিং|ব্যক্তিগত তালিকা|সদস্য ও অনুমতি/.test(text(n)) && /বাজার যোগ|তালিকা বানান|মাসিক খরচ|লক্ষ্য|নিজের বাজার|সদস্য, Invite/.test(text(n))).map((n) => text(n).split(" ").slice(0, 3).join(" "));
+    await boot("u1", "embedded-dashboard"); const a1 = titles(); await boot("u2", "embedded-dashboard"); const a2 = titles();
+    assert(a1.length === 6, "6 tiles for the owner: " + a1.length); assert.deepStrictEqual(a2.map((x) => x.replace(/ ?\d+$/, "")), a1.map((x) => x.replace(/ ?\d+$/, "")), "member and owner see the same Family tiles"); }
+  ok("owner and ordinary member get the SAME dashboard structure (no feature disappears because of the role)");
+  await boot("u1", "none"); has("ব্যক্তিগত তালিকা"); await click("ব্যক্তিগত তালিকা"); has("FAMILYVIEW-STUB"); ok("signed out / no family: the personal list is still reachable");
 
+  // ===== 🧾 বাজার তালিকা (family-shopping.js) — as the owner (u1: shopper of L1, creator of L2/L3) =====
+  ABBU.phone = "01812345678";
+  await boot("u1", "embedded-lists");
+  has("+ নতুন তালিকা তৈরি"); has("সাপ্তাহিক বাজার"); has("ঈদের বাজার"); assert(dig(text(tree)).includes("বাজার তালিকা (2)") && dig(text(tree)).includes("সম্পন্ন তালিকা (1)"), "tab counts");
+  has("আপনাকে"); ok("lists home: running lists, history count, and a note that I was asked to shop");
+  await click("সাপ্তাহিক বাজার"); await tick(); has("ব্যাগ নিও"); has("তালিকা প্রস্তুতকারী"); has("বাজার করার দায়িত্বে"); has("০/৫"); 
+  { const tel = find(tree, (n) => n.host === "a" && String(n.props.href || "").startsWith("tel:")); assert(tel.length >= 1, "a call button for the other member (phone saved on the member screen)"); }
+  ok("list sheet: note, creator, shopper, progress, and a call button to the other member");
+  has("➕ পণ্য যোগ করুন"); ok("the owner/admin can manage every list, including one made by someone else");
+  // tick চাল -> কেনা হয়েছে but no price yet
+  { const cb = find(tree, (n) => n.host === "button" && n.props.role === "checkbox" && String(n.props["aria-label"]).startsWith("চাল"))[0]; assert(cb, "checkbox"); cb.props.onClick(); await tick(8); }
+  { const c = lastCall("updateShoppingItem"); assert(c && c[3] === "i1" && c[4].status === "bought" && c[4].actualUnitPrice === null && c[5].purchased === 1 && c[5].incompletePrice === 1, JSON.stringify(c && c[4])); }
+  has("প্রকৃত দাম দেওয়া হয়নি"); ok("ticking a product marks it কেনা হয়েছে; with no price entered it is flagged and NOT counted in the actual total");
+  await clickAria("চাল — বিস্তারিত"); has("পণ্য আপডেট"); await setv("70", "68"); await clickExact("সংরক্ষণ করুন"); await tick(8);
+  { const c = lastCall("updateShoppingItem"); assert(c[4].actualUnitPrice === 68 && c[5].actualTotal === 340 && c[5].incompletePrice === 0, JSON.stringify(c[4]) + JSON.stringify(c[5])); }
+  has("340"); ok("actual price 68 × 5 kg = 340 is computed and saved (estimated 350 stays separate)");
+  await clickAria("মাছ — বিস্তারিত"); await pickStatus("বাজারে পাওয়া যায়নি"); await setTextarea("যেমন: আজকে বাজারে মাছ ছিল না।", "আজকে মাছ ছিল না"); await clickExact("সংরক্ষণ করুন"); await tick(8);
+  { const c = lastCall("updateShoppingItem"); assert(c[3] === "i3" && c[4].status === "not_found" && c[4].reason === "আজকে মাছ ছিল না" && c[5].notFound === 1, JSON.stringify(c[4])); }
+  has("আজকে মাছ ছিল না"); has("বাজারে পাওয়া যায়নি"); ok("না-পাওয়া product keeps its reason and is never shown as bought");
+  await clickAria("ডিম — বিস্তারিত"); await pickStatus("বিকল্প পণ্য কেনা হয়েছে"); await clickExact("সংরক্ষণ করুন"); await tick(); has("বিকল্প পণ্যের নাম লিখুন");
+  await setv("যেমন: ইলিশ (ফ্রোজেন)", "হাঁসের ডিম"); await setv("যেমন ১", "12"); await setv("যেমন ২৮০", "14"); await clickExact("সংরক্ষণ করুন"); await tick(8);
+  { const c = lastCall("updateShoppingItem"); assert(c[3] === "i4" && c[4].status === "alternative" && c[4].alternative.name === "হাঁসের ডিম" && c[4].alternative.quantity === 12 && c[4].alternative.unitPrice === 14 && c[5].alternative === 1, JSON.stringify(c[4])); assert.strictEqual(c[5].actualTotal, 340 + 168, "alternative price 14 × 12 = 168 joins the actual total"); }
+  ok("alternative product: name required; its name/quantity/price are saved and counted (14 × 12 = 168)");
+  await click("বাজার সম্পন্ন করুন"); await tick(); has("তালিকার সারাংশ"); has("পেঁয়াজ"); has("সিদ্ধান্ত বাকি"); has("আংশিক সম্পন্ন");
+  ok("completion summary warns that পেঁয়াজ is still undecided and the list will be আংশিক সম্পন্ন");
+  await click("নিশ্চিত করে বাজার সম্পন্ন করুন"); await tick(8);
+  { const c = lastCall("updateShoppingList"); assert(c[2] === "L1" && c[3].status === "partial" && c[3].completedBy === "u1" && c[3].stats.undecided === 2 && c[3].completedAt, JSON.stringify(c[3])); }
+  ok("completing saves status, stats, who and when");
+  await clickTab("সম্পন্ন তালিকা"); has("সাপ্তাহিক বাজার"); has("গত মাসের বাজার"); ok("finished lists move to the history tab");
+  await click("সাপ্তাহিক বাজার"); await tick(); hasNot("বাজার সম্পন্ন করুন"); has("↻ এই তালিকা থেকে নতুন তালিকা"); has("💰 বাজারের হিসাবে যোগ করুন"); ok("a finished list is read-only and offers: new list from it · add to accounts");
+  await click("💰 বাজারের হিসাবে যোগ করুন"); await tick(); has("নতুন বাজার যোগ করুন"); ok("→ opens the Family Bazar purchase form seeded with the bought lines");
+  await back(); await click("↻ এই তালিকা থেকে নতুন তালিকা"); await tick(); has("আগের তালিকা থেকে তৈরি"); await setv("আজকের বাজার / সাপ্তাহিক বাজার / বিশেষ বাজার", "পরের সপ্তাহের বাজার"); await click("তৈরি করুন"); await tick(10);
+  { const c = lastCall("createShoppingList"); assert(c && c[2].title === "পরের সপ্তাহের বাজার" && c[2].copiedFrom === "L1" && c[3].length === 5 && c[3][0].quantity === 5 && c[3][0].estUnitPrice === 70 && c[3].every((i) => i.status === "pending" && i.actualUnitPrice === null), JSON.stringify(c && c[2])); }
+  ok("new list from a past one: products + quantity/price copied, every product starts কেনা বাকি, no actual prices carried over");
+
+  // create a brand-new list + quick-add 12 products
+  await boot("u1", "embedded-lists");
+  await click("+ নতুন তালিকা তৈরি"); await tick(); await click("তৈরি করে পণ্য যোগ করুন"); await tick(); has("তালিকার নাম লিখুন"); assert(!lastCall("createShoppingList"), "an incomplete list is never saved"); ok("list form validates the name");
+  await setv("আজকের বাজার / সাপ্তাহিক বাজার / বিশেষ বাজার", "আজকের বাজার"); await click("তৈরি করে পণ্য যোগ করুন"); await tick(10);
+  { const c = lastCall("createShoppingList"); assert(c && c[2].assignedToUid === "u2" && c[2].createdBy === "u1" && c[2].status === "in_progress" && c[2].shoppingDate === today, JSON.stringify(c && c[2])); }
+  has("➕ পণ্য যোগ করুন"); ok("list created for the chosen member; the list opens ready for products");
+  await click("যোগ করুন"); await tick(); has("পণ্যের নাম লিখুন"); has("ক্যাটাগরি বেছে নিন"); assert(!lastCall("addShoppingItem"), "an incomplete product is rejected"); ok("product without name/category is rejected");
+  await setAria("পণ্যের নাম", "চিনি"); await setAria("পরিমাণ", "abc"); await setAria("ক্যাটাগরি", Core.DEFAULT_CATEGORIES[0].id, "select"); await click("যোগ করুন"); await tick(); has("পরিমাণ সঠিক নয়"); assert(!lastCall("addShoppingItem")); ok("an invalid quantity is rejected (never silently 0)");
+  for (let i = 1; i <= 12; i++) { await setAria("পণ্যের নাম", "পণ্য " + i); await setAria("পরিমাণ", String(i)); await setAria("আনুমানিক একক দাম", i % 2 ? String(10 * i) : ""); await setAria("ক্যাটাগরি", Core.DEFAULT_CATEGORIES[0].id, "select"); await click("যোগ করুন"); await tick(8); }
+  assert.strictEqual(win.FB.calls.filter((x) => x[0] === "addShoppingItem").length, 12);
+  { const last = lastCall("addShoppingItem"); assert(last[4].total === 12 && last[3].estUnitPrice === null, "a blank estimated price stays null"); const first = win.FB.calls.filter((x) => x[0] === "addShoppingItem")[0]; assert(first[3].quantity === 1 && first[3].estUnitPrice === 10 && first[3].status === "pending"); }
+  has("পণ্য 12"); assert.strictEqual(find(tree, (n) => n.host === "input" && n.props["aria-label"] === "পণ্যের নাম")[0].props.value, "", "the form is empty and ready for the next product"); ok("12 products added one after another on the same screen; a blank price is stored as unknown, not 0");
+
+  // ===== role-based behaviour — as u2 (ordinary member, shopper of L2, creator of nothing) =====
+  await boot("u2", "embedded-lists");
+  await click("ঈদের বাজার"); await tick();
+  hasNot("➕ পণ্য যোগ করুন"); hasNot("🗑 তালিকা মুছুন"); hasNot("✏️ তালিকার তথ্য সম্পাদনা"); has("বাজার সম্পন্ন করুন");
+  ok("the shopper can shop and finish, but cannot add products, edit the list or delete it");
+  await clickAria("সেমাই — বিস্তারিত"); has("পণ্য আপডেট"); hasNot("বাতিল (কারণসহ)"); hasNot("পণ্যের তথ্য সম্পাদনা"); await pickStatus("কেনা হয়েছে"); await setv("180", "175"); await clickExact("সংরক্ষণ করুন"); await tick(8);
+  { const c = lastCall("updateShoppingItem"); assert(c[3] === "j1" && c[4].status === "bought" && c[4].actualUnitPrice === 175, JSON.stringify(c[4])); }
+  ok("the shopper can set status + price but has no cancel option and cannot edit the product itself");
+  await boot("u2", "embedded-lists"); await clickTab("সম্পন্ন তালিকা"); await click("গত মাসের বাজার"); await tick(); hasNot("বাজার সম্পন্ন করুন"); hasNot("🗑 তালিকা মুছুন"); has("গত মাসের বাজার"); ok("a completed list is locked for the shopper (no finish/delete)");
+  // manager: the creator can cancel with a reason, edit, delete (with confirm)
+  await boot("u1", "embedded-lists"); await click("ঈদের বাজার"); await tick(); has("✏️ তালিকার তথ্য সম্পাদনা"); has("🗑 তালিকা মুছুন");
+  await clickAria("দুধ — বিস্তারিত"); has("বাতিল (কারণসহ)"); has("পণ্যের তথ্য সম্পাদনা"); await pickStatus("বাতিল (কারণসহ)"); await clickExact("সংরক্ষণ করুন"); await tick(); has("বাতিলের কারণ লিখুন");
+  await setTextarea("মন্তব্য লিখুন", "আর লাগবে না"); await clickExact("সংরক্ষণ করুন"); await tick(8);
+  { const c = lastCall("updateShoppingItem"); assert(c[3] === "j2" && c[4].status === "cancelled" && c[4].reason === "আর লাগবে না" && c[5].cancelled === 1 && c[5].total === 1, JSON.stringify(c[4])); }
+  ok("the creator cancels a product with a mandatory reason — it is marked বাতিল, not deleted");
+  await click("🗑 তালিকা মুছুন"); await tick(8);
+  { const c = lastCall("deleteShoppingList"); assert(c && c[2] === "L2" && c[3].length === 2, JSON.stringify(c)); } ok("deleting asks for confirmation, then removes the list and its products");
+  ABBU.phone = undefined; delete ABBU.phone;
 
   // owner sees everything
   await boot("u1");
@@ -320,11 +415,11 @@ async function boot(userUid, extra) {
   // ---- spec scenario 4: Rakib adds চাল — 5 kg — ৳64 = ৳320 ----------------
   await boot("u1");
   await click("বাজার যোগ করুন"); has("নতুন বাজার যোগ করুন");
-  await click("সংরক্ষণ করুন"); has("•"); assert(win.FB.calls.length === 0); ok("empty purchase is rejected, nothing saved");
+  await clickExact("সংরক্ষণ করুন"); has("•"); assert(win.FB.calls.length === 0); ok("empty purchase is rejected, nothing saved");
   await setv("পণ্যের নাম (যেমন: চাল)", "চাল"); await setv("৫", "5"); await setv("৬৪", "64");
   has("৳320"); ok("total auto-calculated: 5 × 64 = ৳320");
   await setv("যেমন: সুন্দরগঞ্জ বাজার", "সুন্দরগঞ্জ বাজার"); await setv("যেমন: গাইবান্ধা", "গাইবান্ধা");
-  await click("সংরক্ষণ করুন"); await tick(10);
+  await clickExact("সংরক্ষণ করুন"); await tick(10);
   const call = win.FB.calls.find((c) => c[0] === "savePurchase");
   assert(call, "savePurchase not called");
   const [, fid, oldP, newP] = call;
