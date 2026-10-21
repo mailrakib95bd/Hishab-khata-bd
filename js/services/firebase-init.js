@@ -628,6 +628,56 @@ window.FB = {
     return deleteDoc(doc(db, "families", familyId, "plans", planId));
   },
 
+  // ============================================================
+  // FAMILY SHOPPING LIST (js/family/family-shopping.js) — one member writes a
+  // bazar list, another (or the same) member shops from it.
+  //   families/{f}/shoppingLists/{listId}                header + denormalised `stats`
+  //   families/{f}/shoppingLists/{listId}/items/{itemId} one product each
+  // Products live in their own documents so Security Rules can let the SHOPPER
+  // change only status/price/quantity/note/alternative, while only the list's
+  // creator or an owner/admin can add, rename, cancel or delete products.
+  // Every product write also refreshes the list's `stats` in the SAME batch.
+  // ============================================================
+  subscribeShoppingLists(familyId, cb) {
+    return onSnapshot(collection(db, "families", familyId, "shoppingLists"), (snap) => {
+      cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, () => cb([]));
+  },
+  subscribeShoppingItems(familyId, listId, cb) {
+    return onSnapshot(collection(db, "families", familyId, "shoppingLists", listId, "items"), (snap) => {
+      cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, () => cb([]));
+  },
+  async createShoppingList(familyId, list, items) {
+    const b = writeBatch(db);
+    b.set(doc(db, "families", familyId, "shoppingLists", list.id), list);
+    (items || []).forEach((it, i) => b.set(doc(db, "families", familyId, "shoppingLists", list.id, "items", it.id), Object.assign({}, it, { order: i })));
+    await b.commit();
+    return list.id;
+  },
+  async addShoppingItem(familyId, listId, item, stats) {
+    const b = writeBatch(db);
+    b.set(doc(db, "families", familyId, "shoppingLists", listId, "items", item.id), item);
+    b.update(doc(db, "families", familyId, "shoppingLists", listId), { stats, updatedAt: new Date().toISOString() });
+    await b.commit();
+  },
+  async updateShoppingItem(familyId, listId, itemId, patch, stats) {
+    const now = new Date().toISOString();
+    const b = writeBatch(db);
+    b.update(doc(db, "families", familyId, "shoppingLists", listId, "items", itemId), Object.assign({}, patch, { updatedBy: auth.currentUser ? auth.currentUser.uid : null, updatedAt: now }));
+    b.update(doc(db, "families", familyId, "shoppingLists", listId), { stats, updatedAt: now });
+    await b.commit();
+  },
+  updateShoppingList(familyId, listId, patch) {
+    return updateDoc(doc(db, "families", familyId, "shoppingLists", listId), Object.assign({}, patch, { updatedAt: new Date().toISOString() }));
+  },
+  async deleteShoppingList(familyId, listId, itemIds) {
+    const b = writeBatch(db);
+    (itemIds || []).forEach((id) => b.delete(doc(db, "families", familyId, "shoppingLists", listId, "items", id)));
+    b.delete(doc(db, "families", familyId, "shoppingLists", listId));
+    await b.commit();
+  },
+
   addContribution(familyId, planId, draft, actorUid, actorName) {
     return this._mutatePlan(familyId, planId, (p) => {
       const c = window.FPCore.contribution(Object.assign({}, draft, { memberUid: actorUid, memberName: actorName }));
