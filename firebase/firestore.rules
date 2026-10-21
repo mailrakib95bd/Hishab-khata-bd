@@ -374,6 +374,66 @@ service cloud.firestore {
     }
 
     // ============================================================
+    // FAMILY SHOPPING LIST (js/family/family-shopping.js)
+    //   shoppingLists/{listId}        — the list header + denormalised `stats`
+    //   shoppingLists/{listId}/items  — one document per product
+    // Who may do what (enforced HERE, not only by hiding buttons in the UI):
+    //   read    every member of the family (and nobody else);
+    //   create  a non-viewer, as themselves, for an existing member of the family;
+    //   manage  the list's creator or an owner/admin: edit the list, add/rename/
+    //           cancel/delete products — only while the list is still running
+    //           (a finished list can only be changed/deleted by owner/admin);
+    //   shop    the assigned shopper: ONLY a product's status, actual price,
+    //           actual quantity, alternative, reason (+ who/when), and the list's
+    //           progress fields (stats/status/completedAt/completedBy);
+    //   delete  never the plain shopper.
+    // ============================================================
+    match /families/{familyId}/shoppingLists/{listId} {
+      function listIsManager() { return resource.data.createdBy == request.auth.uid || isOwnerOrAdmin(familyId); }
+      function listIsRunning() { return resource.data.status == "in_progress" || isOwnerOrAdmin(familyId); }
+
+      allow read: if isMember(familyId);
+
+      allow create: if canWrite(familyId) &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.status == "in_progress" &&
+        request.resource.data.title is string && request.resource.data.title.size() > 0 && request.resource.data.title.size() <= 60 &&
+        request.resource.data.assignedToUid is string &&
+        exists(/databases/$(database)/documents/families/$(familyId)/members/$(request.resource.data.assignedToUid));
+
+      allow update: if canWrite(familyId) && listIsRunning() &&
+        request.resource.data.createdBy == resource.data.createdBy &&
+        (listIsManager() ||
+          (resource.data.assignedToUid == request.auth.uid &&
+           request.resource.data.assignedToUid == resource.data.assignedToUid &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(["stats", "status", "completedAt", "completedBy", "updatedAt"])));
+
+      allow delete: if canWrite(familyId) && listIsManager() && listIsRunning();
+
+      match /items/{itemId} {
+        function parentList() { return get(/databases/$(database)/documents/families/$(familyId)/shoppingLists/$(listId)).data; }
+        function parentAfter() { return getAfter(/databases/$(database)/documents/families/$(familyId)/shoppingLists/$(listId)).data; }
+        function itemsManager() { return parentList().createdBy == request.auth.uid || isOwnerOrAdmin(familyId); }
+        function itemsRunning() { return parentList().status == "in_progress" || isOwnerOrAdmin(familyId); }
+
+        allow read: if isMember(familyId);
+
+        // getAfter(): the list may be created in the very same batch
+        allow create: if canWrite(familyId) &&
+          (parentAfter().createdBy == request.auth.uid || isOwnerOrAdmin(familyId)) &&
+          parentAfter().status == "in_progress" &&
+          request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 60;
+
+        allow update: if canWrite(familyId) && itemsRunning() &&
+          (itemsManager() ||
+            (parentList().assignedToUid == request.auth.uid &&
+             request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "actualUnitPrice", "actualQuantity", "alternative", "reason", "updatedBy", "updatedAt"])));
+
+        allow delete: if canWrite(familyId) && itemsManager() && itemsRunning();
+      }
+    }
+
+    // ============================================================
     // FAMILY PLANNING — goal-based family savings plans with Owner
     // approval (see family-planning-core.js for the full lifecycle).
     //
