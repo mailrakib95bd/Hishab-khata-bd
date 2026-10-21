@@ -341,12 +341,13 @@ function Reports({ transactions, categoryBudgets, budget, onSearch }) {
                     React.createElement("div", { style: Object.assign(Object.assign({}, styles.budgetBarFill), { width: `${Math.min(100, c.pct)}%`, background: c.pct >= 100 ? "var(--hk-danger)" : c.pct >= 90 ? "var(--hk-danger-mid)" : c.pct >= 70 ? "var(--hk-gold)" : "var(--hk-success-mid)" }) }))))))))));
 }
 /* ---------------- search ---------------- */
-function SearchView({ transactions, onOpenTx, seed, userAccounts, debts }) {
+function SearchView({ transactions, onOpenTx, seed, familyMembers, userAccounts, debts }) {
     const cats = useCategories();
     const [q, setQ] = useState("");
     const [type, setType] = useState("all");
     const [method, setMethod] = useState("all");
     const [category, setCategory] = useState("all");
+    const [familyMemberId, setFamilyMemberId] = useState("all");
     const [accountId, setAccountId] = useState("all");
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [dateFrom, setDateFrom] = useState("");
@@ -378,6 +379,8 @@ function SearchView({ transactions, onOpenTx, seed, userAccounts, debts }) {
                 return false;
             if (category !== "all" && t.category !== category)
                 return false;
+            if (familyMemberId !== "all" && t.familyMemberId !== familyMemberId)
+                return false;
             if (accountId !== "all" && t.accountId !== accountId)
                 return false;
             if (dateFrom && t.date < dateFrom)
@@ -395,7 +398,7 @@ function SearchView({ transactions, onOpenTx, seed, userAccounts, debts }) {
             return cat.includes(query) || note.includes(query);
         })
             .sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : b.createdAt - a.createdAt));
-    }, [transactions, q, type, method, category, accountId, dateFrom, dateTo, amountMin, amountMax, cats]);
+    }, [transactions, q, type, method, category, familyMemberId, accountId, dateFrom, dateTo, amountMin, amountMax, cats]);
     const totalAmount = useMemo(() => results.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0), [results]);
     // debt repayments shown as their own clearly-labeled, separate section —
     // never merged into `results`/`totalAmount` above. They are NOT
@@ -467,6 +470,9 @@ function SearchView({ transactions, onOpenTx, seed, userAccounts, debts }) {
                 React.createElement("option", { value: "all" }, "\u09B8\u09AC \u0995\u09CD\u09AF\u09BE\u099F\u09C7\u0997\u09B0\u09BF"),
                 (type !== "income" ? cats.expenseCats : []).map((c) => React.createElement("option", { key: `e-${c.key}`, value: c.key }, c.label)),
                 (type !== "expense" ? cats.incomeCats : []).map((c) => React.createElement("option", { key: `i-${c.key}`, value: c.key }, c.label))),
+            familyMembers && familyMembers.length > 0 && (React.createElement("select", { style: styles.filterSelect, value: familyMemberId, onChange: (e) => setFamilyMemberId(e.target.value) },
+                React.createElement("option", { value: "all" }, "\u09B8\u09AC \u09B8\u09A6\u09B8\u09CD\u09AF"),
+                familyMembers.map((m) => React.createElement("option", { key: m.id, value: m.id }, m.name)))),
             userAccounts && userAccounts.length > 0 && (React.createElement("select", { style: styles.filterSelect, value: accountId, onChange: (e) => setAccountId(e.target.value) },
                 React.createElement("option", { value: "all" }, "\u09B8\u09AC \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F"),
                 userAccounts.map((a) => React.createElement("option", { key: a.id, value: a.id }, a.name))))),

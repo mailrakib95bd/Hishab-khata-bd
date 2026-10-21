@@ -106,10 +106,11 @@ const ICON_PATHS = {
         React.createElement("path", { d: "M2 21v-2a6 6 0 0 1 12 0v2" }),
         React.createElement("circle", { cx: "17.5", cy: "8.5", r: "2.3" }),
         React.createElement("path", { d: "M14.5 21v-1.5a4.3 4.3 0 0 1 7.3-3.1" }))),
-    planning: (React.createElement(React.Fragment, null,
-        React.createElement("circle", { cx: "12", cy: "12", r: "9" }),
-        React.createElement("circle", { cx: "12", cy: "12", r: "5" }),
-        React.createElement("circle", { cx: "12", cy: "12", r: "1.4" }))),
+    box: (React.createElement(React.Fragment, null,
+        React.createElement("path", { d: "M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z" }),
+        React.createElement("path", { d: "M12 22V12" }),
+        React.createElement("path", { d: "M3.29 7 12 12l8.71-5" }),
+        React.createElement("path", { d: "m7.5 4.27 9 5.15" }))),
     travel: (React.createElement(React.Fragment, null,
         React.createElement("path", { d: "M22 2 11 13" }),
         React.createElement("path", { d: "M22 2 15 22l-4-9-9-4 20-7z" }))),
@@ -599,6 +600,8 @@ function App() {
     const [showTransferHistory, setShowTransferHistory] = useState(false);
     const [undoBuffer, setUndoBuffer] = useState(null); // { kind, item, index }
     const [profileName, setProfileName] = useState(null); // app-local display name, separate from Google's
+    const [familyMembers, setFamilyMembers] = useState([]); // { id, name, relation, note, createdAt }
+    const [bazarItems, setBazarItems] = useState([]); // family bazar / shopping-list items, see BAZAR_CATS
     const [taxes, setTaxes] = useState([]); // { id, name, amount, dueDate, paid, note, createdAt }
     // dynamic named accounts (e.g. "DBBL", "bKash Personal") — ADDITIVE to
     // the existing fixed METHODS system, never replacing it. A transaction
@@ -669,6 +672,8 @@ function App() {
         setAccountOpening(d.accountOpening || {});
         setTransfers(d.transfers || []);
         setProfileName(d.profileName || null);
+        setFamilyMembers(d.familyMembers || []);
+        setBazarItems(d.bazarItems || []);
         setTaxes(d.taxes || []);
         setUserAccounts(d.userAccounts || []);
         setAuditLog(d.auditLog || []);
@@ -701,13 +706,15 @@ function App() {
         accountOpening,
         transfers,
         profileName,
+        familyMembers,
+        bazarItems,
         taxes,
         userAccounts,
         auditLog,
         readNoticeIds,
         readDailyMessageIds,
         dismissedDailyMessageIds,
-        completedAdminTaskIds }, overrides)), [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, taxes, userAccounts, auditLog, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, completedAdminTaskIds, persist]);
+        completedAdminTaskIds }, overrides)), [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, familyMembers, bazarItems, taxes, userAccounts, auditLog, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, completedAdminTaskIds, persist]);
     // pin / theme / autoSync only — deliberately NOT part of persistAll, since
     // these belong to the device, not to whichever account is signed in
     const [autoSync, setAutoSync] = useState(true);
@@ -751,6 +758,7 @@ function App() {
     const exportBackupJSON = () => JSON.stringify({
         transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats,
         categoryBudgets, accountOpening, transfers, profileName,
+        familyMembers, bazarItems,
         taxes,
         userAccounts,
         auditLog,
@@ -797,7 +805,6 @@ function App() {
     const khasraBackRef = useRef(null);
     const [showAccountPanel, setShowAccountPanel] = useState(false);
     const [showFamilyBazar, setShowFamilyBazar] = useState(false);
-    const [showFamilyPlanning, setShowFamilyPlanning] = useState(false);
     // pending Family Bazar invitations for the signed-in Google account (badge on the ☰ menu)
     const famAlerts = (window.FamilyBazar && window.FamilyBazar.useFamilyAlerts) ? window.FamilyBazar.useFamilyAlerts(user) : { count: 0 };
     const [searchSeed, setSearchSeed] = useState(null);
@@ -929,7 +936,6 @@ function App() {
     useBackOverlay(!!editingTransfer, () => setEditingTransfer(null));
     useBackOverlay(showAccountPanel, () => closeMenuPanel(setShowAccountPanel));
     useBackOverlay(showFamilyBazar, () => closeMenuPanel(setShowFamilyBazar));
-    useBackOverlay(showFamilyPlanning, () => closeMenuPanel(setShowFamilyPlanning));
     useEffect(() => {
         if (!showKhasra)
             return;
@@ -1333,11 +1339,11 @@ function App() {
         scheduleCloudPush({
             transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats,
             categoryBudgets, accountOpening, transfers, profileName,
-            taxes, userAccounts, auditLog,
+            familyMembers, bazarItems, taxes, userAccounts, auditLog,
             readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, completedAdminTaskIds,
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, taxes, userAccounts, auditLog, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, completedAdminTaskIds, user, loaded, autoSync]);
+    }, [transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats, categoryBudgets, accountOpening, transfers, profileName, familyMembers, bazarItems, taxes, userAccounts, auditLog, readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, completedAdminTaskIds, user, loaded, autoSync]);
     // the moment the connection comes back, automatically flush any changes
     // that piled up while offline — the person never has to remember to sync
     const manualSyncRef = useRef(null);
@@ -1358,7 +1364,7 @@ function App() {
             await window.FB.saveCloudData(user.uid, {
                 transactions, budget, tasks, specialDays, debts, expenseCats, incomeCats,
                 categoryBudgets, accountOpening, transfers, profileName,
-                taxes, userAccounts, auditLog,
+                familyMembers, bazarItems, taxes, userAccounts, auditLog,
                 readNoticeIds, readDailyMessageIds, dismissedDailyMessageIds, completedAdminTaskIds,
             });
             setSyncStatus("synced");
@@ -1411,6 +1417,8 @@ function App() {
                 transactions: transactions.length,
                 debts: debts.length,
                 transfers: transfers.length,
+                familyMembers: familyMembers.length,
+                bazarItems: bazarItems.length,
                 taxes: taxes.length,
             },
             cloud: cloud
@@ -1418,6 +1426,8 @@ function App() {
                     transactions: (cloud.transactions || []).length,
                     debts: (cloud.debts || []).length,
                     transfers: (cloud.transfers || []).length,
+                    familyMembers: (cloud.familyMembers || []).length,
+                    bazarItems: (cloud.bazarItems || []).length,
                     taxes: (cloud.taxes || []).length,
                     updatedAt: cloud.updatedAt || null,
                 }
@@ -1525,6 +1535,70 @@ function App() {
         }, 1500);
         return () => clearTimeout(timer);
     }, [otherExpenseByMonth, user && user.uid]);
+    /* ---------------- family management ---------------- */
+    const addFamilyMember = (member) => {
+        const next = [...familyMembers, Object.assign(Object.assign({}, member), { id: uid(), createdAt: Date.now() })];
+        setFamilyMembers(next);
+        persistAll({ familyMembers: next });
+    };
+    const updateFamilyMember = (id, patch) => {
+        const next = familyMembers.map((m) => (m.id === id ? Object.assign(Object.assign({}, m), patch) : m));
+        setFamilyMembers(next);
+        persistAll({ familyMembers: next });
+    };
+    // safe delete: unassign this member from any bazar items instead of
+    // silently orphaning/deleting the items themselves
+    const deleteFamilyMember = (id) => {
+        const nextMembers = familyMembers.filter((m) => m.id !== id);
+        const nextBazar = bazarItems.map((it) => (it.familyMemberId === id ? Object.assign(Object.assign({}, it), { familyMemberId: null }) : it));
+        setFamilyMembers(nextMembers);
+        setBazarItems(nextBazar);
+        persistAll({ familyMembers: nextMembers, bazarItems: nextBazar });
+    };
+    /* ---------------- family bazar ---------------- */
+    const addBazarItem = (item) => {
+        const next = [...bazarItems, Object.assign(Object.assign({}, item), { id: uid(), createdAt: Date.now(), expenseAdded: false })];
+        setBazarItems(next);
+        persistAll({ bazarItems: next });
+    };
+    const updateBazarItem = (id, patch) => {
+        const next = bazarItems.map((it) => (it.id === id ? Object.assign(Object.assign({}, it), patch) : it));
+        setBazarItems(next);
+        persistAll({ bazarItems: next });
+    };
+    const deleteBazarItem = (id) => {
+        const next = bazarItems.filter((it) => it.id !== id);
+        setBazarItems(next);
+        persistAll({ bazarItems: next });
+    };
+    // "খরচ হিসেবে যোগ করুন" — converts one purchased bazar item into a real
+    // expense transaction exactly once. expenseAdded guards against the item
+    // ever creating a duplicate expense, even if pressed again or synced
+    // from another device.
+    const addBazarItemAsExpense = (item) => {
+        if (item.expenseAdded)
+            return;
+        const amount = computeBazarTotal(item);
+        if (!amount || amount <= 0)
+            return;
+        const txId = uid();
+        const nextTx = [...transactions, {
+                id: txId,
+                type: "expense",
+                amount,
+                category: "family",
+                date: item.purchaseDate || todayStr(),
+                note: `বাজার: ${item.productName}`,
+                method: "cash",
+                familyMemberId: item.familyMemberId || null,
+                bazarItemId: item.id,
+                createdAt: Date.now(),
+            }];
+        const nextBazar = bazarItems.map((it) => (it.id === item.id ? Object.assign(Object.assign({}, it), { expenseAdded: true, expenseTxId: txId }) : it));
+        setTransactions(nextTx);
+        setBazarItems(nextBazar);
+        persistAll({ transactions: nextTx, bazarItems: nextBazar });
+    };
     /* ---------------- tax management ---------------- */
     const addTax = (tax) => {
         const next = [...taxes, Object.assign(Object.assign({}, tax), { id: uid(), createdAt: Date.now(), paid: false })];
@@ -1694,7 +1768,7 @@ function App() {
             transactions: [], budget: 0, tasks: [], specialDays: {}, debts: [],
             expenseCats: EXPENSE_CATS, incomeCats: INCOME_CATS, categoryBudgets: {},
             accountOpening: {}, transfers: [], profileName: null,
-            taxes: [], auditLog: [],
+            familyMembers: [], bazarItems: [], taxes: [], auditLog: [],
             userAccounts: [],
             readNoticeIds: [], readDailyMessageIds: [], dismissedDailyMessageIds: [], completedAdminTaskIds: [],
         };
@@ -1959,7 +2033,7 @@ function App() {
                         // server, which this client-only app doesn't have.
                         if (navigator.serviceWorker && navigator.serviceWorker.ready) {
                             navigator.serviceWorker.ready
-                                .then((reg) => reg.showNotification(title, { body, icon: "./assets/icons/icon-192.png" }))
+                                .then((reg) => reg.showNotification(title, { body, icon: "./icon-192.png" }))
                                 .catch(() => { new Notification(title, { body }); });
                         }
                         else {
@@ -2003,13 +2077,12 @@ function App() {
                 tab === "dashboard" && (React.createElement(Dashboard, { transactions: transactions, budget: budget, categoryBudgets: categoryBudgets, debts: debts, accounts: accounts, onEditBudget: () => setShowBudget(true), onOpenTx: (t) => setEditingTx(t), onGoDebts: () => setTab("debts"), onGoReports: () => setTab("reports"), onQuickAdd: (type) => {
                         setQuickAddType(type);
                         setShowAdd(true);
-                    }, onTransfer: () => setShowTransfer(true), onTransferHistory: () => setShowTransferHistory(true), profileName: profileName, taxes: taxes })),
+                    }, onTransfer: () => setShowTransfer(true), onTransferHistory: () => setShowTransferHistory(true), profileName: profileName, taxes: taxes, bazarItems: bazarItems })),
                 tab === "timeline" && (React.createElement(Timeline, { transactions: transactions, onOpenTx: (t) => setEditingTx(t) })),
                 tab === "debts" && (React.createElement(DebtsView, { debts: debts, onOpenDebt: (d) => setEditingDebt(d), onAddDebt: () => setShowAddDebt(true) })),
-                tab === "family" && (React.createElement(FamilyHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
-                tab === "planning" && (React.createElement(FamilyPlanningHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
+                tab === "family" && (React.createElement(FamilyHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth, legacyProps: { familyMembers: familyMembers, bazarItems: bazarItems, transactions: transactions, onAddMember: addFamilyMember, onUpdateMember: updateFamilyMember, onDeleteMember: deleteFamilyMember, onAddBazarItem: addBazarItem, onUpdateBazarItem: updateBazarItem, onDeleteBazarItem: deleteBazarItem, onAddBazarItemAsExpense: addBazarItemAsExpense } })),
                 tab === "reports" && React.createElement(Reports, { transactions: transactions, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
-                tab === "search" && (React.createElement(SearchView, { transactions: transactions, accounts: accounts, onOpenTx: (t) => setEditingTx(t), seed: searchSeed, userAccounts: userAccounts, debts: debts }))),
+                tab === "search" && (React.createElement(SearchView, { transactions: transactions, accounts: accounts, onOpenTx: (t) => setEditingTx(t), seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts, debts: debts }))),
             (tab === "dashboard" || tab === "timeline" || tab === "debts") && (React.createElement("button", { style: styles.fab, onClick: () => (tab === "debts" ? setShowAddDebt(true) : setShowAdd(true)), "aria-label": tab === "debts" ? "নতুন দেনা-পাওনা যোগ করুন" : "নতুন লেনদেন যোগ করুন" }, "+")),
             React.createElement(BottomNav, { tab: tab, setTab: setTab }),
             showAdd && (React.createElement(TransactionForm, { presetType: quickAddType, onClose: () => {
@@ -2092,7 +2165,6 @@ function App() {
                 onOpenAccounts: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowAccountPanel(true), 0); },
                 familyInvites: famAlerts.count,
                 onOpenFamilyBazar: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowFamilyBazar(true), 0); },
-                onOpenFamilyPlanning: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowFamilyPlanning(true), 0); },
                 onOpenKhasra: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowKhasra(true), 0); },
                 isAdminUser: isAdmin(user),
                 onOpenAdmin: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowAdminPanel(true), 0); },
@@ -2102,8 +2174,7 @@ function App() {
             showTaxPanel && (React.createElement(TaxPanel, { onClose: () => closeMenuPanel(setShowTaxPanel), taxes: taxes, onAdd: addTax, onUpdate: updateTax, onDelete: deleteTax, onTogglePaid: toggleTaxPaid })),
             showAccountPanel && (React.createElement(AccountPanel, { onClose: () => closeMenuPanel(setShowAccountPanel), dynamicAccountBalances: dynamicAccountBalances, onAdd: addUserAccount, onUpdate: updateUserAccount, onDelete: deleteUserAccount, onToggleActive: toggleUserAccountActive, onViewTransactions: (id) => { setShowAccountPanel(false); setSearchSeed({ accountId: id, ts: Date.now() }); setTab("search"); } })),
             showKhasra && React.createElement(KhasraKhataModule, { onClose: () => closeMenuPanel(setShowKhasra), storageId: user && user.uid ? user.uid : "guest", registerBack: (fn) => { khasraBackRef.current = fn; } }),
-            showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth }),
-            showFamilyPlanning && React.createElement(FamilyPlanningModule, { onClose: () => closeMenuPanel(setShowFamilyPlanning), user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth }),
+            showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth, legacyProps: { familyMembers: familyMembers, bazarItems: bazarItems, transactions: transactions, onAddMember: addFamilyMember, onUpdateMember: updateFamilyMember, onDeleteMember: deleteFamilyMember, onAddBazarItem: addBazarItem, onUpdateBazarItem: updateBazarItem, onDeleteBazarItem: deleteBazarItem, onAddBazarItemAsExpense: addBazarItemAsExpense } }),
             showNotificationCenter && (React.createElement(NotificationCenter, {
                 onClose: () => closeMenuPanel(setShowNotificationCenter),
                 notices: notices, dailyMessages: dailyMessages, tasks: tasks, debts: debts,
@@ -2387,7 +2458,7 @@ function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onTo
                         showTaskForm && (React.createElement(TaskForm, { initial: editingTask, onClose: () => setShowTaskForm(false), onSave: (data) => { editingTask ? onUpdateTask(editingTask.id, data) : onAddTask(data); setShowTaskForm(false); } }))))))))));
 }
 /* ---------------- dashboard ---------------- */
-function Dashboard({ transactions, budget, categoryBudgets, debts, accounts, onEditBudget, onOpenTx, onGoDebts, onGoReports, onQuickAdd, onTransfer, onTransferHistory, profileName, taxes }) {
+function Dashboard({ transactions, budget, categoryBudgets, debts, accounts, onEditBudget, onOpenTx, onGoDebts, onGoReports, onQuickAdd, onTransfer, onTransferHistory, profileName, taxes, bazarItems }) {
     const cats = useCategories();
     const today = todayStr();
     const thisMonthKey = monthKeyOf(today);
@@ -2491,6 +2562,11 @@ function Dashboard({ transactions, budget, categoryBudgets, debts, accounts, onE
             .sort((a, b) => a.info.daysLeft - b.info.daysLeft)
             .slice(0, 3);
     }, [taxes]);
+    // this month's family bazar spending (purchased items only — matches
+    // how the Family module counts "actual" spend)
+    const bazarSpendThisMonth = useMemo(() => (bazarItems || [])
+        .filter((it) => it.purchased && monthKeyOf(it.purchaseDate || "") === thisMonthKey)
+        .reduce((s, it) => s + computeBazarTotal(it), 0), [bazarItems, thisMonthKey]);
     // simple 0-100 heuristic: savings rate (40pts) + budget adherence (35pts) + debt-free-ness (25pts)
     const healthScore = useMemo(() => {
         let score = 50;
@@ -2731,6 +2807,10 @@ function Dashboard({ transactions, budget, categoryBudgets, debts, accounts, onE
                 React.createElement("div", null,
                     React.createElement("div", { style: styles.statLabel }, "\u09A8\u09BF\u099F"),
                     React.createElement("div", { style: Object.assign(Object.assign({}, styles.statValue), { fontSize: 15, color: debtStats.net >= 0 ? "var(--hk-success)" : "var(--hk-danger)" }) }, formatTaka(debtStats.net, { sign: true }))))),
+        bazarSpendThisMonth > 0 && (React.createElement("div", { style: styles.savingsCard },
+            React.createElement("div", { style: styles.savingsRow },
+                React.createElement("span", { style: styles.statLabel }, "\u098F\u0987 \u09AE\u09BE\u09B8\u09C7 \u09AC\u09BE\u099C\u09BE\u09B0 \u0996\u09B0\u099A (\u09AB\u09CD\u09AF\u09BE\u09AE\u09BF\u09B2\u09BF)"),
+                React.createElement("span", { style: { fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 } }, formatTaka(bazarSpendThisMonth))))),
         React.createElement("div", { style: styles.savingsCard },
             React.createElement("div", { style: styles.savingsRow },
                 React.createElement("span", { style: styles.statLabel }, "\u098F\u0987 \u0997\u09A4\u09BF\u09A4\u09C7 \u099A\u09B2\u09B2\u09C7 \u09AE\u09BE\u09B8 \u09B6\u09C7\u09B7\u09C7 \u09A5\u09BE\u0995\u09AC\u09C7 (\u0986\u09A8\u09C1\u09AE\u09BE\u09A8\u09BF\u0995)"),
@@ -2911,8 +2991,7 @@ function BottomNav({ tab, setTab }) {
         { key: "dashboard", label: "হোম", icon: "home" },
         { key: "timeline", label: "টাইমলাইন", icon: "timeline" },
         { key: "debts", label: "দেনা", icon: "debt" },
-        { key: "family", label: "ফ্যামিলি", icon: "family" },
-        { key: "planning", label: "প্লানিং", icon: "planning" },
+        { key: "family", label: "ফ্যামিলি", icon: "box" },
         { key: "reports", label: "রিপোর্ট", icon: "reports" },
         { key: "search", label: "খুঁজুন", icon: "search" },
     ];
@@ -2947,7 +3026,7 @@ function resolveSpecialDayInMonth(s, gYear, gMonth) {
     return m && +m[1] === gYear && +m[2] === gMonth ? s.date : null;
 }
 /* ---------------- hamburger menu ---------------- */
-function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, onOpenAccounts, onOpenFamilyBazar, onOpenFamilyPlanning, onOpenKhasra, isAdminUser, onOpenAdmin, unreadCount, familyInvites, }) {
+function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, onOpenAccounts, onOpenFamilyBazar, onOpenKhasra, isAdminUser, onOpenAdmin, unreadCount, familyInvites, }) {
     useBackgroundScrollLock();
     const menuItemStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "13px 4px", background: "none", border: "none", borderBottom: "1px solid var(--hk-border-light)", fontSize: 14.5, color: "var(--hk-text)" };
     // half-screen drawer (not fullscreen) — this is the one exception the
@@ -2963,10 +3042,8 @@ function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCal
             React.createElement("button", { style: menuItemStyle, onClick: onOpenTax }, "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenAccounts }, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenFamilyBazar },
-                React.createElement("span", null, "\uD83D\uDED2 \u09AB\u09CD\u09AF\u09BE\u09AE\u09BF\u09B2\u09BF \u09AC\u09BE\u099C\u09BE\u09B0"),
+                React.createElement("span", null, "📦 ফ্যামিলি"),
                 familyInvites > 0 && React.createElement("span", { style: { background: "var(--hk-gold)", color: "#1a1a1a", fontSize: 11, borderRadius: 999, padding: "1px 7px", fontWeight: 700 } }, familyInvites)),
-            React.createElement("button", { style: menuItemStyle, onClick: onOpenFamilyPlanning },
-                React.createElement("span", null, "🎯 ফ্যামিলি প্লানিং")),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenKhasra }, "📋 খসড়া খাতা"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenCalendar }, "\u09B9\u09BF\u099C\u09B0\u09BF \u0995\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenNotifications },
@@ -2998,10 +3075,9 @@ function FAQModal({ onClose, faqCloud }) {
 // ---------------------------------------------------------------------
 // Family Bazar — the real implementation lives in family-bazar.js
 // (window.FamilyBazar), pure logic in family-bazar-core.js (window.FBCore).
-// Two entry points share the same module:
-//   • ☰ menu → "ফ্যামিলি বাজার"  → full-screen (mode "full")
-//   • bottom-nav "ফ্যামিলি" tab   → FamilyHub below (mode "embedded")
-// (ফ্যামিলি প্লানিং-এর নিজস্ব দুটো এন্ট্রি নিচে: FamilyPlanningHub / FamilyPlanningModule)
+// Two entry points share the same module (both open the 📦 ফ্যামিলি ড্যাশবোর্ড):
+//   • ☰ মেনু → "📦 ফ্যামিলি"  → full-screen (mode "full")
+//   • নিচের "ফ্যামিলি" ট্যাব (📦 আইকন) → FamilyHub below (mode "embedded")
 // ---------------------------------------------------------------------
 // খসড়া খাতা — the real implementation lives in khasra-khata.js
 // (window.KhasraKhata), same split as Family Bazar
@@ -3013,36 +3089,22 @@ function KhasraKhataModule({ onClose, storageId, registerBack }) {
     }
     return React.createElement(Mod, { onClose: onClose, storageId: storageId, registerBack: registerBack });
 }
-function FamilyBazarModule({ onClose, user, onExpenseSync, otherByMonth }) {
+function FamilyBazarModule({ onClose, user, onExpenseSync, otherByMonth, legacyProps }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
     if (!Mod) {
         return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "🛒 ফ্যামিলি বাজার" },
             React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি বাজার লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
     }
-    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "bazar", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth });
+    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "bazar", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth, legacyProps: legacyProps });
 }
-// ফ্যামিলি বাজার ও ফ্যামিলি প্লানিং এখন দুটো সম্পূর্ণ আলাদা জায়গা, আলাদা ফাইলে:
-//   • ফ্যামিলি বাজার  → family-bazar.js    (window.FamilyBazar)   — নিচের "ফ্যামিলি" ট্যাব + ☰ মেনু (🛒)
-//   • ফ্যামিলি প্লানিং → family-planning.js (window.FamilyPlanning) — নিচের "প্লানিং" ট্যাব + ☰ মেনু (🎯)
-// দুটোই একই Module (পরিবার, সদস্য, অনুমতি) ব্যবহার করে, শুধু `section` আলাদা:
-// "bazar" (ডিফল্ট) বা "planning". আগের "ব্যক্তিগত তালিকা" (FamilyView) সম্পূর্ণ মুছে ফেলা হয়েছে।
-function FamilyHub({ user, onExpenseSync, otherByMonth }) {
+// 📦 ফ্যামিলি = Family-র একমাত্র মূল প্রবেশপথ। ড্যাশবোর্ড (family-bazar.js) থেকে যাওয়া যায়:
+// ফ্যামিলি বাজার · বাজার তালিকা (family-shopping.js) · খরচ ও রিপোর্ট · ফ্যামিলি প্লানিং
+// (family-planning.js) · ব্যক্তিগত তালিকা (js/app/family-list.js) · সদস্য ও অনুমতি।
+// সব ভূমিকার জন্য কাঠামো একই; অনুমতি ভেতরে ও Firestore Rules-এ যাচাই হয়।
+function FamilyHub({ user, legacyProps, onExpenseSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
-    return Mod ? React.createElement(Mod, { user: user, mode: "embedded", section: "bazar", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth })
+    return Mod ? React.createElement(Mod, { user: user, mode: "embedded", section: "bazar", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth, legacyProps: legacyProps })
         : React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি বাজার লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
-}
-function FamilyPlanningHub({ user, onExpenseSync, otherByMonth }) {
-    const Mod = window.FamilyBazar && window.FamilyBazar.Module;
-    return Mod && window.FamilyPlanning ? React.createElement(Mod, { user: user, mode: "embedded", section: "planning", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth })
-        : React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি প্লানিং লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
-}
-function FamilyPlanningModule({ onClose, user, onExpenseSync, otherByMonth }) {
-    const Mod = window.FamilyBazar && window.FamilyBazar.Module;
-    if (!Mod || !window.FamilyPlanning) {
-        return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "🎯 ফ্যামিলি প্লানিং" },
-            React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি প্লানিং লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
-    }
-    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "planning", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth });
 }
 /* ---------------- dynamic accounts (Phase 1) ---------------- */
 const ACCOUNT_TYPES = [
