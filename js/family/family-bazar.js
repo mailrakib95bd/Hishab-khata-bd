@@ -224,7 +224,7 @@
    * data hook — loads only what THIS member is allowed to see
    * ------------------------------------------------------------------ */
   const safe = async (p, fallback) => { try { return await p; } catch (e) { return fallback; } };
-  const EMPTY_FAM = { loading: false, error: "", members: [], budget: null, categories: [], products: [], stats: { monthly: [], cats: [], other: [] }, prices: [], plans: [] };
+  const EMPTY_FAM = { loading: false, error: "", members: [], budget: null, categories: [], products: [], stats: { monthly: [], cats: [], other: [] }, prices: [], plans: [], shopLists: [] };
 
   function useFamilyData(user) {
     const uid = user && user.uid;
@@ -276,7 +276,12 @@
         if (dead) return;
         setFam((f) => Object.assign({}, f, { plans }));
       });
-      return () => { dead = true; unsubMembers(); unsubPlans(); };
+      // বাজার তালিকা (js/family/family-shopping.js) — shared by every member of the family
+      const unsubShop = window.FB.subscribeShoppingLists ? window.FB.subscribeShoppingLists(activeId, (shopLists) => {
+        if (dead) return;
+        setFam((f) => Object.assign({}, f, { shopLists }));
+      }) : () => {};
+      return () => { dead = true; unsubMembers(); unsubPlans(); unsubShop(); };
     }, [activeId]);
 
     const myMember = fam.members.find((m) => m.uid === uid) || null;
@@ -604,7 +609,7 @@
     const [rows, setRows] = useState(() => initial && initial.items && initial.items.length
       ? initial.items.map((it) => ({ key: it.itemId, productName: it.productName, productId: it.productId, categoryId: it.categoryId || "", quantity: String(it.quantity), unit: it.unit, unitPrice: String(it.unitPrice), total: "", totalManual: false, itemId: it.itemId, catTouched: true, unitTouched: true }))
       : seed && seed.length
-        ? seed.map((s) => Object.assign(blankRow(), { productName: s.name || "", categoryId: s.categoryId || "", catTouched: !!s.categoryId, quantity: s.quantity != null ? String(s.quantity) : "", unit: s.unit || blankRow().unit, unitTouched: !!s.unit }))
+        ? seed.map((s) => Object.assign(blankRow(), { productName: s.name || "", categoryId: s.categoryId || "", catTouched: !!s.categoryId, quantity: s.quantity != null ? String(s.quantity) : "", unit: s.unit || blankRow().unit, unitTouched: !!s.unit, unitPrice: s.unitPrice != null ? String(s.unitPrice) : blankRow().unitPrice }))
         : [blankRow()]);
     const [errors, setErrors] = useState([]);
     const [busy, setBusy] = useState(false);
@@ -1354,11 +1359,16 @@
     return children;
   }
 
-  function Module({ user, onClose, mode, section, onExpenseSync, otherByMonth }) {
+  function Module({ user, onClose, mode, section, startView, onExpenseSync, otherByMonth, legacyProps }) {
     const embedded = mode === "embedded";
-    // section "bazar" (default) = ফ্যামিলি বাজার, "planning" = ফ্যামিলি প্লানিং — two separate places, same family data
-    const planningSection = section === "planning";
     const FPl = window.FamilyPlanning;
+    const FS = window.FamilyShopping;
+    // 📦 ফ্যামিলি = Family-র একমাত্র মূল প্রবেশপথ। এর ড্যাশবোর্ড থেকে সব Family ফিচারে যাওয়া যায়:
+    //   "dashboard" | "bazar" (ফ্যামিলি বাজার + রিপোর্ট/সদস্য/আরও ট্যাব) | "lists" (বাজার তালিকা)
+    //   | "planning" (ফ্যামিলি প্লানিং) | "personal" (ব্যক্তিগত তালিকা). সবগুলো সব ভূমিকার জন্য একই কাঠামো —
+    //   অনুমতি ভেতরে (Lock বার্তা / বোতাম নিষ্ক্রিয়) এবং Firestore Rules-এ যাচাই হয়, মেনু লুকিয়ে নয়।
+    const [view, setView] = useState(startView || (section === "planning" ? "planning" : "dashboard"));
+    const personalOpen = view === "personal";
     const [online, setOnline] = useState(typeof navigator === "undefined" || navigator.onLine !== false);
     useEffect(() => {
       const on = () => setOnline(true), off = () => setOnline(false);
@@ -1380,9 +1390,10 @@
     const closeSheet = useCallback(() => setStack((s) => s.slice(0, -1)), []);
     const closeAll = useCallback(() => setStack([]), []);
     // the "আরও" sub-views (পণ্য তালিকা, ক্যাটাগরি, খুঁজুন, বাজেট) are a level too
-    const moreLevel = tab === "more" && !!moreView ? 1 : 0;
-    useSheetBack(stack.length + moreLevel, () => {
-      if (stack.length) closeSheet(); else if (moreLevel) setMoreView(null);
+    const moreLevel = view === "bazar" && tab === "more" && !!moreView ? 1 : 0;
+    const viewLevel = view !== "dashboard" ? 1 : 0; // phone Back goes sheet → আরও sub-view → ড্যাশবোর্ড
+    useSheetBack(stack.length + moreLevel + viewLevel, () => {
+      if (stack.length) closeSheet(); else if (moreLevel) setMoreView(null); else if (viewLevel) setView("dashboard");
     });
     const uid = user && user.uid;
     const cm = Core.monthOf(today());
@@ -1394,7 +1405,8 @@
       fam: D.fam, vis: D.vis, me: D.myMember, purchaseTick, inviteTick, prevMonthKey: Core.addMonths(cm, -1),
       myOther: otherByMonth || null, toast, openSheet: setSheet, closeAll, loadTop: D.loadTop, reload: D.reload,
       setActive: (id) => { D.setActive(id); setStack([]); setTab("home"); setMoreView(null); },
-      goMore: (v) => { setTab("more"); setMoreView(v); },
+      goMore: (v) => { setView("bazar"); setTab("more"); setMoreView(v); },
+      goView: (v, t) => { setStack([]); setView(v); if (v === "bazar") { setTab(t || "home"); setMoreView(null); } },
       bumpInvites: () => setInviteTick((n) => n + 1),
       afterAccept: async (fid) => { await D.loadTop(fid); D.setActive(fid); setStack([]); setTab("home"); },
       afterPurchaseChange: (oldP, newP) => {
@@ -1420,17 +1432,24 @@
         h("div", { style: { width: "100%", maxWidth: 480, height: "100%", display: "flex", flexDirection: "column", fontFamily: F, color: "var(--hk-text)", position: "relative" } }, inner)));
 
     // ---- not signed in / loading / error / no family -------------------
-    const modTitle = planningSection ? "🎯 ফ্যামিলি প্লানিং" : "🛒 ফ্যামিলি বাজার";
+    const modTitle = "📦 ফ্যামিলি";
     // 📴 offline banner — the Family section keeps working from the device; changes sync by themselves
     const offlineBanner = online ? null : h("div", { role: "status", style: { margin: embedded ? "0 0 8px" : "0", padding: "8px 12px", fontSize: 12.5, background: "var(--hk-gold)", color: "#1a1a1a", textAlign: "center", borderRadius: embedded ? 10 : 0, paddingTop: embedded ? 8 : "calc(8px + env(safe-area-inset-top))" } }, "📴 ইন্টারনেট নেই — আপনি কাজ চালিয়ে যান, নেট এলে নিজে থেকেই সিঙ্ক হবে");
     const header = (title, sub, right) => h(R_Fragment, null, offlineBanner, h("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: embedded ? "4px 2px 10px" : "calc(10px + env(safe-area-inset-top)) 14px 10px", background: embedded ? "transparent" : "var(--hk-header-bg)", color: embedded ? "var(--hk-text)" : "var(--hk-text-on-dark)" } },
       h("div", { style: { flex: 1, minWidth: 0 } }, h("div", { style: { fontFamily: SERIF, fontSize: 18, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title), sub && h("div", { style: { fontSize: 12, opacity: 0.8 } }, sub)), right));
+    // 📦 = Family-র মূল প্রবেশপথ (ড্যাশবোর্ড) — শুধু আইকন, কোনো লেখা নেই, 🔎 সার্চ আইকনের ঠিক বাম পাশে।
+    const listBtn = h("button", { key: "pfam", onClick: () => { setStack([]); setView("dashboard"); }, "aria-label": "ফ্যামিলি", "aria-pressed": view === "dashboard", title: "ফ্যামিলি", style: { background: view === "dashboard" ? "var(--hk-gold)" : "none", border: "none", borderRadius: 10, color: view === "dashboard" ? "#1a1a1a" : "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } }, "📦");
+    const personalBody = h("div", null,
+      h("button", { onClick: () => setView("dashboard"), style: { background: "none", border: "none", color: "var(--hk-gold)", fontWeight: 600, fontSize: 14, minHeight: 44, padding: 0, fontFamily: F } }, "‹ ফিরে যান"),
+      window.FamilyView && legacyProps ? h(window.FamilyView, legacyProps) : h("div", { style: S.muted }, "তালিকা লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
+    const personalCard = h("button", { onClick: () => setView("personal"), style: Object.assign({}, S.card, { display: "block", width: "100%", textAlign: "left", cursor: "pointer", fontFamily: F, color: "inherit" }) },
+      h("div", { style: { fontWeight: 700 } }, "📝 ব্যক্তিগত তালিকা"), h("div", { style: S.muted }, "নিজের বাজারের তালিকা — পরিবার ছাড়াও ব্যবহার করা যায়"));
     const closeBtn = !embedded && onClose ? h("button", { onClick: onClose, "aria-label": "বন্ধ করুন", style: { background: "none", border: "none", fontSize: 22, color: "inherit", minHeight: 44, minWidth: 44 } }, "✕") : null;
     const scroller = (children) => h("div", { style: embedded ? {} : { flex: 1, overflowY: "auto", overscrollBehaviorY: "contain", padding: "12px 14px 24px" } }, children);
 
-    if (!uid) return wrap(h("div", null, header(modTitle, null, closeBtn), scroller(h(EntryScreen, { ctx }))));
-    if (D.top.loading && !D.top.families.length) return wrap(h("div", null, header(modTitle, null, closeBtn), scroller(h(Loading))));
-    if (D.top.error) return wrap(h("div", null, header(modTitle, null, closeBtn), scroller(h(ErrorBox, { msg: D.top.error, onRetry: () => D.loadTop() }))));
+    if (!uid) return wrap(h("div", null, header(modTitle, null, h(R_Fragment, null, listBtn, closeBtn)), scroller(personalOpen ? personalBody : h(R_Fragment, null, personalCard, h(EntryScreen, { ctx })))));
+    if (D.top.loading && !D.top.families.length) return wrap(h("div", null, header(modTitle, null, h(R_Fragment, null, listBtn, closeBtn)), scroller(personalOpen ? personalBody : h(Loading))));
+    if (D.top.error) return wrap(h("div", null, header(modTitle, null, h(R_Fragment, null, listBtn, closeBtn)), scroller(personalOpen ? personalBody : h(ErrorBox, { msg: D.top.error, onRetry: () => D.loadTop() }))));
 
     const sheetEl = sheet && (
       sheet.type === "create-family" ? h(CreateFamilySheet, { ctx, close: closeSheet }) :
@@ -1443,18 +1462,17 @@
         sheet.type === "purchase" ? h(PurchaseSheet, { ctx, initial: sheet.initial || null, seed: sheet.seed || null, close: closeSheet }) :
         sheet.type === "purchase-details" ? h(PurchaseDetailsSheet, { ctx, purchase: sheet.purchase, close: closeSheet }) :
         sheet.type === "settings" ? h(SettingsSheet, { ctx, close: closeSheet }) :
-        (FPl ? FPl.renderSheet(sheet, ctx, closeSheet) : null))));
+        (FS && FS.isShopSheet(sheet) ? FS.renderSheet(sheet, ctx, closeSheet) : FPl ? FPl.renderSheet(sheet, ctx, closeSheet) : null))));
     const toastEl = toastObj && h("div", { key: toastObj.k, role: "status", style: { position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: "calc(90px + env(safe-area-inset-bottom))", zIndex: 90, background: "var(--hk-header-bg)", color: "var(--hk-text-on-dark)", padding: "10px 18px", borderRadius: 999, fontSize: 14, fontFamily: F, maxWidth: "90vw", textAlign: "center", boxShadow: "0 4px 16px rgba(0,0,0,.25)" } }, toastObj.msg);
 
-    if (!D.family) return h(R_Fragment, null, wrap(h("div", null, header(modTitle, null, closeBtn), scroller(h(NoFamily, { ctx })))), sheetEl, toastEl);
+    if (!D.family) return h(R_Fragment, null, wrap(h("div", null, header(modTitle, null, h(R_Fragment, null, listBtn, closeBtn)), scroller(personalOpen ? personalBody : h(R_Fragment, null, personalCard, h(NoFamily, { ctx }))))), sheetEl, toastEl);
 
     // ---- main -----------------------------------------------------------
     const nameSub = `${bn(D.fam.members.length || (D.family.memberUids || []).length)} জন সদস্য`;
     const switcher = h("div", { style: { display: "flex", alignItems: "center" } },
       h("button", { onClick: () => setSheet({ type: "switcher" }), "aria-label": "পরিবার বদলান", style: { background: "none", border: "none", color: "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } }, D.top.families.length > 1 || D.top.incoming.length ? "🔁" : ""),
-      // 📦 তালিকা (পণ্য তালিকা) — icon only, no label, right beside the search icon
-      !planningSection && h("button", { onClick: () => { setStack([]); setTab("more"); setMoreView("products"); }, "aria-label": "তালিকা", title: "তালিকা", style: { background: "none", border: "none", color: "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } }, "📦"),
-      !planningSection && h("button", { onClick: () => { setTab("more"); setMoreView("search"); }, "aria-label": "খুঁজুন", style: { background: "none", border: "none", color: "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } }, "🔎"),
+      listBtn,
+      h("button", { onClick: () => { setStack([]); setView("bazar"); setTab("more"); setMoreView("search"); }, "aria-label": "খুঁজুন", style: { background: "none", border: "none", color: "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } }, "🔎"),
       closeBtn);
     const famTitle = `${(D.family.settings && D.family.settings.icon) || "🏠"} ${D.family.name}`;
 
@@ -1472,7 +1490,7 @@
       tab === "family" ? h(FamilyTab, { ctx }) :
       h(MoreTab, { ctx, view: moreView, setView: setMoreView });
 
-    const fab = D.myMember && D.vis.write && (tab === "home" || tab === "bazar") && !planningSection && !sheet && h("div", { style: { position: "fixed", left: 0, right: 0, bottom: embedded ? "calc(74px + env(safe-area-inset-bottom))" : "calc(74px + env(safe-area-inset-bottom))", zIndex: 41, display: "flex", justifyContent: "center", pointerEvents: "none" } },
+    const fab = D.myMember && D.vis.write && view === "bazar" && (tab === "home" || tab === "bazar") && !sheet && h("div", { style: { position: "fixed", left: 0, right: 0, bottom: embedded ? "calc(74px + env(safe-area-inset-bottom))" : "calc(74px + env(safe-area-inset-bottom))", zIndex: 41, display: "flex", justifyContent: "center", pointerEvents: "none" } },
       h("div", { style: { width: "100%", maxWidth: 480, display: "flex", justifyContent: "flex-end", padding: "0 16px" } },
         h("button", { onClick: () => setSheet({ type: "purchase" }), "aria-label": "বাজার যোগ করুন", style: { pointerEvents: "auto", width: 58, height: 58, borderRadius: "50%", border: "none", background: "var(--hk-gold)", color: "#1a1a1a", fontSize: 30, lineHeight: 1, boxShadow: "0 4px 14px rgba(0,0,0,.3)" } }, "+")));
 
@@ -1480,12 +1498,34 @@
     const planningBody = !FPl ? h("div", { style: S.muted }, "ফ্যামিলি প্লানিং লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।")
       : D.fam.loading && !D.myMember ? h(Loading) : D.fam.error ? h(ErrorBox, { msg: D.fam.error, onRetry: D.reload }) : !D.myMember ? h(Loading)
       : h("div", null, h(FPl.Home, { ctx }), h("div", { style: { marginTop: 12 } }, h(FPl.CreateButton, { ctx })));
-    const frame = planningSection
-      ? (embedded ? wrap(h("div", null, header(famTitle, nameSub, switcher), planningBody))
-        : wrap(h(R_Fragment, null, header(famTitle, nameSub, switcher), scroller(planningBody))))
-      : embedded
-        ? wrap(h("div", null, header(famTitle, nameSub, switcher), tabBar, body))
-        : wrap(h(R_Fragment, null, header(famTitle, nameSub, switcher), scroller(body), tabBar));
+    // ---- 📦 ড্যাশবোর্ড: Family-র সব ফিচার এক জায়গায় — সব ভূমিকার জন্য একই কাঠামো ----
+    const pendingLists = FS ? FS.pendingForShopper(D.fam.shopLists, uid) : 0;
+    const pendingPlans = D.vis && D.vis.admin && FPCore ? FPCore.pendingApprovalPlans(D.fam.plans).length : 0;
+    const myRole = D.myMember && Core.ROLES[D.myMember.role] ? Core.ROLES[D.myMember.role].label : "";
+    const tile = (icon, title, sub, onClick, badge) => h("button", { key: title, onClick, style: { textAlign: "left", background: "var(--hk-card)", border: "1px solid var(--hk-border)", borderRadius: 14, padding: "14px 12px", minHeight: 108, cursor: "pointer", fontFamily: F, color: "inherit", position: "relative" } },
+      h("div", { style: { fontSize: 28, lineHeight: 1.1 } }, icon), h("div", { style: { fontWeight: 700, margin: "6px 0 2px", fontSize: 14.5 } }, title), h("div", { style: S.muted }, sub),
+      badge > 0 && h("span", { style: Object.assign({}, S.pill("var(--hk-danger)", "#fff"), { position: "absolute", top: 10, right: 10 }) }, bn(badge)));
+    const dashboardBody = h("div", null,
+      h("div", { style: Object.assign({}, S.hero, { marginBottom: 12 }) }, h("div", { style: { fontFamily: SERIF, fontSize: 18 } }, famTitle), h("div", { style: { fontSize: 13, opacity: 0.85, marginTop: 2 } }, nameSub + (myRole ? ` · আপনার ভূমিকা: ${myRole}` : ""))),
+      h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } },
+        tile("🛒", "ফ্যামিলি বাজার", "বাজার যোগ ও হিসাব", () => ctx.goView("bazar", "home")),
+        tile("🧾", "বাজার তালিকা", "তালিকা বানান, বাজার করুন", () => ctx.goView("lists"), pendingLists),
+        tile("📊", "খরচ ও রিপোর্ট", "মাসিক খরচ, ক্যাটাগরি", () => ctx.goView("bazar", "reports")),
+        tile("🎯", "ফ্যামিলি প্লানিং", "লক্ষ্য, পরিকল্পনা, অবদান", () => ctx.goView("planning"), pendingPlans),
+        tile("📝", "ব্যক্তিগত তালিকা", "নিজের বাজারের তালিকা", () => ctx.goView("personal")),
+        tile("👥", "সদস্য ও অনুমতি", "সদস্য, Invite, ভূমিকা", () => ctx.goView("bazar", "family")),
+        tile("⚙️", "আরও", "পণ্য, ক্যাটাগরি, বাজেট", () => ctx.goView("bazar", "more"))));
+    const backRow = h("button", { onClick: () => { setStack([]); setView("dashboard"); }, style: { background: "none", border: "none", color: "var(--hk-gold)", fontWeight: 600, fontSize: 14, minHeight: 44, padding: 0, fontFamily: F } }, "‹ ফ্যামিলি");
+    const gate = (node) => (D.fam.loading && !D.myMember ? h(Loading) : D.fam.error ? h(ErrorBox, { msg: D.fam.error, onRetry: D.reload }) : !D.myMember ? h(Loading) : node);
+    const listsBody = !FS ? h("div", { style: S.muted }, "বাজার তালিকা লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।") : gate(h(FS.Home, { ctx }));
+    const content = view === "personal" ? personalBody
+      : view === "dashboard" ? dashboardBody
+      : view === "lists" ? h(R_Fragment, null, backRow, listsBody)
+      : view === "planning" ? h(R_Fragment, null, backRow, planningBody)
+      : h(R_Fragment, null, backRow, embedded ? h(R_Fragment, null, tabBar, body) : body);
+    const frame = embedded
+      ? wrap(h("div", null, header(famTitle, nameSub, switcher), content))
+      : wrap(h(R_Fragment, null, header(famTitle, nameSub, switcher), scroller(content), view === "bazar" ? tabBar : null));
     return h(R_Fragment, null, frame, fab, sheetEl, toastEl);
   }
 
@@ -1508,6 +1548,6 @@
   }
 
   // building blocks the separate Family Planning file (family-planning.js) reuses
-  window.FBShared = { h, R_Fragment, FPCore, bn, today, F, SERIF, S, Sheet, Toggle, Avatar, Empty, HBar, friendlyError };
+  window.FBShared = { CallButtons, Core, taka, unitText, qtyText, dateBn, h, R_Fragment, FPCore, bn, today, F, SERIF, S, Sheet, Toggle, Avatar, Empty, HBar, friendlyError };
   window.FamilyBazar = { Module, useFamilyAlerts };
 })();
