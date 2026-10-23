@@ -204,7 +204,7 @@ async function boot(userUid, extra) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "js", "family", "family-shopping.js"), "utf8"), ctxObj, { filename: "family-shopping.js" });
   const { Module, useFamilyAlerts } = win.FamilyBazar;
   assert(Module && useFamilyAlerts, "exports");
-  root = h(Module, { user: extra === "none" ? null : { uid: userUid, displayName: "x", email: "x@gmail.com" }, mode: /^embedded/.test(extra || "") ? "embedded" : "full", startView: /dashboard$/.test(extra || "") ? "dashboard" : /planning$/.test(extra || "") ? "planning" : /lists$/.test(extra || "") ? "lists" : "bazar", legacyProps: { marker: "LEGACY-PROPS-OK" }, onClose() {} });
+  root = h(Module, { user: extra === "none" ? null : { uid: userUid, displayName: "x", email: "x@gmail.com" }, mode: /^embedded/.test(extra || "") ? "embedded" : "full", startView: /dashboard$/.test(extra || "") ? "dashboard" : /planning$/.test(extra || "") ? "planning" : /lists$/.test(extra || "") ? "lists" : "bazar", onClose() {} });
   render(); await tick(10);
 }
 
@@ -223,28 +223,26 @@ async function boot(userUid, extra) {
   const pickStatus = async (label) => { const lab = find(tree, (n) => n.host === "label" && text(n).includes(label))[0]; assert(lab, "status " + label); find(lab, (n) => n.host === "input")[0].props.onChange({ target: { checked: true } }); await tick(); };
   const setTextarea = async (ph, v) => { const el = find(tree, (n) => n.host === "textarea" && n.props.placeholder === ph)[0]; assert(el, "textarea " + ph); el.props.onChange({ target: { value: v } }); await tick(); };
 
-  // ===== 📦 ফ্যামিলি — the single Family entrance: dashboard with every Family feature =====
-  await boot("u1", "embedded-dashboard");
-  ["ফ্যামিলি বাজার", "বাজার তালিকা", "খরচ ও রিপোর্ট", "ফ্যামিলি প্লানিং", "ব্যক্তিগত তালিকা", "সদস্য ও অনুমতি", "আরও"].forEach(has);
-  has("আপনার ভূমিকা: মালিক"); ok("📦 dashboard lists every Family feature (and shows the member's role)");
-  { const tile = find(tree, (n) => n.host === "button" && text(n).includes("বাজার তালিকা") && text(n).includes("তালিকা বানান"))[0]; assert(tile && dig(text(tile)).includes("1"), "the list waiting for me shows as a badge"); }
-  ok("dashboard badge: 1 shopping list is waiting for me");
-  { const fam = byAria("ফ্যামিলি"), search = byAria("খুঁজুন");
-    assert(fam && search, "📦 and 🔎 buttons"); assert.strictEqual(text(fam).trim(), "📦", "icon only — no text label"); assert.strictEqual(fam.props["aria-pressed"], true);
-    const row = find(tree, (n) => n.host === "div" && Array.isArray(n.kids) && n.kids.includes(fam))[0];
-    assert(row && row.kids.indexOf(fam) === row.kids.indexOf(search) - 1, "📦 sits directly left of the search icon"); }
-  ok("📦 is an icon-only button directly beside 🔎 and is the dashboard's home button");
-  await click("খরচ ও রিপোর্ট"); has("রিপোর্ট"); await back(); await click("ফ্যামিলি বাজার"); has("কে কত খরচ করেছে"); ok("tile → ফ্যামিলি বাজার (all its tabs) · ‹ ফ্যামিলি returns to the dashboard");
-  await click("‹ ফ্যামিলি"); has("আপনার ভূমিকা: মালিক");
-  await click("ফ্যামিলি প্লানিং"); has("মোট পরিকল্পনা"); await click("‹ ফ্যামিলি"); ok("tile → ফ্যামিলি প্লানিং works and returns");
-  win.FamilyView = (props) => h("div", null, "FAMILYVIEW-STUB " + props.marker);
-  await click("ব্যক্তিগত তালিকা"); has("FAMILYVIEW-STUB LEGACY-PROPS-OK"); await click("ফিরে যান"); ok("tile → ব্যক্তিগত তালিকা (the old FamilyView with the App's data/handlers)");
-  await click("সদস্য ও অনুমতি"); has("আব্বু"); ok("tile → সদস্য ও অনুমতি shows the members");
-  { const titles = (u) => find(tree, (n) => n.host === "button" && /ফ্যামিলি বাজার|বাজার তালিকা|খরচ ও রিপোর্ট|ফ্যামিলি প্লানিং|ব্যক্তিগত তালিকা|সদস্য ও অনুমতি/.test(text(n)) && /বাজার যোগ|তালিকা বানান|মাসিক খরচ|লক্ষ্য|নিজের বাজার|সদস্য, Invite/.test(text(n))).map((n) => text(n).split(" ").slice(0, 3).join(" "));
-    await boot("u1", "embedded-dashboard"); const a1 = titles(); await boot("u2", "embedded-dashboard"); const a2 = titles();
-    assert(a1.length === 6, "6 tiles for the owner: " + a1.length); assert.deepStrictEqual(a2.map((x) => x.replace(/ ?\d+$/, "")), a1.map((x) => x.replace(/ ?\d+$/, "")), "member and owner see the same Family tiles"); }
-  ok("owner and ordinary member get the SAME dashboard structure (no feature disappears because of the role)");
-  await boot("u1", "none"); has("ব্যক্তিগত তালিকা"); await click("ব্যক্তিগত তালিকা"); has("FAMILYVIEW-STUB"); ok("signed out / no family: the personal list is still reachable");
+  // ===== ফ্যামিলি opens its Dashboard DIRECTLY (হোম/বাজার/রিপোর্ট/পরিবার/আরও) — no card menu =====
+  await boot("u1", "embedded");
+  has("কে কত খরচ করেছে"); ["হোম", "বাজার", "রিপোর্ট", "পরিবার", "আরও"].forEach(has); hasNot("ফ্যামিলি প্লানিং"); hasNot("খরচ ও রিপোর্ট"); ok("ফ্যামিলি opens the Dashboard straight away: the 5 tabs + family spending, no feature-card menu");
+  // header icons, left → right: 📝 ব্যক্তিগত তালিকা · 🔁 পরিবার পরিবর্তন · 📦 বাজার তালিকা · 🔎 সার্চ
+  const headerOrder = () => { const pl = byAria("ব্যক্তিগত তালিকা"), sw = byAria("পরিবার বদলান"), sh = byAria("বাজার তালিকা"), se = byAria("খুঁজুন");
+    assert(pl && sw && sh && se, "all four header buttons exist"); assert.strictEqual(text(pl).trim(), "📝"); assert.strictEqual(text(sh).trim(), "📦"); assert.strictEqual(text(se).trim(), "🔎");
+    const row = find(tree, (n) => n.host === "div" && Array.isArray(n.kids) && n.kids.includes(pl) && n.kids.includes(se))[0]; assert(row, "one header row");
+    const k = row.kids; assert(k.indexOf(pl) < k.indexOf(sw) && k.indexOf(sw) < k.indexOf(sh) && k.indexOf(sh) === k.indexOf(se) - 1, "order must be 📝 · 🔁 · 📦 · 🔎"); return { pl, sh }; };
+  { headerOrder(); } ok("header icons are ordered 📝 ব্যক্তিগত তালিকা · 🔁 · 📦 বাজার তালিকা · 🔎 (📦 directly left of the search)");
+  { const { pl } = headerOrder(); await pl.props.onClick(); await tick(); }
+  has("শীঘ্রই আসছে"); has("Upcoming"); hasNot("FAMILYVIEW"); hasNot("নতুন বাজার আইটেম"); ok("📝 ব্যক্তিগত তালিকা only shows \"শীঘ্রই আসছে / Upcoming\" — no working code behind it");
+  await click("ফিরে যান"); await tick(); has("কে কত খরচ করেছে");
+  { const { sh } = headerOrder(); await sh.props.onClick(); await tick(); }
+  has("+ নতুন তালিকা তৈরি"); has("সাপ্তাহিক বাজার"); ok("📦 opens the বাজার তালিকা (create / send / shop)");
+  await click("‹ ফ্যামিলি"); await tick(); has("কে কত খরচ করেছে"); ok("‹ ফ্যামিলি returns to the Dashboard");
+  await boot("u1", "embedded-planning"); has("মোট পরিকল্পনা"); assert(!byAria("বাজার তালিকা") && !byAria("ব্যক্তিগত তালিকা") && !byAria("খুঁজুন"), "the planning page keeps its own plain header"); ok("ফ্যামিলি প্লানিং (its own tab) works as before, with no list/search icons");
+  { const sig = (u) => ["ব্যক্তিগত তালিকা", "পরিবার বদলান", "বাজার তালিকা", "খুঁজুন"].map((a) => !!byAria(a)).join() + "|" + ["হোম", "বাজার", "রিপোর্ট", "পরিবার", "আরও"].map((l) => text(tree).includes(l)).join();
+    await boot("u1", "embedded"); const a1 = sig(); await boot("u2", "embedded"); const a2 = sig(); assert.strictEqual(a1, a2, "owner and member differ: " + a1 + " vs " + a2); }
+  ok("owner and ordinary member get the SAME Family layout (header icons + tabs)");
+  await boot("u1", "none"); { const pl = byAria("ব্যক্তিগত তালিকা"); assert(pl, "📝 exists even before sign-in/family"); await pl.props.onClick(); await tick(); } has("শীঘ্রই আসছে"); ok("📝 is reachable even signed out / without a family");
 
   // ===== 🧾 বাজার তালিকা (family-shopping.js) — as the owner (u1: shopper of L1, creator of L2/L3) =====
   ABBU.phone = "01812345678";
