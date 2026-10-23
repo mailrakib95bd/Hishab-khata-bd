@@ -106,11 +106,10 @@ const ICON_PATHS = {
         React.createElement("path", { d: "M2 21v-2a6 6 0 0 1 12 0v2" }),
         React.createElement("circle", { cx: "17.5", cy: "8.5", r: "2.3" }),
         React.createElement("path", { d: "M14.5 21v-1.5a4.3 4.3 0 0 1 7.3-3.1" }))),
-    box: (React.createElement(React.Fragment, null,
-        React.createElement("path", { d: "M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z" }),
-        React.createElement("path", { d: "M12 22V12" }),
-        React.createElement("path", { d: "M3.29 7 12 12l8.71-5" }),
-        React.createElement("path", { d: "m7.5 4.27 9 5.15" }))),
+    planning: (React.createElement(React.Fragment, null,
+        React.createElement("circle", { cx: "12", cy: "12", r: "9" }),
+        React.createElement("circle", { cx: "12", cy: "12", r: "5" }),
+        React.createElement("circle", { cx: "12", cy: "12", r: "1.4" }))),
     travel: (React.createElement(React.Fragment, null,
         React.createElement("path", { d: "M22 2 11 13" }),
         React.createElement("path", { d: "M22 2 15 22l-4-9-9-4 20-7z" }))),
@@ -805,6 +804,7 @@ function App() {
     const khasraBackRef = useRef(null);
     const [showAccountPanel, setShowAccountPanel] = useState(false);
     const [showFamilyBazar, setShowFamilyBazar] = useState(false);
+    const [showFamilyPlanning, setShowFamilyPlanning] = useState(false);
     // pending Family Bazar invitations for the signed-in Google account (badge on the ☰ menu)
     const famAlerts = (window.FamilyBazar && window.FamilyBazar.useFamilyAlerts) ? window.FamilyBazar.useFamilyAlerts(user) : { count: 0 };
     const [searchSeed, setSearchSeed] = useState(null);
@@ -936,6 +936,7 @@ function App() {
     useBackOverlay(!!editingTransfer, () => setEditingTransfer(null));
     useBackOverlay(showAccountPanel, () => closeMenuPanel(setShowAccountPanel));
     useBackOverlay(showFamilyBazar, () => closeMenuPanel(setShowFamilyBazar));
+    useBackOverlay(showFamilyPlanning, () => closeMenuPanel(setShowFamilyPlanning));
     useEffect(() => {
         if (!showKhasra)
             return;
@@ -2080,7 +2081,8 @@ function App() {
                     }, onTransfer: () => setShowTransfer(true), onTransferHistory: () => setShowTransferHistory(true), profileName: profileName, taxes: taxes, bazarItems: bazarItems })),
                 tab === "timeline" && (React.createElement(Timeline, { transactions: transactions, onOpenTx: (t) => setEditingTx(t) })),
                 tab === "debts" && (React.createElement(DebtsView, { debts: debts, onOpenDebt: (d) => setEditingDebt(d), onAddDebt: () => setShowAddDebt(true) })),
-                tab === "family" && (React.createElement(FamilyHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth, legacyProps: { familyMembers: familyMembers, bazarItems: bazarItems, transactions: transactions, onAddMember: addFamilyMember, onUpdateMember: updateFamilyMember, onDeleteMember: deleteFamilyMember, onAddBazarItem: addBazarItem, onUpdateBazarItem: updateBazarItem, onDeleteBazarItem: deleteBazarItem, onAddBazarItemAsExpense: addBazarItemAsExpense } })),
+                tab === "family" && (React.createElement(FamilyHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
+                tab === "planning" && (React.createElement(FamilyPlanningHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
                 tab === "reports" && React.createElement(Reports, { transactions: transactions, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
                 tab === "search" && (React.createElement(SearchView, { transactions: transactions, accounts: accounts, onOpenTx: (t) => setEditingTx(t), seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts, debts: debts }))),
             (tab === "dashboard" || tab === "timeline" || tab === "debts") && (React.createElement("button", { style: styles.fab, onClick: () => (tab === "debts" ? setShowAddDebt(true) : setShowAdd(true)), "aria-label": tab === "debts" ? "নতুন দেনা-পাওনা যোগ করুন" : "নতুন লেনদেন যোগ করুন" }, "+")),
@@ -2165,6 +2167,7 @@ function App() {
                 onOpenAccounts: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowAccountPanel(true), 0); },
                 familyInvites: famAlerts.count,
                 onOpenFamilyBazar: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowFamilyBazar(true), 0); },
+                onOpenFamilyPlanning: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowFamilyPlanning(true), 0); },
                 onOpenKhasra: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowKhasra(true), 0); },
                 isAdminUser: isAdmin(user),
                 onOpenAdmin: () => { menuOriginRef.current = true; setShowHamburgerMenu(false); setTimeout(() => setShowAdminPanel(true), 0); },
@@ -2174,7 +2177,8 @@ function App() {
             showTaxPanel && (React.createElement(TaxPanel, { onClose: () => closeMenuPanel(setShowTaxPanel), taxes: taxes, onAdd: addTax, onUpdate: updateTax, onDelete: deleteTax, onTogglePaid: toggleTaxPaid })),
             showAccountPanel && (React.createElement(AccountPanel, { onClose: () => closeMenuPanel(setShowAccountPanel), dynamicAccountBalances: dynamicAccountBalances, onAdd: addUserAccount, onUpdate: updateUserAccount, onDelete: deleteUserAccount, onToggleActive: toggleUserAccountActive, onViewTransactions: (id) => { setShowAccountPanel(false); setSearchSeed({ accountId: id, ts: Date.now() }); setTab("search"); } })),
             showKhasra && React.createElement(KhasraKhataModule, { onClose: () => closeMenuPanel(setShowKhasra), storageId: user && user.uid ? user.uid : "guest", registerBack: (fn) => { khasraBackRef.current = fn; } }),
-            showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth, legacyProps: { familyMembers: familyMembers, bazarItems: bazarItems, transactions: transactions, onAddMember: addFamilyMember, onUpdateMember: updateFamilyMember, onDeleteMember: deleteFamilyMember, onAddBazarItem: addBazarItem, onUpdateBazarItem: updateBazarItem, onDeleteBazarItem: deleteBazarItem, onAddBazarItemAsExpense: addBazarItemAsExpense } }),
+            showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth }),
+            showFamilyPlanning && React.createElement(FamilyPlanningModule, { onClose: () => closeMenuPanel(setShowFamilyPlanning), user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth }),
             showNotificationCenter && (React.createElement(NotificationCenter, {
                 onClose: () => closeMenuPanel(setShowNotificationCenter),
                 notices: notices, dailyMessages: dailyMessages, tasks: tasks, debts: debts,
@@ -2991,7 +2995,8 @@ function BottomNav({ tab, setTab }) {
         { key: "dashboard", label: "হোম", icon: "home" },
         { key: "timeline", label: "টাইমলাইন", icon: "timeline" },
         { key: "debts", label: "দেনা", icon: "debt" },
-        { key: "family", label: "ফ্যামিলি", icon: "box" },
+        { key: "family", label: "ফ্যামিলি", icon: "family" },
+        { key: "planning", label: "প্লানিং", icon: "planning" },
         { key: "reports", label: "রিপোর্ট", icon: "reports" },
         { key: "search", label: "খুঁজুন", icon: "search" },
     ];
@@ -3026,7 +3031,7 @@ function resolveSpecialDayInMonth(s, gYear, gMonth) {
     return m && +m[1] === gYear && +m[2] === gMonth ? s.date : null;
 }
 /* ---------------- hamburger menu ---------------- */
-function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, onOpenAccounts, onOpenFamilyBazar, onOpenKhasra, isAdminUser, onOpenAdmin, unreadCount, familyInvites, }) {
+function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCalendar, onOpenFAQ, onOpenTax, onOpenAccounts, onOpenFamilyBazar, onOpenFamilyPlanning, onOpenKhasra, isAdminUser, onOpenAdmin, unreadCount, familyInvites, }) {
     useBackgroundScrollLock();
     const menuItemStyle = { display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", padding: "13px 4px", background: "none", border: "none", borderBottom: "1px solid var(--hk-border-light)", fontSize: 14.5, color: "var(--hk-text)" };
     // half-screen drawer (not fullscreen) — this is the one exception the
@@ -3042,8 +3047,10 @@ function HamburgerMenu({ onClose, onOpenNotifications, onOpenSettings, onOpenCal
             React.createElement("button", { style: menuItemStyle, onClick: onOpenTax }, "\u099F\u09CD\u09AF\u09BE\u0995\u09CD\u09B8 \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenAccounts }, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F \u09AC\u09CD\u09AF\u09AC\u09B8\u09CD\u09A5\u09BE\u09AA\u09A8\u09BE"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenFamilyBazar },
-                React.createElement("span", null, "📦 ফ্যামিলি"),
+                React.createElement("span", null, "\uD83D\uDED2 \u09AB\u09CD\u09AF\u09BE\u09AE\u09BF\u09B2\u09BF \u09AC\u09BE\u099C\u09BE\u09B0"),
                 familyInvites > 0 && React.createElement("span", { style: { background: "var(--hk-gold)", color: "#1a1a1a", fontSize: 11, borderRadius: 999, padding: "1px 7px", fontWeight: 700 } }, familyInvites)),
+            React.createElement("button", { style: menuItemStyle, onClick: onOpenFamilyPlanning },
+                React.createElement("span", null, "🎯 ফ্যামিলি প্লানিং")),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenKhasra }, "📋 খসড়া খাতা"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenCalendar }, "\u09B9\u09BF\u099C\u09B0\u09BF \u0995\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09A1\u09BE\u09B0"),
             React.createElement("button", { style: menuItemStyle, onClick: onOpenNotifications },
@@ -3075,9 +3082,10 @@ function FAQModal({ onClose, faqCloud }) {
 // ---------------------------------------------------------------------
 // Family Bazar — the real implementation lives in family-bazar.js
 // (window.FamilyBazar), pure logic in family-bazar-core.js (window.FBCore).
-// Two entry points share the same module (both open the 📦 ফ্যামিলি ড্যাশবোর্ড):
-//   • ☰ মেনু → "📦 ফ্যামিলি"  → full-screen (mode "full")
-//   • নিচের "ফ্যামিলি" ট্যাব (📦 আইকন) → FamilyHub below (mode "embedded")
+// Two entry points share the same module:
+//   • ☰ মেনু → "🛒 ফ্যামিলি বাজার" → full-screen (mode "full")
+//   • নিচের "ফ্যামিলি" ট্যাব → FamilyHub below (mode "embedded")
+// ফ্যামিলি প্লানিং-এরও নিজস্ব দুটো প্রবেশপথ: নিচের "প্লানিং" ট্যাব ও ☰ মেনু → FamilyPlanningHub / FamilyPlanningModule
 // ---------------------------------------------------------------------
 // খসড়া খাতা — the real implementation lives in khasra-khata.js
 // (window.KhasraKhata), same split as Family Bazar
@@ -3089,22 +3097,33 @@ function KhasraKhataModule({ onClose, storageId, registerBack }) {
     }
     return React.createElement(Mod, { onClose: onClose, storageId: storageId, registerBack: registerBack });
 }
-function FamilyBazarModule({ onClose, user, onExpenseSync, otherByMonth, legacyProps }) {
+function FamilyBazarModule({ onClose, user, onExpenseSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
     if (!Mod) {
         return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "🛒 ফ্যামিলি বাজার" },
             React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি বাজার লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
     }
-    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "bazar", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth, legacyProps: legacyProps });
+    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "bazar", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth });
 }
-// 📦 ফ্যামিলি = Family-র একমাত্র মূল প্রবেশপথ। ড্যাশবোর্ড (family-bazar.js) থেকে যাওয়া যায়:
-// ফ্যামিলি বাজার · বাজার তালিকা (family-shopping.js) · খরচ ও রিপোর্ট · ফ্যামিলি প্লানিং
-// (family-planning.js) · ব্যক্তিগত তালিকা (js/app/family-list.js) · সদস্য ও অনুমতি।
-// সব ভূমিকার জন্য কাঠামো একই; অনুমতি ভেতরে ও Firestore Rules-এ যাচাই হয়।
-function FamilyHub({ user, legacyProps, onExpenseSync, otherByMonth }) {
+// ফ্যামিলি বাজার ও ফ্যামিলি প্লানিং — একই Module (section: "bazar" | "planning"), দুটো আলাদা প্রবেশপথ।
+// ফ্যামিলির হেডারে (বাম→ডান): 📝 ব্যক্তিগত তালিকা (শীঘ্রই আসছে) · 🔁 পরিবার পরিবর্তন · 📦 বাজার তালিকা · 🔎 সার্চ।
+function FamilyHub({ user, onExpenseSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
-    return Mod ? React.createElement(Mod, { user: user, mode: "embedded", section: "bazar", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth, legacyProps: legacyProps })
+    return Mod ? React.createElement(Mod, { user: user, mode: "embedded", section: "bazar", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth })
         : React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি বাজার লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
+}
+function FamilyPlanningHub({ user, onExpenseSync, otherByMonth }) {
+    const Mod = window.FamilyBazar && window.FamilyBazar.Module;
+    return Mod && window.FamilyPlanning ? React.createElement(Mod, { user: user, mode: "embedded", section: "planning", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth })
+        : React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি প্লানিং লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
+}
+function FamilyPlanningModule({ onClose, user, onExpenseSync, otherByMonth }) {
+    const Mod = window.FamilyBazar && window.FamilyBazar.Module;
+    if (!Mod || !window.FamilyPlanning) {
+        return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "🎯 ফ্যামিলি প্লানিং" },
+            React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি প্লানিং লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
+    }
+    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "planning", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth });
 }
 /* ---------------- dynamic accounts (Phase 1) ---------------- */
 const ACCOUNT_TYPES = [
