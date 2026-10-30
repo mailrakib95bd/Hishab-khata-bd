@@ -5,7 +5,7 @@
   "description": "হিসাব-খাতা Family Management PWA",
   "scripts": {
     "start": "npx serve .",
-    "test": "node tests/core.test.js && node tests/expense-sync.test.js && node tests/task-amount.test.js && node tests/tax-reminder.test.js && node tests/family-planning.test.js && node tests/family-shopping.test.js && node tests/khasra-khata.test.js && node tests/khasra-ui.test.js && node tests/hijri-ummalqura.test.js && node tests/special-day-bulk-import.test.js && node tests/special-day-hijri.test.js && node tests/ui-smoke.test.js",
+    "test": "node tests/core.test.js && node tests/expense-sync.test.js && node tests/task-amount.test.js && node tests/tax-reminder.test.js && node tests/family-planning.test.js && node tests/family-shopping.test.js && node tests/bank-accounts.test.js && node tests/khasra-khata.test.js && node tests/khasra-ui.test.js && node tests/hijri-ummalqura.test.js && node tests/special-day-bulk-import.test.js && node tests/special-day-hijri.test.js && node tests/ui-smoke.test.js",
     "build": "node scripts/build-web.js",
     "android:sync": "npm run build && npx cap sync android"
   },
