@@ -213,6 +213,52 @@ function CategoryIcon({ catKey, emoji, size = 18, color }) {
         return React.createElement(Icon, { name: iconName, size: size, color: color || "currentColor" });
     return React.createElement("span", { style: { fontSize: size, lineHeight: 1 } }, emoji);
 }
+/* ---------------- balance-check helpers (pure, unit-tested in tests/bank-accounts.test.js) ---------------- */
+// money is compared in paisa (integers): 0.3 − 0.1 − 0.2 is −2.8e-17 in floating point, which made an
+// exactly-sufficient balance look "short" and blocked a valid expense/transfer.
+const toPaisa = (n) => Math.round((Number(n) || 0) * 100);
+const hasEnough = (balance, amount) => toPaisa(balance) - toPaisa(amount) >= 0;
+// balance of one legacy wallet (cash/bank/…) EXCLUDING the item being edited. Same rules as the
+// displayed balance: transactions with an accountId belong to a named account, and a transaction
+// with no method counts as cash (old data, Family Bazar sync) — so check and display always agree.
+function legacyWalletBalance(method, data, exclude) {
+    const x = exclude || {};
+    let sum = (data.accountOpening && data.accountOpening[method]) || 0;
+    for (const t of data.transactions || []) {
+        if (x.txId && t.id === x.txId)
+            continue;
+        if (t.accountId || (t.method || "cash") !== method)
+            continue;
+        sum += t.type === "income" ? t.amount : -t.amount;
+    }
+    for (const tr of data.transfers || []) {
+        if (x.transferId && tr.id === x.transferId)
+            continue;
+        if (tr.fromMethod === method)
+            sum -= tr.amount;
+        if (tr.toMethod === method)
+            sum += tr.amount;
+    }
+    for (const d of data.debts || []) {
+        for (const r of d.repayments || []) {
+            if (x.repaymentId && r.id === x.repaymentId)
+                continue;
+            if (r.method !== method)
+                continue;
+            sum += (d.type === "receivable" ? 1 : -1) * r.amount;
+        }
+    }
+    return sum;
+}
+// same for a NAMED account, via the one engine that displays it (no second balance system)
+function dynamicWalletBalance(accountId, data, exclude) {
+    const x = exclude || {};
+    const txs = x.txId ? (data.transactions || []).filter((t) => t.id !== x.txId) : data.transactions;
+    const trs = x.transferId ? (data.transfers || []).filter((t) => t.id !== x.transferId) : data.transfers;
+    const debts = x.repaymentId ? (data.debts || []).map((d) => Object.assign({}, d, { repayments: (d.repayments || []).filter((r) => r.id !== x.repaymentId) })) : data.debts;
+    const acc = computeDynamicAccountBalances(txs, data.userAccounts, trs, debts).find((a) => a.id === accountId);
+    return acc ? acc.balance : 0;
+}
 /* ---------------- accounts / wallets ---------------- */
 const DEFAULT_ACCOUNTS = METHODS.map((m) => ({ key: m.key, label: m.label }));
 // balance per payment-method "wallet" = opening balance + all income − all
@@ -222,6 +268,11 @@ const DEFAULT_ACCOUNTS = METHODS.map((m) => ({ key: m.key, label: m.label }));
 function computeAccountBalances(transactions, accountOpening, transfers, debts) {
     const sums = {};
     for (const t of transactions) {
+        // a transaction paid from a NAMED account (accountId) is that account's money
+        // only — computeDynamicAccountBalances counts it. Counting it here too (the form
+        // also stores a default method) took the same taka out of the cash wallet twice.
+        if (t.accountId)
+            continue;
         const key = t.method || "cash";
         sums[key] = (sums[key] || 0) + (t.type === "income" ? t.amount : -t.amount);
     }
@@ -1667,42 +1718,20 @@ function App() {
     // could silently let a later expense overdraw an account. excludeRepaymentId
     // lets repayment edit/validation exclude its own old effect, the same
     // way excludeTxId/excludeTransferId already worked for transactions/transfers.
-    const accountBalanceExcluding = (method, excludeTxId, excludeTransferId, excludeRepaymentId) => {
-        const opening = accountOpening[method] || 0;
-        let sum = 0;
-        for (const t of transactions) {
-            if (excludeTxId && t.id === excludeTxId)
-                continue;
-            if (t.method !== method)
-                continue;
-            sum += t.type === "income" ? t.amount : -t.amount;
-        }
-        for (const tr of transfers) {
-            if (excludeTransferId && tr.id === excludeTransferId)
-                continue;
-            if (tr.fromMethod === method)
-                sum -= tr.amount;
-            if (tr.toMethod === method)
-                sum += tr.amount;
-        }
-        for (const d of debts) {
-            for (const r of d.repayments || []) {
-                if (excludeRepaymentId && r.id === excludeRepaymentId)
-                    continue;
-                if (r.method !== method)
-                    continue;
-                sum += (d.type === "receivable" ? 1 : -1) * r.amount;
-            }
-        }
-        return opening + sum;
-    };
+    const accountBalanceExcluding = (method, excludeTxId, excludeTransferId, excludeRepaymentId) => legacyWalletBalance(method, { accountOpening, transactions, transfers, debts }, { txId: excludeTxId, transferId: excludeTransferId, repaymentId: excludeRepaymentId });
     const checkAccountBalance = (method, type, amount, excludeId) => {
         if (type !== "expense")
             return true;
-        return accountBalanceExcluding(method, excludeId, null) - amount >= 0;
+        return hasEnough(accountBalanceExcluding(method, excludeId, null), amount);
+    };
+    // expense paid from a NAMED account: checked against THAT account, not against the cash wallet
+    const checkDynamicTransactionBalance = (accountId, type, amount, excludeTxId) => {
+        if (type !== "expense")
+            return true;
+        return hasEnough(dynamicWalletBalance(accountId, { transactions, userAccounts, transfers, debts }, { txId: excludeTxId }), amount);
     };
     const checkTransferBalance = (fromMethod, amount, excludeTransferId) => {
-        return accountBalanceExcluding(fromMethod, null, excludeTransferId) - amount >= 0;
+        return hasEnough(accountBalanceExcluding(fromMethod, null, excludeTransferId), amount);
     };
     // repayment balance checks — payable repayments spend real money, so
     // they're checked the same way an expense/transfer is; receivable
@@ -1712,28 +1741,17 @@ function App() {
     const checkRepaymentBalance = (debtType, method, amount, excludeRepaymentId) => {
         if (debtType === "receivable")
             return true;
-        return accountBalanceExcluding(method, null, null, excludeRepaymentId) - amount >= 0;
+        return hasEnough(accountBalanceExcluding(method, null, null, excludeRepaymentId), amount);
     };
     const checkDynamicRepaymentBalance = (debtType, accountId, amount, debtId, excludeRepaymentId) => {
         if (debtType === "receivable")
             return true;
-        const debtsForCheck = excludeRepaymentId
-            ? debts.map((d) => d.id === debtId ? Object.assign(Object.assign({}, d), { repayments: (d.repayments || []).filter((r) => r.id !== excludeRepaymentId) }) : d)
-            : debts;
-        const balances = computeDynamicAccountBalances(transactions, userAccounts, transfers, debtsForCheck);
-        const acc = balances.find((a) => a.id === accountId);
-        return (acc ? acc.balance : 0) - amount >= 0;
+        return hasEnough(dynamicWalletBalance(accountId, { transactions, userAccounts, transfers, debts }, { repaymentId: excludeRepaymentId }), amount);
     };
-    // dynamic-account equivalent of checkTransferBalance — reuses
-    // computeDynamicAccountBalances exactly as-is (no second balance
-    // engine), just called with the being-edited transfer filtered out
-    // first so editing never double-subtracts its own old effect
-    const checkDynamicTransferBalance = (accountId, amount, excludeTransferId) => {
-        const filtered = excludeTransferId ? transfers.filter((t) => t.id !== excludeTransferId) : transfers;
-        const balances = computeDynamicAccountBalances(transactions, userAccounts, filtered, debts);
-        const acc = balances.find((a) => a.id === accountId);
-        return (acc ? acc.balance : 0) - amount >= 0;
-    };
+    // dynamic-account equivalent of checkTransferBalance — reuses computeDynamicAccountBalances
+    // (no second balance engine), with the being-edited transfer left out so editing never
+    // double-subtracts its own old effect
+    const checkDynamicTransferBalance = (accountId, amount, excludeTransferId) => hasEnough(dynamicWalletBalance(accountId, { transactions, userAccounts, transfers, debts }, { transferId: excludeTransferId }), amount);
     const addTransfer = (transfer) => {
         const next = [...transfers, Object.assign(Object.assign({}, transfer), { id: uid(), createdAt: Date.now() })];
         setTransfers(next);
@@ -2094,14 +2112,14 @@ function App() {
                     addTransaction(tx);
                     setShowAdd(false);
                     setQuickAddType(null);
-                }, onCheckBalance: checkAccountBalance, userAccounts: userAccounts })),
+                }, onCheckBalance: checkAccountBalance, onCheckDynamicBalance: checkDynamicTransactionBalance, userAccounts: userAccounts })),
             editingTx && (React.createElement(TransactionForm, { initial: editingTx, onClose: () => setEditingTx(null), onSave: (patch) => {
                     updateTransaction(editingTx.id, patch);
                     setEditingTx(null);
                 }, onDelete: () => {
                     deleteTransaction(editingTx.id);
                     setEditingTx(null);
-                }, onCheckBalance: checkAccountBalance, userAccounts: userAccounts })),
+                }, onCheckBalance: checkAccountBalance, onCheckDynamicBalance: checkDynamicTransactionBalance, userAccounts: userAccounts })),
             showTransfer && (React.createElement(TransferForm, { onClose: () => setShowTransfer(false), onSave: (tr) => {
                     addTransfer(tr);
                     setShowTransfer(false);
@@ -2857,7 +2875,7 @@ function TxRow({ tx, onClick, showMethod, showDate, hideSymbol }) {
                 showDate ? formatDateBn(tx.date).full : null,
                 showDate && showMethod ? " · " : null,
                 showMethod ? methodLabel(tx.method) : null)),
-        React.createElement("div", { style: Object.assign(Object.assign({}, styles.txAmount), { color: isIncome ? "var(--hk-success)" : "var(--hk-danger)" }) }, formatTaka(tx.amount, { sign: true, symbol: !hideSymbol }))));
+        React.createElement("div", { style: Object.assign(Object.assign({}, styles.txAmount), { color: isIncome ? "var(--hk-success)" : "var(--hk-danger)" }) }, formatTaka(isIncome ? tx.amount : -tx.amount, { sign: true, symbol: !hideSymbol }))));
 }
 /* ---------------- lightweight SVG charts (no external chart library) ---------------- */
 const DONUT_PALETTE = ["var(--hk-header-bg)", "var(--hk-gold)", "var(--hk-success-mid)", "var(--hk-danger-mid)", "var(--hk-text-muted)", "#5B8FA8", "#9A5A8C", "#C98B3D", "#4B7A6B", "#8A6BAA"];
@@ -3237,7 +3255,7 @@ function taxDueInfo(t) {
     return { key: "ok", label: `${toBnDigits(diffDays)} দিন বাকি`, color: "var(--hk-text-muted)", daysLeft: diffDays };
 }
 const QUICK_AMOUNTS = [50, 100, 200, 500, 1000];
-function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onCheckBalance, userAccounts }) {
+function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onCheckBalance, onCheckDynamicBalance, userAccounts }) {
     const catCtx = useCategories();
     const [type, setType] = useState((initial === null || initial === void 0 ? void 0 : initial.type) || presetType || "expense");
     const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
@@ -3270,7 +3288,15 @@ function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onChe
             setErr("তারিখ নির্বাচন করুন");
             return;
         }
-        if (onCheckBalance && !onCheckBalance(method, type, num, initial === null || initial === void 0 ? void 0 : initial.id)) {
+        // a named account chosen -> that account is checked (and only it); otherwise the wallet (method)
+        if (accountId && onCheckDynamicBalance) {
+            if (!onCheckDynamicBalance(accountId, type, num, initial === null || initial === void 0 ? void 0 : initial.id)) {
+                const acc = (userAccounts || []).find((a) => a.id === accountId);
+                setErr(`\u26a0\ufe0f \u0986\u09af\u09bc \u0995\u09b0\u09c1\u09a8 \u2014 ${acc ? acc.name : "\u098f\u0987 \u0985\u09cd\u09af\u09be\u0995\u09be\u0989\u09a8\u09cd\u099f"}-\u098f \u098f\u09a4 \u099f\u09be\u0995\u09be \u09a8\u09c7\u0987`);
+                return;
+            }
+        }
+        else if (onCheckBalance && !onCheckBalance(method, type, num, initial === null || initial === void 0 ? void 0 : initial.id)) {
             setErr(`⚠️ আয় করুন — ${methodLabel(method)}-এ এত টাকা নেই`);
             return;
         }
