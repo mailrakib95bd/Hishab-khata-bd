@@ -116,7 +116,7 @@ function rangeToDates(key) {
     if (isMonthRangeKey(key)) {
         const [y, m] = key.split("-").map(Number);
         const start = `${key}-01`;
-        const end = new Date(y, m, 0).toISOString().slice(0, 10);
+        const end = todayStr(new Date(y, m, 0)); // স্থানীয় তারিখ: UTC+৬-এ toISOString() মাসের শেষ দিনটা বাদ দিত
         return [start, end];
     }
     switch (key) {

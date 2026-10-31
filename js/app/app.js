@@ -241,7 +241,7 @@ function legacyWalletBalance(method, data, exclude) {
     }
     for (const d of data.debts || []) {
         // ধার দেওয়া/নেওয়ার মূল টাকা: ধার দিলে ওয়ালেট থেকে বেরিয়ে যায়, ধার নিলে ঢোকে
-        if (!(x.debtId && d.id === x.debtId) && d.method === method)
+        if (d.trackBalance && !(x.debtId && d.id === x.debtId) && d.method === method)
             sum += (d.type === "receivable" ? -1 : 1) * d.amount;
         for (const r of d.repayments || []) {
             if (x.repaymentId && r.id === x.repaymentId)
@@ -262,18 +262,21 @@ function dynamicWalletBalance(accountId, data, exclude) {
     const acc = computeDynamicAccountBalances(txs, data.userAccounts, trs, debts).find((a) => a.id === accountId);
     return acc ? acc.balance : 0;
 }
-// ব্যাংক-ধরনের ঐচ্ছিক (নামযুক্ত) অ্যাকাউন্টের টাকা ড্যাশবোর্ডের "মোট সম্পদ"-এ ধরা হয় না।
-// ওই অ্যাকাউন্টে টাকা নিলে (স্থানান্তর) ড্যাশবোর্ডে ব্যয়, ওখান থেকে ক্যাশ/বিকাশ/নগদ/রকেট ইত্যাদিতে
-// আনলে "ব্যাংক থেকে উত্তোলন" আয় হিসেবে যোগ হয়। শুধু ড্যাশবোর্ড/হেডারের হিসাবের জন্য — আসল
-// transactions/transfers ডেটা অপরিবর্তিত থাকে, ওয়ালেট ব্যালেন্সও আগের মতোই।
-function dashboardTransactions(transactions, transfers, userAccounts) {
+// অ্যাপের সব জায়গায় (ড্যাশবোর্ড, টাইমলাইন, রিপোর্ট, খুঁজুন) একই "লেজার":
+//  • আসল লেনদেন +
+//  • ব্যাংক-ধরনের ঐচ্ছিক অ্যাকাউন্টে জমা (ব্যয়) / সেখান থেকে উত্তোলন (আয়) — স্থানান্তর থেকে তৈরি
+//  • দেনা-পাওনা: ধার দেওয়া (ব্যয়), ধার নেওয়া (আয়), ধার ফেরত পাওয়া (আয়), ধার ফেরত দেওয়া (ব্যয়)
+// ব্যাংক-ধরনের ঐচ্ছিক অ্যাকাউন্টের নিজস্ব আয়/ব্যয় "মোট সম্পদ"-এ ধরা হয় না, তাই opts.all না দিলে বাদ যায়;
+// খুঁজুন পেজে opts.all = true, যাতে কোনো রেকর্ডই লুকানো না থাকে। এগুলো কেবল দেখানোর/যোগফলের জন্য তৈরি
+// "ভার্চুয়াল" এন্ট্রি (virtual: true) — আসল transactions/transfers/debts ডেটা অপরিবর্তিত, ওয়ালেট ব্যালেন্সও আগের মতো।
+function dashboardTransactions(transactions, transfers, userAccounts, debts, opts) {
+    const all = !!(opts && opts.all);
     const bankIds = new Set((userAccounts || []).filter((a) => a.type === "bank").map((a) => a.id));
-    if (bankIds.size === 0)
-        return transactions;
-    const out = (transactions || []).filter((t) => !(t.accountId && bankIds.has(t.accountId)));
+    const isBank = (id) => !!id && bankIds.has(id);
+    const out = (transactions || []).filter((t) => all || !isBank(t.accountId));
     for (const tr of transfers || []) {
-        const fromBank = !!tr.fromAccountId && bankIds.has(tr.fromAccountId);
-        const toBank = !!tr.toAccountId && bankIds.has(tr.toAccountId);
+        const fromBank = isBank(tr.fromAccountId);
+        const toBank = isBank(tr.toAccountId);
         if (fromBank === toBank)
             continue; // দুটোই বাইরের ব্যাংক, বা দুটোই ভেতরের — মোট সম্পদে কোনো পরিবর্তন নেই
         out.push({
@@ -282,20 +285,44 @@ function dashboardTransactions(transactions, transfers, userAccounts) {
             category: toBank ? "bank_deposit" : "bank_withdraw",
             amount: tr.amount, date: tr.date, note: tr.note || "",
             method: toBank ? tr.fromMethod : tr.toMethod,
+            accountId: toBank ? tr.toAccountId : tr.fromAccountId,
             createdAt: tr.createdAt || 0,
         });
     }
+    const stamp = (date, time, fallback) => fallback || Date.parse(`${date}T${time || "00:00"}:00`) || 0;
+    for (const d of debts || []) {
+        const lent = d.type === "receivable";
+        const note = (d.person || "") + (d.note ? ` · ${d.note}` : "");
+        // মূল টাকা: শুধু নতুন এন্ট্রি (trackBalance) আর যেগুলোর মাধ্যম ওয়ালেট — "অন্য মাধ্যম" ধরা হয় না
+        if (d.trackBalance && d.method && d.method !== "other") {
+            out.push({
+                id: `d:${d.id}`, virtual: true, debtId: d.id, type: lent ? "expense" : "income",
+                category: lent ? "debt_lend" : "debt_borrow", amount: d.amount, date: d.date || todayStr(new Date(d.createdAt || Date.now())),
+                note, method: d.method, createdAt: stamp(d.date, d.time, d.createdAt),
+            });
+        }
+        for (const r of d.repayments || []) {
+            const ok = r.accountId ? (all || !isBank(r.accountId)) : (!!r.method && r.method !== "other");
+            if (!ok)
+                continue;
+            out.push({
+                id: `r:${r.id}`, virtual: true, debtId: d.id, type: lent ? "income" : "expense",
+                category: lent ? "debt_recv" : "debt_pay", amount: r.amount, date: r.date,
+                note: (d.person || "") + (r.note ? ` · ${r.note}` : ""), method: r.method || undefined,
+                accountId: r.accountId || undefined, createdAt: stamp(r.date, r.time, r.createdAt),
+            });
+        }
+    }
     return out;
 }
-// দেনা-পাওনার কারণে "মোট সম্পদ" কতটা বদলায়: ধার দিলে কমে, ফেরত পেলে বাড়ে; ধার নিলে বাড়ে, ফেরত দিলে কমে।
-// "অন্য মাধ্যম" বা মাধ্যম-ছাড়া এন্ট্রি ধরা হয় না; ব্যাংক-ধরনের ঐচ্ছিক অ্যাকাউন্ট দিয়ে হওয়া ফেরতও বাদ।
+// দেনা-পাওনার কারণে "মোট সম্পদ" কতটা বদলায় (ওয়ালেট-ভিত্তিক হিসাব; লেজারের যোগফলের সাথে মেলে)
 function debtCashEffect(debts, userAccounts) {
     const bankIds = new Set((userAccounts || []).filter((a) => a.type === "bank").map((a) => a.id));
     const counts = (method, accountId) => accountId ? !bankIds.has(accountId) : !!method && method !== "other";
     let sum = 0;
     for (const d of debts || []) {
         const sign = d.type === "receivable" ? 1 : -1;
-        if (counts(d.method, null))
+        if (d.trackBalance && counts(d.method, null))
             sum -= sign * d.amount;
         for (const r of d.repayments || [])
             if (counts(r.method, r.accountId))
@@ -338,8 +365,8 @@ function computeAccountBalances(transactions, accountOpening, transfers, debts) 
     // — older repayments with no method field are left out rather than
     // guessed, so past balances don't silently shift under existing data.
     for (const d of debts || []) {
-        // ধার দেওয়া/নেওয়ার মূল টাকাও ওয়ালেটে ধরা হয় (method না থাকা পুরনো এন্ট্রি আন্দাজে ধরা হয় না)
-        if (d.method)
+        // ধার দেওয়া/নেওয়ার মূল টাকাও ওয়ালেটে ধরা হয় — শুধু নতুন এন্ট্রি (trackBalance), যাতে পুরনো এন্ট্রির কারণে আগের ব্যালেন্স হঠাৎ বদলে না যায়
+        if (d.trackBalance && d.method)
             sums[d.method] = (sums[d.method] || 0) + (d.type === "receivable" ? -1 : 1) * d.amount;
         for (const r of d.repayments || []) {
             if (!r.method)
@@ -657,6 +684,14 @@ function catInfo(type, key, cats) {
         return { label: "ব্যাংকে জমা (স্থানান্তর)", icon: "🏦" };
     if (key === "bank_withdraw")
         return { label: "ব্যাংক থেকে উত্তোলন", icon: "🏦" };
+    if (key === "debt_lend")
+        return { label: "ধার দেওয়া (পাওনা)", icon: "🤲" };
+    if (key === "debt_borrow")
+        return { label: "ধার নেওয়া (দেনা)", icon: "🤝" };
+    if (key === "debt_recv")
+        return { label: "ধার ফেরত পেলাম", icon: "🤲" };
+    if (key === "debt_pay")
+        return { label: "ধার ফেরত দিলাম", icon: "🤝" };
     return { label: key, icon: "🔧" };
 }
 function methodLabel(key) {
@@ -665,7 +700,7 @@ function methodLabel(key) {
 function shiftDate(dateStr, days) {
     const d = new Date(dateStr + "T00:00:00");
     d.setDate(d.getDate() + days);
-    return d.toISOString().slice(0, 10);
+    return todayStr(d); // স্থানীয় তারিখ — toISOString() UTC ধরে বলে বাংলাদেশে (UTC+৬) তারিখ এক দিন পিছিয়ে যেত
 }
 function normalizeSpecialDays(raw) {
     const out = {};
@@ -1899,7 +1934,7 @@ function App() {
         persistAll({ specialDays: map });
     };
     const addDebt = (debt) => {
-        const next = [...debts, Object.assign(Object.assign({}, debt), { id: uid(), createdAt: Date.now(), repayments: [], dueNotified: null })];
+        const next = [...debts, Object.assign(Object.assign({}, debt), { id: uid(), createdAt: Date.now(), repayments: [], dueNotified: null, trackBalance: true })];
         setDebts(next);
         persistAll({ debts: next });
     };
@@ -2134,8 +2169,18 @@ function App() {
         return () => clearInterval(id);
     }, [tasks, debts, taxes, transactions, budget, specialDays, persist]);
     const accounts = useMemo(() => computeAccountBalances(transactions, accountOpening, transfers, debts), [transactions, accountOpening, transfers, debts]);
-    const debtAdjust = useMemo(() => debtCashEffect(debts, userAccounts), [debts, userAccounts]);
-    const dashTx = useMemo(() => dashboardTransactions(transactions, transfers, userAccounts), [transactions, transfers, userAccounts]);
+    const dashTx = useMemo(() => dashboardTransactions(transactions, transfers, userAccounts, debts), [transactions, transfers, userAccounts, debts]);
+    const searchTx = useMemo(() => dashboardTransactions(transactions, transfers, userAccounts, debts, { all: true }), [transactions, transfers, userAccounts, debts]);
+    // ভার্চুয়াল এন্ট্রিতে ট্যাপ: স্থানান্তরের এন্ট্রি -> স্থানান্তর সম্পাদনা; দেনা-পাওনার এন্ট্রি -> সেই দেনা-পাওনার বিস্তারিত
+    const openLedgerItem = (t) => {
+        if (!t.virtual)
+            return setEditingTx(t);
+        if (t.transferId)
+            return setEditingTransfer(transfers.find((x) => x.id === t.transferId) || null);
+        const d = debts.find((x) => x.id === t.debtId);
+        if (d)
+            setEditingDebt(d);
+    };
     if (!loaded) {
         return (React.createElement("div", { style: styles.loadingScreen },
             React.createElement(FontLoader, null),
@@ -2153,18 +2198,18 @@ function App() {
     return (React.createElement(CatCtx.Provider, { value: { expenseCats, incomeCats } },
         React.createElement("div", { style: styles.app },
             React.createElement(FontLoader, null),
-            React.createElement(Header, { transactions: dashTx, debtAdjust: debtAdjust, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onUpdateTask: updateTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName, onOpenMenu: () => setShowHamburgerMenu(true), onOpenNotifications: () => setShowNotificationCenter(true), unreadCount: totalUnreadCount, adminTasksCloud: adminTasksCloud, completedAdminTaskIds: completedAdminTaskIds, onToggleAdminTaskComplete: toggleAdminTaskComplete }),
+            React.createElement(Header, { transactions: dashTx, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onUpdateTask: updateTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName, onOpenMenu: () => setShowHamburgerMenu(true), onOpenNotifications: () => setShowNotificationCenter(true), unreadCount: totalUnreadCount, adminTasksCloud: adminTasksCloud, completedAdminTaskIds: completedAdminTaskIds, onToggleAdminTaskComplete: toggleAdminTaskComplete }),
             React.createElement("main", { style: styles.main },
-                tab === "dashboard" && (React.createElement(Dashboard, { transactions: dashTx, debtAdjust: debtAdjust, budget: budget, categoryBudgets: categoryBudgets, debts: debts, accounts: accounts, onEditBudget: () => setShowBudget(true), onOpenTx: (t) => (t.virtual ? setEditingTransfer(transfers.find((x) => x.id === t.transferId) || null) : setEditingTx(t)), onGoDebts: () => setTab("debts"), onGoReports: () => setTab("reports"), onQuickAdd: (type) => {
+                tab === "dashboard" && (React.createElement(Dashboard, { transactions: dashTx, budget: budget, categoryBudgets: categoryBudgets, debts: debts, accounts: accounts, onEditBudget: () => setShowBudget(true), onOpenTx: openLedgerItem, onGoDebts: () => setTab("debts"), onGoReports: () => setTab("reports"), onQuickAdd: (type) => {
                         setQuickAddType(type);
                         setShowAdd(true);
                     }, onTransfer: () => setShowTransfer(true), onTransferHistory: () => setShowTransferHistory(true), profileName: profileName, taxes: taxes, bazarItems: bazarItems })),
-                tab === "timeline" && (React.createElement(Timeline, { transactions: transactions, onOpenTx: (t) => setEditingTx(t) })),
+                tab === "timeline" && (React.createElement(Timeline, { transactions: dashTx, onOpenTx: openLedgerItem })),
                 tab === "debts" && (React.createElement(DebtsView, { debts: debts, onOpenDebt: (d) => setEditingDebt(d), onAddDebt: () => setShowAddDebt(true) })),
                 tab === "family" && (React.createElement(FamilyHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
                 tab === "planning" && (React.createElement(FamilyPlanningHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
-                tab === "reports" && React.createElement(Reports, { transactions: transactions, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
-                tab === "search" && (React.createElement(SearchView, { transactions: transactions, accounts: accounts, onOpenTx: (t) => setEditingTx(t), seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts, debts: debts }))),
+                tab === "reports" && React.createElement(Reports, { transactions: dashTx, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
+                tab === "search" && (React.createElement(SearchView, { transactions: searchTx, accounts: accounts, onOpenTx: openLedgerItem, seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts, debts: [] }))),
             (tab === "dashboard" || tab === "timeline" || tab === "debts") && (React.createElement("button", { style: styles.fab, onClick: () => (tab === "debts" ? setShowAddDebt(true) : setShowAdd(true)), "aria-label": tab === "debts" ? "নতুন দেনা-পাওনা যোগ করুন" : "নতুন লেনদেন যোগ করুন" }, "+")),
             React.createElement(BottomNav, { tab: tab, setTab: setTab }),
             showAdd && (React.createElement(TransactionForm, { presetType: quickAddType, onClose: () => {
@@ -2569,12 +2614,14 @@ function Dashboard({ transactions, debtAdjust, budget, categoryBudgets, debts, a
                     monthIncome += t.amount;
                 else {
                     monthExpense += t.amount;
-                    catTotals[t.category] = (catTotals[t.category] || 0) + t.amount;
+                    if (!t.virtual)
+                        catTotals[t.category] = (catTotals[t.category] || 0) + t.amount;
                 }
             }
             if (inLastMonth && t.type === "expense") {
                 lastMonthExpense += t.amount;
-                lastMonthCatTotals[t.category] = (lastMonthCatTotals[t.category] || 0) + t.amount;
+                if (!t.virtual)
+                    lastMonthCatTotals[t.category] = (lastMonthCatTotals[t.category] || 0) + t.amount;
             }
             if (isToday) {
                 if (t.type === "income")
