@@ -62,7 +62,7 @@ function Timeline({ transactions, onOpenTx }) {
                 "\u0986\u099C \u0996\u09B0\u099A \u09B9\u09AF\u09BC\u09C7\u099B\u09C7 ",
                 formatTaka(headerStats.todayExpense),
                 " \u00B7 \u099C\u09AE\u09BE \u0986\u099B\u09C7 ",
-                formatTaka(headerStats.balance))),
+                formatBalance(headerStats.balance))),
         React.createElement("div", { style: styles.rangeRow }, [
             { key: "all", label: "সব" },
             { key: "income", label: "আয়" },

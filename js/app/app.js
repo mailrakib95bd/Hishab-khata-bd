@@ -358,6 +358,11 @@ const BN_WEEKDAY_SHORT = ["রবি", "সোম", "মঙ্গল", "বু�
 function toBnDigits(str) {
     return String(str).replace(/[0-9]/g, (d) => BN_DIGITS[d]);
 }
+// A BALANCE can be negative, but formatTaka() prints only the size — so an overdrawn −500 was shown as "৫০০৳"
+// and looked like money had been ADDED. formatBalance keeps the minus sign.
+function formatBalance(amount, opts) {
+    return (amount < 0 && Math.round(Math.abs(amount)) > 0 ? "\u2212 " : "") + formatTaka(amount, opts);
+}
 function formatTaka(amount, { sign = false, symbol = true } = {}) {
     const n = Math.round(Math.abs(amount));
     let s = n.toString();
@@ -2846,7 +2851,7 @@ function Dashboard({ transactions, budget, categoryBudgets, debts, accounts, onE
             React.createElement("span", { style: styles.walletTileIcon }, ACCOUNT_ICONS[a.key] || "💰"),
             React.createElement("div", null,
                 React.createElement("div", { style: styles.walletTileLabel }, a.label),
-                React.createElement("div", { style: Object.assign(Object.assign({}, styles.walletTileVal), { color: ACCOUNT_COLORS[a.key] || "var(--hk-text)" }) }, formatTaka(a.balance)))))))),
+                React.createElement("div", { style: Object.assign(Object.assign({}, styles.walletTileVal), { color: a.balance < 0 ? "var(--hk-danger)" : ACCOUNT_COLORS[a.key] || "var(--hk-text)" }) }, formatBalance(a.balance)))))))),
         stats.topCats.length > 0 && (React.createElement("div", { style: styles.topCatCard },
             React.createElement("div", { style: styles.budgetTop },
                 React.createElement("span", { style: styles.budgetTitle }, "\u09B6\u09C0\u09B0\u09CD\u09B7 \u09E9 \u0996\u09B0\u099A\u09C7\u09B0 \u0996\u09BE\u09A4"),
@@ -3202,7 +3207,7 @@ function AccountPanel({ onClose, dynamicAccountBalances, onAdd, onUpdate, onDele
                     React.createElement("div", null,
                         React.createElement("div", { style: { fontWeight: 600 } }, a.name, a.active === false && React.createElement("span", { style: { fontSize: 10.5, marginLeft: 6 } }, "(নিষ্ক্রিয়)")),
                         React.createElement("div", { style: admStyles.muted }, (ACCOUNT_TYPES.find((t) => t.key === a.type) || {}).label || a.type)),
-                    React.createElement("div", { style: { fontWeight: 700 } }, formatTaka(a.balance))),
+                    React.createElement("div", { style: { fontWeight: 700, color: a.balance < 0 ? "var(--hk-danger)" : undefined } }, formatBalance(a.balance))),
                 blockedMsg === a.id && (React.createElement("div", { style: { fontSize: 12, color: "var(--hk-danger)", marginTop: 6 } }, "এই অ্যাকাউন্টে লেনদেন/লেনদেনের ইতিহাস আছে বলে মুছে ফেলা যাবে না — বরং নিষ্ক্রিয় করুন।")),
                 React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" } },
                     React.createElement("button", { style: admStyles.chip(false), onClick: () => onViewTransactions(a.id) }, "\u09B2\u09C7\u09A8\u09A6\u09C7\u09A8 \u09A6\u09C7\u0996\u09C1\u09A8"),

@@ -402,7 +402,7 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
                     return (React.createElement("div", { key: m.key, style: styles.catBudgetRow },
                         React.createElement("span", { style: styles.catBudgetLabel },
                             m.label,
-                            acc ? ` — বর্তমান ${formatTaka(acc.balance)}` : ""),
+                            acc ? ` — বর্তমান ${formatBalance(acc.balance)}` : ""),
                         React.createElement("input", { style: styles.catBudgetInput, type: "number", placeholder: "\u09F3\u09E6", value: acctVals[m.key] || "", onChange: (e) => setAcctVals((v) => (Object.assign(Object.assign({}, v), { [m.key]: e.target.value }))) })));
                 }),
                 React.createElement("button", { style: styles.saveBtn, onClick: saveAccounts }, "\u09AA\u09CD\u09B0\u09BE\u09B0\u09AE\u09CD\u09AD\u09BF\u0995 \u09AC\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09B8 \u09B8\u0982\u09B0\u0995\u09CD\u09B7\u09A3 \u0995\u09B0\u09C1\u09A8"),
