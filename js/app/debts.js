@@ -54,7 +54,10 @@ function DebtsView({ debts, onOpenDebt, onAddDebt }) {
                 React.createElement("span", { style: { color: "var(--hk-success)", fontFamily: "'JetBrains Mono', monospace" } }, formatTaka(totals.receivable))),
             React.createElement("div", { style: styles.summaryRow },
                 React.createElement("span", null, "\u09AE\u09CB\u099F \u0995\u09B0\u099C\u09C7 \u09B9\u09BE\u09B8\u09BE\u09A8\u09BE"),
-                React.createElement("span", { style: { color: "var(--hk-danger)", fontFamily: "'JetBrains Mono', monospace" } }, formatTaka(totals.payable)))),
+                React.createElement("span", { style: { color: "var(--hk-danger)", fontFamily: "'JetBrains Mono', monospace" } }, formatTaka(totals.payable))),
+            React.createElement("div", { style: Object.assign(Object.assign({}, styles.summaryRow), { borderTop: "1px dashed var(--hk-border)", paddingTop: 8, marginTop: 4, fontWeight: 700 }) },
+                React.createElement("span", null, "\u09A6\u09C7\u09A8\u09BE-\u09AA\u09BE\u0993\u09A8\u09BE\u09B0 \u09AA\u09B0 \u09A8\u09BF\u099F"),
+                React.createElement("span", { style: { color: totals.receivable - totals.payable >= 0 ? "var(--hk-success)" : "var(--hk-danger)", fontFamily: "'JetBrains Mono', monospace" } }, formatTaka(totals.receivable - totals.payable, { sign: true })))),
         React.createElement("div", { style: styles.rangeRow }, [
             { key: "all", label: "সব" },
             { key: "receivable", label: "পাওনা (প্রাপ্য হক)" },
@@ -82,7 +85,7 @@ function DebtsView({ debts, onOpenDebt, onAddDebt }) {
                     React.createElement("div", { style: { fontSize: 10.5, color: STATUS_COLOR[status] } }, STATUS_LABEL[status]))));
         })))));
 }
-function DebtForm({ initial, onClose, onSave, onDelete }) {
+function DebtForm({ initial, onClose, onSave, onDelete, getWalletBalance }) {
     const [person, setPerson] = useState((initial === null || initial === void 0 ? void 0 : initial.person) || "");
     const [type, setType] = useState((initial === null || initial === void 0 ? void 0 : initial.type) || "receivable");
     const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
@@ -101,6 +104,21 @@ function DebtForm({ initial, onClose, onSave, onDelete }) {
         if (!num || num <= 0) {
             setErr("সঠিক পরিমাণ লিখুন");
             return;
+        }
+        // ধার দেওয়া (প্রাপ্য হক): বেছে নেওয়া ক্যাশ/ব্যাংক/মোবাইল ওয়ালেটে যথেষ্ট টাকা না থাকলে নয়।
+        // সম্পাদনায় শুধু তখনই দেখা হয় যখন ধরন/মাধ্যম বদলেছে বা পরিমাণ বেড়েছে — নইলে পুরনো এন্ট্রির নোট
+        // ঠিক করতেও আটকে যেত। "অন্য মাধ্যম"-এ অ্যাপ ব্যালেন্স রাখে না, তাই সেটা আটকায় না।
+        if (type === "receivable" && method !== "other" && getWalletBalance) {
+            const changed = !initial || initial.type !== "receivable" || initial.method !== method || num > initial.amount;
+            if (changed) {
+                // সম্পাদনায় এই এন্ট্রির নিজের আগের কাটা টাকা বাদ দিয়ে ব্যালেন্স দেখা হয়
+                const bal = getWalletBalance(method, initial ? initial.id : null);
+                const need = num;
+                if (!hasEnough(bal, need)) {
+                    setErr(`\u26A0\uFE0F ${methodLabel(method)}-\u098F \u098F\u09A4 \u099F\u09BE\u0995\u09BE \u09A8\u09C7\u0987 \u2014 \u09A7\u09BE\u09B0 \u09A6\u09BF\u09A4\u09C7 \u09AA\u09BE\u09B0\u09AC\u09C7\u09A8 \u09A8\u09BE (\u0986\u099B\u09C7 ${formatTaka(Math.max(0, bal))})`);
+                    return;
+                }
+            }
         }
         onSave({
             person: person.trim(),
@@ -137,7 +155,7 @@ function DebtForm({ initial, onClose, onSave, onDelete }) {
             onDelete ? React.createElement("button", { style: styles.deleteBtn, onClick: onDelete }, "\u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8") : null,
             React.createElement("button", { style: styles.saveBtn, onClick: handleSave }, "\u09B8\u0982\u09B0\u0995\u09CD\u09B7\u09A3 \u0995\u09B0\u09C1\u09A8"))));
 }
-function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onUpdateRepayment, onDeleteRepayment, onRegisterBackHandler, userAccounts, checkRepaymentBalance, checkDynamicRepaymentBalance }) {
+function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onUpdateRepayment, onDeleteRepayment, onRegisterBackHandler, userAccounts, checkRepaymentBalance, checkDynamicRepaymentBalance, getWalletBalance }) {
     const [showEdit, setShowEdit] = useState(false);
     const [showRepay, setShowRepay] = useState(false);
     const [repayAmount, setRepayAmount] = useState("");
@@ -270,7 +288,7 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onUpdat
         }
     };
     if (showEdit) {
-        return (React.createElement(DebtForm, { initial: debt, onClose: () => setShowEdit(false), onSave: (patch) => {
+        return (React.createElement(DebtForm, { initial: debt, getWalletBalance: getWalletBalance, onClose: () => setShowEdit(false), onSave: (patch) => {
                 onUpdate(patch);
                 setShowEdit(false);
             }, onDelete: () => {
