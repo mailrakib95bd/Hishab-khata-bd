@@ -108,14 +108,14 @@ console.log("dashboard — bank-type named accounts are outside the total");
   t("bank -> bank, or no bank account at all, changes nothing", () => {
     assert.strictEqual(A.dashboardTransactions([], [{ id: "y", amount: 5, fromAccountId: "dbbl", toAccountId: "dbbl2" }], [...accs, { id: "dbbl2", type: "bank" }]).length, 0);
     const tx = [{ id: "z", type: "income", amount: 9 }];
-    assert.strictEqual(A.dashboardTransactions(tx, [{ id: "q", amount: 1, fromMethod: "cash", toMethod: "bank" }], []), tx);
+    assert.deepStrictEqual(A.dashboardTransactions(tx, [{ id: "q", amount: 1, fromMethod: "cash", toMethod: "bank" }], []), tx);
   });
 }
 
 console.log("debts — lending takes money out of the wallet, getting it back puts it in");
 {
-  const lend = { id: "d1", type: "receivable", amount: 1000, method: "cash", repayments: [{ id: "r1", amount: 400, method: "cash" }] };
-  const borrow = { id: "d2", type: "payable", amount: 500, method: "bkash", repayments: [{ id: "r2", amount: 100, method: "bkash" }] };
+  const lend = { trackBalance: true, id: "d1", type: "receivable", amount: 1000, method: "cash", repayments: [{ id: "r1", amount: 400, method: "cash" }] };
+  const borrow = { trackBalance: true, id: "d2", type: "payable", amount: 500, method: "bkash", repayments: [{ id: "r2", amount: 100, method: "bkash" }] };
   t("lent money leaves the wallet; repayment received comes back", () => {
     assert.strictEqual(wallet(A.computeAccountBalances([], { cash: 5000 }, [], [lend]), "cash"), 5000 - 1000 + 400);
   });
@@ -123,19 +123,48 @@ console.log("debts — lending takes money out of the wallet, getting it back pu
     assert.strictEqual(wallet(A.computeAccountBalances([], {}, [], [borrow]), "bkash"), 500 - 100);
   });
   t("the lend check sees the reduced balance, and editing ignores the debt's own old amount", () => {
-    const data = { accountOpening: { cash: 1000 }, debts: [{ id: "d3", type: "receivable", amount: 800, method: "cash", repayments: [] }] };
+    const data = { accountOpening: { cash: 1000 }, debts: [{ trackBalance: true, id: "d3", type: "receivable", amount: 800, method: "cash", repayments: [] }] };
     assert.strictEqual(A.legacyWalletBalance("cash", data), 200);
     assert.strictEqual(A.legacyWalletBalance("cash", data, { debtId: "d3" }), 1000);
   });
+  t("old debts (no trackBalance flag) keep the balances they always had", () => {
+    const old = [{ id: "old", type: "receivable", amount: 1000, method: "cash", repayments: [] }];
+    assert.strictEqual(wallet(A.computeAccountBalances([], { cash: 5000 }, [], old), "cash"), 5000);
+    assert.strictEqual(A.debtCashEffect(old, []), 0);
+  });
   t('"other" or method-less debts touch no wallet and not the dashboard', () => {
-    const o = [{ id: "o", type: "receivable", amount: 700, method: "other", repayments: [{ id: "x", amount: 50, method: "other" }] }, { id: "n", type: "receivable", amount: 300, repayments: [] }];
+    const o = [{ trackBalance: true, id: "o", type: "receivable", amount: 700, method: "other", repayments: [{ id: "x", amount: 50, method: "other" }] }, { trackBalance: true, id: "n", type: "receivable", amount: 300, repayments: [] }];
     assert.strictEqual(A.debtCashEffect(o, []), 0);
     assert(A.computeAccountBalances([], { cash: 10 }, [], o).every((w) => w.key !== "cash" || w.balance === 10));
   });
   t("dashboard effect = -lent + received back + borrowed - repaid; bank-account repayments are left out", () => {
     assert.strictEqual(A.debtCashEffect([lend, borrow], []), -1000 + 400 + 500 - 100);
-    const bankRep = { id: "d4", type: "receivable", amount: 100, method: "cash", repayments: [{ id: "r", amount: 100, accountId: "dbbl" }] };
+    const bankRep = { trackBalance: true, id: "d4", type: "receivable", amount: 100, method: "cash", repayments: [{ id: "r", amount: 100, accountId: "dbbl" }] };
     assert.strictEqual(A.debtCashEffect([bankRep], [{ id: "dbbl", type: "bank" }]), -100);
+  });
+}
+console.log("ledger — debts and bank moves become real records everywhere");
+{
+  const D = [{ id: "d1", person: "রহিম", type: "receivable", amount: 1000, method: "cash", date: "2026-10-30", trackBalance: true, repayments: [{ id: "r1", amount: 300, method: "cash", date: "2026-10-31" }] },
+             { id: "d2", person: "করিম", type: "payable", amount: 500, method: "bkash", date: "2026-10-30", trackBalance: true, repayments: [] },
+             { id: "d0", person: "পুরনো", type: "receivable", amount: 9000, method: "cash", date: "2026-10-01", repayments: [{ id: "r0", amount: 100, method: "cash", date: "2026-10-02" }] }];
+  const net = (l) => l.reduce((x, e) => x + (e.type === "income" ? e.amount : -e.amount), 0);
+  t("lend/borrow/repayments appear as entries; old debt principal does not, its repayment does", () => {
+    const L = A.dashboardTransactions([], [], [], D);
+    assert.deepStrictEqual(L.map((e) => e.category).sort(), ["debt_borrow", "debt_lend", "debt_recv", "debt_recv"]);
+    assert.strictEqual(net(L), -1000 + 300 + 500 + 100);
+    assert(L.every((e) => e.virtual && e.debtId));
+  });
+  t("ledger total = wallet-based effect (debtCashEffect) — one source of truth", () => {
+    assert.strictEqual(net(A.dashboardTransactions([], [], [], D)), A.debtCashEffect(D, []));
+  });
+  t("search mode (all) keeps bank-account transactions and tags bank moves with the account", () => {
+    const accs = [{ id: "dbbl", type: "bank" }];
+    const tx = [{ id: "a", type: "income", amount: 50, accountId: "dbbl", date: "2026-10-01" }];
+    const trs = [{ id: "x", amount: 7, fromMethod: "cash", toAccountId: "dbbl", date: "2026-10-02" }];
+    assert.strictEqual(A.dashboardTransactions(tx, trs, accs, [], { all: true }).length, 2);
+    assert.strictEqual(A.dashboardTransactions(tx, trs, accs, [], { all: true }).find((e) => e.virtual).accountId, "dbbl");
+    assert.strictEqual(A.dashboardTransactions(tx, trs, accs, []).length, 1);
   });
 }
 console.log(`\n${passed} passed${process.exitCode ? " — WITH FAILURES" : ""}`);
