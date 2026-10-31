@@ -81,4 +81,13 @@ t("an expense row is shown with a minus sign, an income row with a plus (the amo
   assert(/formatTaka\(isIncome \? tx\.amount : -tx\.amount, \{ sign: true/.test(row), "TxRow must pass a negative amount for expenses");
 });
 
+console.log("showing a negative balance");
+t("an overdrawn balance keeps its minus sign (it used to look like added money)", () => {
+  const c = {}; vm.createContext(c);
+  vm.runInContext(["function toBnDigits(s) { return s; }", fn("formatTaka"), fn("formatBalance"), "this.f = { formatTaka, formatBalance };"].join("\n"), c);
+  assert.strictEqual(c.f.formatTaka(-500), "500\u09f3", "formatTaka alone drops the sign — that was the trap");
+  assert.strictEqual(c.f.formatBalance(-500), "\u2212 500\u09f3"); assert.strictEqual(c.f.formatBalance(500), "500\u09f3"); assert.strictEqual(c.f.formatBalance(0), "0\u09f3"); assert.strictEqual(c.f.formatBalance(-0.2), "0\u09f3", "−0.2 rounds to 0 — no stray minus");
+  for (const f of ["app.js", "reports-search.js", "settings.js"]) { const s = fs.readFileSync(path.join(__dirname, "..", "js", "app", f), "utf8"); assert(!/formatTaka\((a|acc|headerStats)\.balance\)/.test(s), f + " still prints a balance with formatTaka"); }
+});
+
 console.log(`\n${passed} passed${process.exitCode ? " — WITH FAILURES" : ""}`);
