@@ -89,6 +89,7 @@ const styles = {
     header: {
         background: "var(--hk-header-bg)",
         position: "relative",
+        paddingTop: "var(--hk-safe-top, 0px)",
         paddingBottom: 18,
         borderBottom: "3px double var(--hk-gold)",
     },
@@ -103,10 +104,13 @@ const styles = {
         borderRadius: "50%",
         background: "#0E2229",
     },
+    // grid, not flex: title + buttons share row 1; the balance gets its OWN full-width row.
+    // (In a flex row the balance sat in a narrow column beside the buttons and broke into
+    //  "+" / "৩,৬০০" on two lines whenever the buttons were wide — larger phone font, long name.)
     headerContent: {
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "flex-start",
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) auto",
+        alignItems: "start",
         padding: "10px 18px 0",
     },
     headerEyebrow: {
@@ -992,7 +996,7 @@ const styles = {
         overscrollBehaviorY: "contain",
         background: "var(--hk-surface-soft)",
         borderRadius: 0,
-        padding: "10px 20px 26px",
+        padding: "calc(10px + var(--hk-safe-top, 0px)) 20px 26px",
         boxSizing: "border-box",
     },
     modalHandle: {
@@ -2108,7 +2112,10 @@ const styles = {
 };
 const styleTag = document.createElement("style");
 styleTag.textContent = `
+
 :root {
+  /* status-bar / camera-cutout height: 0 in a normal browser tab, real value in the installed app */
+  --hk-safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
   /* premium design tokens — light theme (default) */
   --hk-bg: #F5EFE2;
   --hk-surface-soft: #F5EFE2;

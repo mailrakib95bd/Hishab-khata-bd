@@ -55,8 +55,8 @@ const ACCOUNT_ICONS = {
     rocket: "🚀",
     card: "💳",
 };
-// debt/repayment method picker also allows "অন্য মাধ্যম" since money can
-// change hands through a third person, not just a wallet the app tracks
+// "অন্য মাধ্যম" (other) is NOT offered any more when creating a debt (the picker uses METHODS);
+// it stays in this list only so OLD records saved with method "other" still show their label.
 const DEBT_METHODS = [...METHODS, { key: "other", label: "অন্য মাধ্যম" }];
 /* ---------------- custom categories (context) ---------------- */
 const CatCtx = createContext(null);
@@ -240,9 +240,6 @@ function legacyWalletBalance(method, data, exclude) {
             sum += tr.amount;
     }
     for (const d of data.debts || []) {
-        // ধার দেওয়া/নেওয়ার মূল টাকা: ধার দিলে ওয়ালেট থেকে বেরিয়ে যায়, ধার নিলে ঢোকে
-        if (d.trackBalance && !(x.debtId && d.id === x.debtId) && d.method === method)
-            sum += (d.type === "receivable" ? -1 : 1) * d.amount;
         for (const r of d.repayments || []) {
             if (x.repaymentId && r.id === x.repaymentId)
                 continue;
@@ -261,74 +258,6 @@ function dynamicWalletBalance(accountId, data, exclude) {
     const debts = x.repaymentId ? (data.debts || []).map((d) => Object.assign({}, d, { repayments: (d.repayments || []).filter((r) => r.id !== x.repaymentId) })) : data.debts;
     const acc = computeDynamicAccountBalances(txs, data.userAccounts, trs, debts).find((a) => a.id === accountId);
     return acc ? acc.balance : 0;
-}
-// অ্যাপের সব জায়গায় (ড্যাশবোর্ড, টাইমলাইন, রিপোর্ট, খুঁজুন) একই "লেজার":
-//  • আসল লেনদেন +
-//  • ব্যাংক-ধরনের ঐচ্ছিক অ্যাকাউন্টে জমা (ব্যয়) / সেখান থেকে উত্তোলন (আয়) — স্থানান্তর থেকে তৈরি
-//  • দেনা-পাওনা: ধার দেওয়া (ব্যয়), ধার নেওয়া (আয়), ধার ফেরত পাওয়া (আয়), ধার ফেরত দেওয়া (ব্যয়)
-// ব্যাংক-ধরনের ঐচ্ছিক অ্যাকাউন্টের নিজস্ব আয়/ব্যয় "মোট সম্পদ"-এ ধরা হয় না, তাই opts.all না দিলে বাদ যায়;
-// খুঁজুন পেজে opts.all = true, যাতে কোনো রেকর্ডই লুকানো না থাকে। এগুলো কেবল দেখানোর/যোগফলের জন্য তৈরি
-// "ভার্চুয়াল" এন্ট্রি (virtual: true) — আসল transactions/transfers/debts ডেটা অপরিবর্তিত, ওয়ালেট ব্যালেন্সও আগের মতো।
-function dashboardTransactions(transactions, transfers, userAccounts, debts, opts) {
-    const all = !!(opts && opts.all);
-    const bankIds = new Set((userAccounts || []).filter((a) => a.type === "bank").map((a) => a.id));
-    const isBank = (id) => !!id && bankIds.has(id);
-    const out = (transactions || []).filter((t) => all || !isBank(t.accountId));
-    for (const tr of transfers || []) {
-        const fromBank = isBank(tr.fromAccountId);
-        const toBank = isBank(tr.toAccountId);
-        if (fromBank === toBank)
-            continue; // দুটোই বাইরের ব্যাংক, বা দুটোই ভেতরের — মোট সম্পদে কোনো পরিবর্তন নেই
-        out.push({
-            id: `tr:${tr.id}`, virtual: true, transferId: tr.id,
-            type: toBank ? "expense" : "income",
-            category: toBank ? "bank_deposit" : "bank_withdraw",
-            amount: tr.amount, date: tr.date, note: tr.note || "",
-            method: toBank ? tr.fromMethod : tr.toMethod,
-            accountId: toBank ? tr.toAccountId : tr.fromAccountId,
-            createdAt: tr.createdAt || 0,
-        });
-    }
-    const stamp = (date, time, fallback) => fallback || Date.parse(`${date}T${time || "00:00"}:00`) || 0;
-    for (const d of debts || []) {
-        const lent = d.type === "receivable";
-        const note = (d.person || "") + (d.note ? ` · ${d.note}` : "");
-        // মূল টাকা: শুধু নতুন এন্ট্রি (trackBalance) আর যেগুলোর মাধ্যম ওয়ালেট — "অন্য মাধ্যম" ধরা হয় না
-        if (d.trackBalance && d.method && d.method !== "other") {
-            out.push({
-                id: `d:${d.id}`, virtual: true, debtId: d.id, type: lent ? "expense" : "income",
-                category: lent ? "debt_lend" : "debt_borrow", amount: d.amount, date: d.date || todayStr(new Date(d.createdAt || Date.now())),
-                note, method: d.method, createdAt: stamp(d.date, d.time, d.createdAt),
-            });
-        }
-        for (const r of d.repayments || []) {
-            const ok = r.accountId ? (all || !isBank(r.accountId)) : (!!r.method && r.method !== "other");
-            if (!ok)
-                continue;
-            out.push({
-                id: `r:${r.id}`, virtual: true, debtId: d.id, type: lent ? "income" : "expense",
-                category: lent ? "debt_recv" : "debt_pay", amount: r.amount, date: r.date,
-                note: (d.person || "") + (r.note ? ` · ${r.note}` : ""), method: r.method || undefined,
-                accountId: r.accountId || undefined, createdAt: stamp(r.date, r.time, r.createdAt),
-            });
-        }
-    }
-    return out;
-}
-// দেনা-পাওনার কারণে "মোট সম্পদ" কতটা বদলায় (ওয়ালেট-ভিত্তিক হিসাব; লেজারের যোগফলের সাথে মেলে)
-function debtCashEffect(debts, userAccounts) {
-    const bankIds = new Set((userAccounts || []).filter((a) => a.type === "bank").map((a) => a.id));
-    const counts = (method, accountId) => accountId ? !bankIds.has(accountId) : !!method && method !== "other";
-    let sum = 0;
-    for (const d of debts || []) {
-        const sign = d.type === "receivable" ? 1 : -1;
-        if (d.trackBalance && counts(d.method, null))
-            sum -= sign * d.amount;
-        for (const r of d.repayments || [])
-            if (counts(r.method, r.accountId))
-                sum += sign * r.amount;
-    }
-    return sum;
 }
 /* ---------------- accounts / wallets ---------------- */
 const DEFAULT_ACCOUNTS = METHODS.map((m) => ({ key: m.key, label: m.label }));
@@ -365,9 +294,6 @@ function computeAccountBalances(transactions, accountOpening, transfers, debts) 
     // — older repayments with no method field are left out rather than
     // guessed, so past balances don't silently shift under existing data.
     for (const d of debts || []) {
-        // ধার দেওয়া/নেওয়ার মূল টাকাও ওয়ালেটে ধরা হয় — শুধু নতুন এন্ট্রি (trackBalance), যাতে পুরনো এন্ট্রির কারণে আগের ব্যালেন্স হঠাৎ বদলে না যায়
-        if (d.trackBalance && d.method)
-            sums[d.method] = (sums[d.method] || 0) + (d.type === "receivable" ? -1 : 1) * d.amount;
         for (const r of d.repayments || []) {
             if (!r.method)
                 continue;
@@ -677,22 +603,7 @@ function catInfo(type, key, cats) {
     const list = cats
         ? (type === "income" ? cats.incomeCats : cats.expenseCats)
         : (type === "income" ? INCOME_CATS : EXPENSE_CATS);
-    const found = list.find((c) => c.key === key);
-    if (found)
-        return found;
-    if (key === "bank_deposit")
-        return { label: "ব্যাংকে জমা (স্থানান্তর)", icon: "🏦" };
-    if (key === "bank_withdraw")
-        return { label: "ব্যাংক থেকে উত্তোলন", icon: "🏦" };
-    if (key === "debt_lend")
-        return { label: "ধার দেওয়া (পাওনা)", icon: "🤲" };
-    if (key === "debt_borrow")
-        return { label: "ধার নেওয়া (দেনা)", icon: "🤝" };
-    if (key === "debt_recv")
-        return { label: "ধার ফেরত পেলাম", icon: "🤲" };
-    if (key === "debt_pay")
-        return { label: "ধার ফেরত দিলাম", icon: "🤝" };
-    return { label: key, icon: "🔧" };
+    return list.find((c) => c.key === key) || { label: key, icon: "🔧" };
 }
 function methodLabel(key) {
     return (DEBT_METHODS.find((m) => m.key === key) || {}).label || key;
@@ -700,7 +611,7 @@ function methodLabel(key) {
 function shiftDate(dateStr, days) {
     const d = new Date(dateStr + "T00:00:00");
     d.setDate(d.getDate() + days);
-    return todayStr(d); // স্থানীয় তারিখ — toISOString() UTC ধরে বলে বাংলাদেশে (UTC+৬) তারিখ এক দিন পিছিয়ে যেত
+    return d.toISOString().slice(0, 10);
 }
 function normalizeSpecialDays(raw) {
     const out = {};
@@ -1813,7 +1724,6 @@ function App() {
     // lets repayment edit/validation exclude its own old effect, the same
     // way excludeTxId/excludeTransferId already worked for transactions/transfers.
     const accountBalanceExcluding = (method, excludeTxId, excludeTransferId, excludeRepaymentId) => legacyWalletBalance(method, { accountOpening, transactions, transfers, debts }, { txId: excludeTxId, transferId: excludeTransferId, repaymentId: excludeRepaymentId });
-    const walletBalanceFor = (method, excludeDebtId) => legacyWalletBalance(method, { accountOpening, transactions, transfers, debts }, { debtId: excludeDebtId });
     const checkAccountBalance = (method, type, amount, excludeId) => {
         if (type !== "expense")
             return true;
@@ -1934,7 +1844,7 @@ function App() {
         persistAll({ specialDays: map });
     };
     const addDebt = (debt) => {
-        const next = [...debts, Object.assign(Object.assign({}, debt), { id: uid(), createdAt: Date.now(), repayments: [], dueNotified: null, trackBalance: true })];
+        const next = [...debts, Object.assign(Object.assign({}, debt), { id: uid(), createdAt: Date.now(), repayments: [], dueNotified: null })];
         setDebts(next);
         persistAll({ debts: next });
     };
@@ -2169,18 +2079,6 @@ function App() {
         return () => clearInterval(id);
     }, [tasks, debts, taxes, transactions, budget, specialDays, persist]);
     const accounts = useMemo(() => computeAccountBalances(transactions, accountOpening, transfers, debts), [transactions, accountOpening, transfers, debts]);
-    const dashTx = useMemo(() => dashboardTransactions(transactions, transfers, userAccounts, debts), [transactions, transfers, userAccounts, debts]);
-    const searchTx = useMemo(() => dashboardTransactions(transactions, transfers, userAccounts, debts, { all: true }), [transactions, transfers, userAccounts, debts]);
-    // ভার্চুয়াল এন্ট্রিতে ট্যাপ: স্থানান্তরের এন্ট্রি -> স্থানান্তর সম্পাদনা; দেনা-পাওনার এন্ট্রি -> সেই দেনা-পাওনার বিস্তারিত
-    const openLedgerItem = (t) => {
-        if (!t.virtual)
-            return setEditingTx(t);
-        if (t.transferId)
-            return setEditingTransfer(transfers.find((x) => x.id === t.transferId) || null);
-        const d = debts.find((x) => x.id === t.debtId);
-        if (d)
-            setEditingDebt(d);
-    };
     if (!loaded) {
         return (React.createElement("div", { style: styles.loadingScreen },
             React.createElement(FontLoader, null),
@@ -2198,18 +2096,18 @@ function App() {
     return (React.createElement(CatCtx.Provider, { value: { expenseCats, incomeCats } },
         React.createElement("div", { style: styles.app },
             React.createElement(FontLoader, null),
-            React.createElement(Header, { transactions: dashTx, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onUpdateTask: updateTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName, onOpenMenu: () => setShowHamburgerMenu(true), onOpenNotifications: () => setShowNotificationCenter(true), unreadCount: totalUnreadCount, adminTasksCloud: adminTasksCloud, completedAdminTaskIds: completedAdminTaskIds, onToggleAdminTaskComplete: toggleAdminTaskComplete }),
+            React.createElement(Header, { transactions: transactions, onSettings: () => setShowSettings(true), tasks: tasks, onAddTask: addTask, onUpdateTask: updateTask, onToggleTask: toggleTask, onDeleteTask: deleteTask, onSetReminder: setTaskReminder, onOpenCalendar: () => setShowCalendar(true), profileName: profileName, onOpenMenu: () => setShowHamburgerMenu(true), onOpenNotifications: () => setShowNotificationCenter(true), unreadCount: totalUnreadCount, adminTasksCloud: adminTasksCloud, completedAdminTaskIds: completedAdminTaskIds, onToggleAdminTaskComplete: toggleAdminTaskComplete }),
             React.createElement("main", { style: styles.main },
-                tab === "dashboard" && (React.createElement(Dashboard, { transactions: dashTx, budget: budget, categoryBudgets: categoryBudgets, debts: debts, accounts: accounts, onEditBudget: () => setShowBudget(true), onOpenTx: openLedgerItem, onGoDebts: () => setTab("debts"), onGoReports: () => setTab("reports"), onQuickAdd: (type) => {
+                tab === "dashboard" && (React.createElement(Dashboard, { transactions: transactions, budget: budget, categoryBudgets: categoryBudgets, debts: debts, accounts: accounts, onEditBudget: () => setShowBudget(true), onOpenTx: (t) => setEditingTx(t), onGoDebts: () => setTab("debts"), onGoReports: () => setTab("reports"), onQuickAdd: (type) => {
                         setQuickAddType(type);
                         setShowAdd(true);
                     }, onTransfer: () => setShowTransfer(true), onTransferHistory: () => setShowTransferHistory(true), profileName: profileName, taxes: taxes, bazarItems: bazarItems })),
-                tab === "timeline" && (React.createElement(Timeline, { transactions: dashTx, onOpenTx: openLedgerItem })),
+                tab === "timeline" && (React.createElement(Timeline, { transactions: transactions, onOpenTx: (t) => setEditingTx(t) })),
                 tab === "debts" && (React.createElement(DebtsView, { debts: debts, onOpenDebt: (d) => setEditingDebt(d), onAddDebt: () => setShowAddDebt(true) })),
                 tab === "family" && (React.createElement(FamilyHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
                 tab === "planning" && (React.createElement(FamilyPlanningHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
-                tab === "reports" && React.createElement(Reports, { transactions: dashTx, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
-                tab === "search" && (React.createElement(SearchView, { transactions: searchTx, accounts: accounts, onOpenTx: openLedgerItem, seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts, debts: [] }))),
+                tab === "reports" && React.createElement(Reports, { transactions: transactions, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
+                tab === "search" && (React.createElement(SearchView, { transactions: transactions, accounts: accounts, onOpenTx: (t) => setEditingTx(t), seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts, debts: debts }))),
             (tab === "dashboard" || tab === "timeline" || tab === "debts") && (React.createElement("button", { style: styles.fab, onClick: () => (tab === "debts" ? setShowAddDebt(true) : setShowAdd(true)), "aria-label": tab === "debts" ? "নতুন দেনা-পাওনা যোগ করুন" : "নতুন লেনদেন যোগ করুন" }, "+")),
             React.createElement(BottomNav, { tab: tab, setTab: setTab }),
             showAdd && (React.createElement(TransactionForm, { presetType: quickAddType, onClose: () => {
@@ -2244,14 +2142,14 @@ function App() {
                     setShowBudget(false);
                 }, onSaveCategoryBudgets: saveCategoryBudgets })),
             showCalendar && (React.createElement(CalendarModal, { specialDays: specialDays, onSaveSpecialDays: saveSpecialDays, onClose: () => closeMenuPanel(setShowCalendar), onRegisterBackHandler: (fn) => { calendarBackConsumedRef.current = fn; }, adminSpecialDays: adminSpecialDaysCloud })),
-            showAddDebt && (React.createElement(DebtForm, { getWalletBalance: (m, excludeDebtId) => walletBalanceFor(m, excludeDebtId), onClose: () => setShowAddDebt(false), onSave: (d) => {
+            showAddDebt && (React.createElement(DebtForm, { onClose: () => setShowAddDebt(false), onSave: (d) => {
                     addDebt(d);
                     setShowAddDebt(false);
                 } })),
             editingDebt && (React.createElement(DebtDetail, { debt: debts.find((d) => d.id === editingDebt.id) || editingDebt, onClose: () => setEditingDebt(null), onUpdate: (patch) => updateDebt(editingDebt.id, patch), onDelete: () => {
                     deleteDebt(editingDebt.id);
                     setEditingDebt(null);
-                }, onAddRepayment: (r) => addRepayment(editingDebt.id, r), onUpdateRepayment: (rid, patch) => updateRepayment(editingDebt.id, rid, patch), onDeleteRepayment: (rid) => deleteRepayment(editingDebt.id, rid), onRegisterBackHandler: (fn) => { debtDetailBackConsumedRef.current = fn; }, userAccounts: userAccounts, checkRepaymentBalance: checkRepaymentBalance, checkDynamicRepaymentBalance: checkDynamicRepaymentBalance, getWalletBalance: (m, excludeDebtId) => walletBalanceFor(m, excludeDebtId) })),
+                }, onAddRepayment: (r) => addRepayment(editingDebt.id, r), onUpdateRepayment: (rid, patch) => updateRepayment(editingDebt.id, rid, patch), onDeleteRepayment: (rid) => deleteRepayment(editingDebt.id, rid), onRegisterBackHandler: (fn) => { debtDetailBackConsumedRef.current = fn; }, userAccounts: userAccounts, checkRepaymentBalance: checkRepaymentBalance, checkDynamicRepaymentBalance: checkDynamicRepaymentBalance })),
             showSettings && (React.createElement(SettingsModal, { transactions: transactions, budget: budget, specialDays: specialDays, onSaveSpecialDays: saveSpecialDays, onClose: () => closeMenuPanel(setShowSettings), onEditBudget: () => {
                     setShowSettings(false);
                     setShowBudget(true);
@@ -2475,7 +2373,7 @@ function LockScreen({ pin, onUnlock, profileName }) {
                     press(String(BN_DIGITS.indexOf(d)));
             } }, d))))));
 }
-function Header({ transactions, debtAdjust, onSettings, tasks, onAddTask, onUpdateTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount, adminTasksCloud, completedAdminTaskIds, onToggleAdminTaskComplete }) {
+function Header({ transactions, onSettings, tasks, onAddTask, onUpdateTask, onToggleTask, onDeleteTask, onSetReminder, onOpenCalendar, profileName, onOpenMenu, onOpenNotifications, unreadCount, adminTasksCloud, completedAdminTaskIds, onToggleAdminTaskComplete }) {
     const [showTasks, setShowTasks] = useState(false);
     useBackOverlay(showTasks, () => setShowTasks(false));
     const [showTaskForm, setShowTaskForm] = useState(false);
@@ -2492,7 +2390,7 @@ function Header({ transactions, debtAdjust, onSettings, tasks, onAddTask, onUpda
     // drops out of the visible active list immediately.
     const activeTasks = tasks.filter((t) => !t.done);
     const activeAdminTasks = (adminTasksCloud || []).filter((t) => t.published !== false && !(completedAdminTaskIds || []).includes(t.id));
-    const balance = useMemo(() => transactions.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0) + (debtAdjust || 0), [transactions, debtAdjust]);
+    const balance = useMemo(() => transactions.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0), [transactions]);
     const doneCount = tasks.filter((t) => t.done).length;
     const submitTask = () => {
         if (!newTask.trim() || tasks.length >= MAX_TASKS)
@@ -2518,13 +2416,13 @@ function Header({ transactions, debtAdjust, onSettings, tasks, onAddTask, onUpda
     };
     return (React.createElement("header", { style: styles.header },
         React.createElement("div", { style: styles.headerPerf }, Array.from({ length: 14 }).map((_, i) => (React.createElement("span", { key: i, style: styles.perfDot })))),
-        React.createElement("button", { onClick: onOpenMenu, "aria-label": "\u09AE\u09C7\u09A8\u09C1", style: { position: "absolute", top: 14, left: 14, zIndex: 2, background: "rgba(255,255,255,0.12)", border: "none", borderRadius: 8, width: 32, height: 32, color: "var(--hk-text-on-dark)", fontSize: 16, lineHeight: "32px" } }, "\u2630"),
+        React.createElement("button", { onClick: onOpenMenu, "aria-label": "\u09AE\u09C7\u09A8\u09C1", style: { position: "absolute", top: "calc(14px + var(--hk-safe-top, 0px))", left: 14, zIndex: 2, background: "rgba(255,255,255,0.12)", border: "none", borderRadius: 8, width: 32, height: 32, color: "var(--hk-text-on-dark)", fontSize: 16, lineHeight: "32px" } }, "\u2630"),
         React.createElement("div", { style: styles.headerContent },
-            React.createElement("div", { style: { marginLeft: 40 } },
-                React.createElement("div", { style: styles.headerEyebrow }, dashboardTitle(profileName)),
-                React.createElement("div", { style: styles.headerBalanceLabel }, "\u09AC\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09B8"),
-                React.createElement("div", { style: Object.assign(Object.assign({}, styles.headerBalance), { color: balance < 0 ? "#E38477" : balance > 0 ? "#7FCB9D" : "var(--hk-text-on-dark)" }) }, formatTaka(balance, { sign: true, symbol: false }))),
-            React.createElement("div", { style: { position: "relative", display: "flex", gap: 8 } },
+            React.createElement("div", { style: { display: "contents" } },
+                React.createElement("div", { style: Object.assign(Object.assign({}, styles.headerEyebrow), { marginLeft: 40, gridColumn: 1, gridRow: 1 }) }, dashboardTitle(profileName)),
+                React.createElement("div", { style: Object.assign(Object.assign({}, styles.headerBalanceLabel), { marginLeft: 40, gridColumn: "1 / -1", gridRow: 2 }) }, "\u09AC\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09B8"),
+                React.createElement("div", { style: Object.assign(Object.assign({}, styles.headerBalance), { marginLeft: 40, gridColumn: "1 / -1", gridRow: 3, whiteSpace: "nowrap", color: balance < 0 ? "#E38477" : balance > 0 ? "#7FCB9D" : "var(--hk-text-on-dark)" }) }, formatTaka(balance, { sign: true, symbol: false }))),
+            React.createElement("div", { style: { position: "relative", display: "flex", gap: 8, gridColumn: 2, gridRow: 1 } },
                 React.createElement("button", { style: styles.iconLabelBtn, onClick: onOpenCalendar },
                     React.createElement("span", { style: styles.iconLabelIcon }, "\uD83D\uDCC5"),
                     React.createElement("span", { style: styles.iconLabelText }, "Calendar")),
@@ -2587,7 +2485,7 @@ function Header({ transactions, debtAdjust, onSettings, tasks, onAddTask, onUpda
                         showTaskForm && (React.createElement(TaskForm, { initial: editingTask, onClose: () => setShowTaskForm(false), onSave: (data) => { editingTask ? onUpdateTask(editingTask.id, data) : onAddTask(data); setShowTaskForm(false); } }))))))))));
 }
 /* ---------------- dashboard ---------------- */
-function Dashboard({ transactions, debtAdjust, budget, categoryBudgets, debts, accounts, onEditBudget, onOpenTx, onGoDebts, onGoReports, onQuickAdd, onTransfer, onTransferHistory, profileName, taxes, bazarItems }) {
+function Dashboard({ transactions, budget, categoryBudgets, debts, accounts, onEditBudget, onOpenTx, onGoDebts, onGoReports, onQuickAdd, onTransfer, onTransferHistory, profileName, taxes, bazarItems }) {
     const cats = useCategories();
     const today = todayStr();
     const thisMonthKey = monthKeyOf(today);
@@ -2614,14 +2512,12 @@ function Dashboard({ transactions, debtAdjust, budget, categoryBudgets, debts, a
                     monthIncome += t.amount;
                 else {
                     monthExpense += t.amount;
-                    if (!t.virtual)
-                        catTotals[t.category] = (catTotals[t.category] || 0) + t.amount;
+                    catTotals[t.category] = (catTotals[t.category] || 0) + t.amount;
                 }
             }
             if (inLastMonth && t.type === "expense") {
                 lastMonthExpense += t.amount;
-                if (!t.virtual)
-                    lastMonthCatTotals[t.category] = (lastMonthCatTotals[t.category] || 0) + t.amount;
+                lastMonthCatTotals[t.category] = (lastMonthCatTotals[t.category] || 0) + t.amount;
             }
             if (isToday) {
                 if (t.type === "income")
@@ -2641,7 +2537,7 @@ function Dashboard({ transactions, debtAdjust, budget, categoryBudgets, debts, a
             allIncome, allExpense, topCats, catTotals, lastMonthCatTotals, last7Expense,
         };
     }, [transactions, thisMonthKey, lastMonthKey, today, sevenDaysAgo, cats]);
-    const availableBalance = stats.allIncome - stats.allExpense + (debtAdjust || 0);
+    const availableBalance = stats.allIncome - stats.allExpense;
     const monthSavings = stats.monthIncome - stats.monthExpense;
     const budgetPct = budget > 0 ? Math.min(999, Math.round((stats.monthExpense / budget) * 100)) : null;
     const budgetLeft = budget - stats.monthExpense;
@@ -3372,6 +3268,10 @@ function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onChe
     const [date, setDate] = useState((initial === null || initial === void 0 ? void 0 : initial.date) || todayStr());
     const [note, setNote] = useState((initial === null || initial === void 0 ? void 0 : initial.note) || "");
     const [method, setMethod] = useState((initial === null || initial === void 0 ? void 0 : initial.method) || "cash");
+    // আয়ের মাধ্যম হিসেবে সরাসরি "ব্যাংক" দেওয়া যাবে না (ব্যাংক মানে নির্দিষ্ট অ্যাকাউন্ট — নিচের তালিকা থেকে বেছে নিন)।
+    // শুধু আগে থেকে "ব্যাংক" দিয়ে সেভ করা পুরনো আয় সম্পাদনার সময় সেটি দেখা যায়, যাতে ডেটা না ভাঙে।
+    const incomeBankLegacy = !!(initial && initial.type === "income" && initial.method === "bank");
+    const methodChoices = type === "income" && !incomeBankLegacy ? METHODS.filter((m) => m.key !== "bank") : METHODS;
     const [accountId, setAccountId] = useState((initial === null || initial === void 0 ? void 0 : initial.accountId) || "");
     const [err, setErr] = useState("");
     // archived categories stay out of the picker for *new* selections, but
@@ -3414,7 +3314,7 @@ function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onChe
     return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "লেনদেন সম্পাদনা" : "নতুন লেনদেন" },
         React.createElement("div", { style: styles.typeToggle },
             React.createElement("button", { onClick: () => setType("expense"), style: Object.assign(Object.assign({}, styles.typeToggleBtn), (type === "expense" ? { background: "var(--hk-danger-mid)", color: "var(--hk-text-on-dark)" } : {})) }, "\u09AC\u09CD\u09AF\u09AF\u09BC"),
-            React.createElement("button", { onClick: () => setType("income"), style: Object.assign(Object.assign({}, styles.typeToggleBtn), (type === "income" ? { background: "var(--hk-success-mid)", color: "var(--hk-text-on-dark)" } : {})) }, "\u0986\u09AF\u09BC")),
+            React.createElement("button", { onClick: () => { setType("income"); if (method === "bank" && !incomeBankLegacy) setMethod("cash"); }, style: Object.assign(Object.assign({}, styles.typeToggleBtn), (type === "income" ? { background: "var(--hk-success-mid)", color: "var(--hk-text-on-dark)" } : {})) }, "\u0986\u09AF\u09BC")),
         React.createElement("div", { style: styles.amountWrap },
             React.createElement("span", { style: styles.amountSign }, "\u09F3"),
             React.createElement("input", { style: styles.amountInput, type: "number", inputMode: "decimal", placeholder: "\u09E6", value: amount, onChange: (e) => setAmount(e.target.value) })),
@@ -3433,7 +3333,7 @@ function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onChe
         React.createElement("div", { style: styles.formLabel }, "\u09A4\u09BE\u09B0\u09BF\u0996"),
         React.createElement("input", { style: styles.textInput, type: "date", value: date, max: todayStr(), onChange: (e) => setDate(e.target.value) }),
         React.createElement("div", { style: styles.formLabel }, "\u09AE\u09BE\u09A7\u09CD\u09AF\u09AE"),
-        React.createElement("div", { style: styles.methodRow }, METHODS.map((m) => (React.createElement("button", { key: m.key, onClick: () => setMethod(m.key), style: Object.assign(Object.assign({}, styles.methodChip), (method === m.key ? styles.methodChipActive : {})) }, m.label)))),
+        React.createElement("div", { style: styles.methodRow }, methodChoices.map((m) => (React.createElement("button", { key: m.key, onClick: () => setMethod(m.key), style: Object.assign(Object.assign({}, styles.methodChip), (method === m.key ? styles.methodChipActive : {})) }, m.label)))),
         (userAccounts || []).filter((a) => a.active !== false).length > 0 && (React.createElement("div", null,
             React.createElement("div", { style: styles.formLabel }, "\u09A8\u09BF\u09B0\u09CD\u09A6\u09BF\u09B7\u09CD\u099F \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F (\u0990\u099A\u09CD\u099B\u09BF\u0995)"),
             React.createElement("select", { style: styles.textInput, value: accountId, onChange: (e) => setAccountId(e.target.value) },
