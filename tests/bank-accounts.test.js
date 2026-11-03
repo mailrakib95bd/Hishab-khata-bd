@@ -7,8 +7,8 @@ const src = fs.readFileSync(path.join(__dirname, "..", "js", "app", "app.js"), "
 const fn = (name) => { const a = src.indexOf("function " + name + "("); assert(a !== -1, name + " not found"); return src.slice(a, src.indexOf("\n}\n", a) + 3); };
 const cst = (name) => { const a = src.indexOf("const " + name + " ="); assert(a !== -1, name + " not found"); const b = src.indexOf("\n];", a); const c = src.indexOf(";\n", a); return src.slice(a, (src.slice(a, a + 40).includes("[") && b !== -1 && b < c + 400 ? b + 3 : c + 2)); };
 const ctx = {}; vm.createContext(ctx);
-vm.runInContext([cst("METHODS"), cst("toPaisa"), cst("hasEnough"), fn("computeAccountBalances"), fn("computeDynamicAccountBalances"), fn("legacyWalletBalance"), fn("dynamicWalletBalance"), fn("dashboardTransactions"), fn("debtCashEffect"),
-  "this.api = { METHODS, toPaisa, hasEnough, computeAccountBalances, computeDynamicAccountBalances, legacyWalletBalance, dynamicWalletBalance, dashboardTransactions, debtCashEffect };"].join("\n"), ctx);
+vm.runInContext([cst("METHODS"), cst("toPaisa"), cst("hasEnough"), fn("computeAccountBalances"), fn("computeDynamicAccountBalances"), fn("legacyWalletBalance"), fn("dynamicWalletBalance"),
+  "this.api = { METHODS, toPaisa, hasEnough, computeAccountBalances, computeDynamicAccountBalances, legacyWalletBalance, dynamicWalletBalance };"].join("\n"), ctx);
 const A = ctx.api;
 let passed = 0;
 const t = (name, f) => { try { f(); passed++; console.log("  \u2713", name); } catch (e) { console.error("  \u2717", name, "\n   ", e.message); process.exitCode = 1; } };
@@ -90,81 +90,26 @@ t("an overdrawn balance keeps its minus sign (it used to look like added money)"
   for (const f of ["app.js", "reports-search.js", "settings.js"]) { const s = fs.readFileSync(path.join(__dirname, "..", "js", "app", f), "utf8"); assert(!/formatTaka\((a|acc|headerStats)\.balance\)/.test(s), f + " still prints a balance with formatTaka"); }
 });
 
+console.log("method pickers");
+const debtsSrc = fs.readFileSync(path.join(__dirname, "..", "js", "app", "debts.js"), "utf8");
+t("income: the generic \"ব্যাংক\" method is not offered (only an old bank income keeps it when edited)", () => {
+  const a = src.indexOf("function TransactionForm("); const form = src.slice(a, src.indexOf("\n}\n", a));
+  assert(/methodChoices = type === "income" && !incomeBankLegacy \? METHODS\.filter\(\(m\) => m\.key !== "bank"\) : METHODS/.test(form));
+  assert(/methodChoices\.map\(\(m\)/.test(form), "the chips must use methodChoices");
+  assert(/setType\("income"\); if \(method === "bank" && !incomeBankLegacy\) setMethod\("cash"\)/.test(form), "switching to income must drop a chosen bank method");
+});
+t("debts: \"অন্য মাধ্যম\" is not a choice any more (but old records still display it)", () => {
+  assert(/\(initial && initial\.method === "other" \? DEBT_METHODS : METHODS\)\.map/.test(debtsSrc), "debt form must list METHODS only");
+  const m = /function methodLabel\(key\) \{[^}]*\}/.exec(src)[0]; assert(m.includes("DEBT_METHODS"), "the label lookup still knows \"other\" for old data");
+});
+console.log("header layout (phone font size / status bar)");
+t("the balance has its own row, never wraps, and the menu button + header clear the status bar", () => {
+  const st = fs.readFileSync(path.join(__dirname, "..", "js", "app", "styles.js"), "utf8");
+  assert(/--hk-safe-top: var\(--safe-area-inset-top, env\(safe-area-inset-top, 0px\)\)/.test(st), "one safe-top variable (Capacitor css var, then env())");
+  assert(/paddingTop: "var\(--hk-safe-top, 0px\)"/.test(st), "header padding");
+  assert(/headerContent: \{\s*display: "grid"/.test(st), "header content is a grid");
+  const h = src.slice(src.indexOf("function Header("), src.indexOf("\n}\n", src.indexOf("function Header(")));
+  assert(/gridRow: 3, whiteSpace: "nowrap"/.test(h), "balance on its own nowrap row"); assert(/top: "calc\(14px \+ var\(--hk-safe-top, 0px\)\)"/.test(h), "menu button below the status bar");
+});
 
-console.log("dashboard — bank-type named accounts are outside the total");
-{
-  const accs = [{ id: "dbbl", type: "bank" }, { id: "bk", type: "mfs" }];
-  const net = (list) => list.reduce((x, t) => x + (t.type === "income" ? t.amount : -t.amount), 0);
-  t("income/expense tagged to a bank account is not added to the dashboard; mfs accounts still count", () => {
-    const tx = [{ id: "a", type: "income", amount: 100000, accountId: "dbbl", date: "2026-10-01" }, { id: "b", type: "income", amount: 500, accountId: "bk", date: "2026-10-01" }, { id: "c", type: "income", amount: 200, date: "2026-10-01" }];
-    assert.strictEqual(net(A.dashboardTransactions(tx, [], accs)), 700);
-  });
-  t("wallet -> bank account shows as an expense; bank account -> wallet shows as income", () => {
-    const trs = [{ id: "x1", amount: 3000, fromMethod: "cash", toAccountId: "dbbl", date: "2026-10-02" }, { id: "x2", amount: 1000, fromAccountId: "dbbl", toMethod: "bkash", date: "2026-10-03" }];
-    const out = A.dashboardTransactions([{ id: "i", type: "income", amount: 5000, method: "cash" }], trs, accs);
-    assert.strictEqual(net(out), 5000 - 3000 + 1000);
-    assert.strictEqual(out.find((o) => o.transferId === "x2").category, "bank_withdraw");
-  });
-  t("bank -> bank, or no bank account at all, changes nothing", () => {
-    assert.strictEqual(A.dashboardTransactions([], [{ id: "y", amount: 5, fromAccountId: "dbbl", toAccountId: "dbbl2" }], [...accs, { id: "dbbl2", type: "bank" }]).length, 0);
-    const tx = [{ id: "z", type: "income", amount: 9 }];
-    assert.deepStrictEqual(A.dashboardTransactions(tx, [{ id: "q", amount: 1, fromMethod: "cash", toMethod: "bank" }], []), tx);
-  });
-}
-
-console.log("debts — lending takes money out of the wallet, getting it back puts it in");
-{
-  const lend = { trackBalance: true, id: "d1", type: "receivable", amount: 1000, method: "cash", repayments: [{ id: "r1", amount: 400, method: "cash" }] };
-  const borrow = { trackBalance: true, id: "d2", type: "payable", amount: 500, method: "bkash", repayments: [{ id: "r2", amount: 100, method: "bkash" }] };
-  t("lent money leaves the wallet; repayment received comes back", () => {
-    assert.strictEqual(wallet(A.computeAccountBalances([], { cash: 5000 }, [], [lend]), "cash"), 5000 - 1000 + 400);
-  });
-  t("borrowed money enters the wallet; repaying it leaves", () => {
-    assert.strictEqual(wallet(A.computeAccountBalances([], {}, [], [borrow]), "bkash"), 500 - 100);
-  });
-  t("the lend check sees the reduced balance, and editing ignores the debt's own old amount", () => {
-    const data = { accountOpening: { cash: 1000 }, debts: [{ trackBalance: true, id: "d3", type: "receivable", amount: 800, method: "cash", repayments: [] }] };
-    assert.strictEqual(A.legacyWalletBalance("cash", data), 200);
-    assert.strictEqual(A.legacyWalletBalance("cash", data, { debtId: "d3" }), 1000);
-  });
-  t("old debts (no trackBalance flag) keep the balances they always had", () => {
-    const old = [{ id: "old", type: "receivable", amount: 1000, method: "cash", repayments: [] }];
-    assert.strictEqual(wallet(A.computeAccountBalances([], { cash: 5000 }, [], old), "cash"), 5000);
-    assert.strictEqual(A.debtCashEffect(old, []), 0);
-  });
-  t('"other" or method-less debts touch no wallet and not the dashboard', () => {
-    const o = [{ trackBalance: true, id: "o", type: "receivable", amount: 700, method: "other", repayments: [{ id: "x", amount: 50, method: "other" }] }, { trackBalance: true, id: "n", type: "receivable", amount: 300, repayments: [] }];
-    assert.strictEqual(A.debtCashEffect(o, []), 0);
-    assert(A.computeAccountBalances([], { cash: 10 }, [], o).every((w) => w.key !== "cash" || w.balance === 10));
-  });
-  t("dashboard effect = -lent + received back + borrowed - repaid; bank-account repayments are left out", () => {
-    assert.strictEqual(A.debtCashEffect([lend, borrow], []), -1000 + 400 + 500 - 100);
-    const bankRep = { trackBalance: true, id: "d4", type: "receivable", amount: 100, method: "cash", repayments: [{ id: "r", amount: 100, accountId: "dbbl" }] };
-    assert.strictEqual(A.debtCashEffect([bankRep], [{ id: "dbbl", type: "bank" }]), -100);
-  });
-}
-console.log("ledger — debts and bank moves become real records everywhere");
-{
-  const D = [{ id: "d1", person: "রহিম", type: "receivable", amount: 1000, method: "cash", date: "2026-10-30", trackBalance: true, repayments: [{ id: "r1", amount: 300, method: "cash", date: "2026-10-31" }] },
-             { id: "d2", person: "করিম", type: "payable", amount: 500, method: "bkash", date: "2026-10-30", trackBalance: true, repayments: [] },
-             { id: "d0", person: "পুরনো", type: "receivable", amount: 9000, method: "cash", date: "2026-10-01", repayments: [{ id: "r0", amount: 100, method: "cash", date: "2026-10-02" }] }];
-  const net = (l) => l.reduce((x, e) => x + (e.type === "income" ? e.amount : -e.amount), 0);
-  t("lend/borrow/repayments appear as entries; old debt principal does not, its repayment does", () => {
-    const L = A.dashboardTransactions([], [], [], D);
-    assert.deepStrictEqual(L.map((e) => e.category).sort(), ["debt_borrow", "debt_lend", "debt_recv", "debt_recv"]);
-    assert.strictEqual(net(L), -1000 + 300 + 500 + 100);
-    assert(L.every((e) => e.virtual && e.debtId));
-  });
-  t("ledger total = wallet-based effect (debtCashEffect) — one source of truth", () => {
-    assert.strictEqual(net(A.dashboardTransactions([], [], [], D)), A.debtCashEffect(D, []));
-  });
-  t("search mode (all) keeps bank-account transactions and tags bank moves with the account", () => {
-    const accs = [{ id: "dbbl", type: "bank" }];
-    const tx = [{ id: "a", type: "income", amount: 50, accountId: "dbbl", date: "2026-10-01" }];
-    const trs = [{ id: "x", amount: 7, fromMethod: "cash", toAccountId: "dbbl", date: "2026-10-02" }];
-    assert.strictEqual(A.dashboardTransactions(tx, trs, accs, [], { all: true }).length, 2);
-    assert.strictEqual(A.dashboardTransactions(tx, trs, accs, [], { all: true }).find((e) => e.virtual).accountId, "dbbl");
-    assert.strictEqual(A.dashboardTransactions(tx, trs, accs, []).length, 1);
-  });
-}
 console.log(`\n${passed} passed${process.exitCode ? " — WITH FAILURES" : ""}`);
