@@ -292,8 +292,28 @@ window.FB = {
   // edit ANY member's name/photo/relation/phone (not just role/permissions)
   async updateFamilyMember(familyId, memberUid, patch) {
     const allowed = {};
+    // শুধু এই ফিল্ডগুলো বদলায় — uid ও email কখনোই নয়, তাই সদস্যের পরিচয় অপরিবর্তিত থাকে
     ["role", "permissions", "relation", "name", "photoURL", "phone"].forEach((k) => { if (k in patch) allowed[k] = patch[k]; });
+    if ("name" in allowed) {
+      const n = String(allowed.name || "").replace(/\s+/g, " ").trim();
+      if (!n) throw new Error("নাম খালি রাখা যাবে না");
+      allowed.name = n.slice(0, 60);
+    }
     await updateDoc(doc(db, "families", familyId, "members", memberUid), { ...allowed, updatedAt: Date.now() });
+  },
+
+  // আমার নাম বদলালে আমি যে সব পরিবারে আছি সেখানকার সদস্য-তথ্যেও একই নতুন নাম যায় (সবাই লাইভ দেখে)।
+  // নাম ছাড়া আর কিছু ছোঁয়া হয় না। ব্যর্থ হলেও মূল কাজ আটকায় না (best-effort)।
+  async syncMyNameToFamilies(name) {
+    const u = auth.currentUser;
+    const n = String(name || "").replace(/\s+/g, " ").trim().slice(0, 60);
+    if (!u || !n) return 0;
+    let done = 0;
+    const fams = await this.myFamilies();
+    for (const f of fams) {
+      try { await updateDoc(doc(db, "families", f.id, "members", u.uid), { name: n, updatedAt: Date.now() }); done++; } catch (e) { /* ignore this family */ }
+    }
+    return done;
   },
 
   // remove someone (manager) or leave (memberUid === me): member doc + memberUids in one batch
@@ -340,9 +360,18 @@ window.FB = {
   async acceptInvitation(invite) {
     const u = auth.currentUser;
     const now = Date.now();
+    const memberRef = doc(db, "families", invite.familyId, "members", u.uid);
+    // আগে থেকেই সদস্য হলে (যেমন একই ইমেইলে দ্বিতীয় invitation) নতুন সদস্য তৈরি বা আগের তথ্য ওভাররাইট হবে না —
+    // শুধু invitation-টি গৃহীত হিসেবে বন্ধ হবে। এক ইমেইল = এক সদস্য।
+    let already = false;
+    try { already = (await getDoc(memberRef)).exists(); } catch (e) { already = false; }
+    if (already) {
+      await updateDoc(doc(db, "invitations", invite.id), { status: "accepted", respondedAt: now });
+      return;
+    }
     const batch = writeBatch(db);
-    batch.set(doc(db, "families", invite.familyId, "members", u.uid), {
-      uid: u.uid, name: u.displayName || (u.email || "").split("@")[0], email: u.email || "",
+    batch.set(memberRef, {
+      uid: u.uid, name: u.displayName || (u.email || "").split("@")[0], email: (u.email || "").toLowerCase(),
       photoURL: u.photoURL || null, relation: invite.relation, role: invite.role,
       permissions: invite.permissions, status: "active", joinedAt: now, updatedAt: now, inviteId: invite.id,
       phone: String(invite.phone || "").trim().slice(0, 20),
@@ -381,8 +410,15 @@ window.FB = {
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   },
   async addFamilyCategory(familyId, { name, icon, group }) {
-    const ref = await addDoc(collection(db, "families", familyId, "categories"), { name: name.trim(), icon: icon || "🏷️", group: group || "grocery", createdAt: Date.now() });
+    const me = auth.currentUser;
+    const ref = await addDoc(collection(db, "families", familyId, "categories"), { name: name.trim(), icon: icon || "🏷️", group: group || "grocery", createdBy: me ? me.uid : null, createdAt: Date.now() });
     return ref.id;
+  },
+  // live list — a category made by any member shows on everyone's screen at once
+  subscribeFamilyCategories(familyId, cb) {
+    return onSnapshot(collection(db, "families", familyId, "categories"), (snap) => {
+      cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, () => {});
   },
   async updateFamilyCategory(familyId, id, { name, icon }) {
     await updateDoc(doc(db, "families", familyId, "categories", id), { name: name.trim(), icon: icon || "🏷️", updatedAt: Date.now() });
