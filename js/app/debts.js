@@ -82,14 +82,17 @@ function DebtsView({ debts, onOpenDebt, onAddDebt }) {
                     React.createElement("div", { style: { fontSize: 10.5, color: STATUS_COLOR[status] } }, STATUS_LABEL[status]))));
         })))));
 }
-function DebtForm({ initial, onClose, onSave, onDelete }) {
+function DebtForm({ initial, onClose, onSave, onDelete, userAccounts, checkPrincipalBalance }) {
     const [person, setPerson] = useState((initial === null || initial === void 0 ? void 0 : initial.person) || "");
     const [type, setType] = useState((initial === null || initial === void 0 ? void 0 : initial.type) || "receivable");
     const [amount, setAmount] = useState(initial ? String(initial.amount) : "");
     const [date, setDate] = useState((initial === null || initial === void 0 ? void 0 : initial.date) || todayStr());
     const [time, setTime] = useState((initial === null || initial === void 0 ? void 0 : initial.time) || nowTimeStr());
     const [dueDate, setDueDate] = useState((initial === null || initial === void 0 ? void 0 : initial.dueDate) || "");
-    const [method, setMethod] = useState((initial === null || initial === void 0 ? void 0 : initial.method) || "cash");
+    // "m:cash" = সাধারণ মাধ্যম, "a:<id>" = নামযুক্ত অ্যাকাউন্ট — পরিশোধ ফর্মের মতোই একটি ড্রপডাউন।
+    // মূল ধারও Wallet-এর সঙ্গে যুক্ত: ধার নিলে এখানে টাকা ঢোকে, ধার দিলে এখান থেকে বেরোয়।
+    const [walletSel, setWalletSel] = useState(() => (initial && initial.accountId) ? `a:${initial.accountId}` : `m:${(initial && initial.method) || "cash"}`);
+    const activeAccounts = (userAccounts || []).filter((a) => a.active !== false || (initial && initial.accountId === a.id));
     const [note, setNote] = useState((initial === null || initial === void 0 ? void 0 : initial.note) || "");
     const [err, setErr] = useState("");
     const handleSave = () => {
@@ -102,6 +105,26 @@ function DebtForm({ initial, onClose, onSave, onDelete }) {
             setErr("সঠিক পরিমাণ লিখুন");
             return;
         }
+        const reps = (initial && initial.repayments) || [];
+        if (initial && reps.length > 0) {
+            if (type !== initial.type) {
+                setErr("পরিশোধ যোগ করা থাকলে ধরন (পাওনা/দেনা) বদলানো যাবে না");
+                return;
+            }
+            const paid = reps.reduce((s, r) => s + r.amount, 0);
+            if (num < paid) {
+                setErr(`এ পর্যন্ত ${formatTaka(paid)} পরিশোধ হয়েছে — এর কম পরিমাণ লেখা যাবে না`);
+                return;
+            }
+        }
+        const isAcct = walletSel.startsWith("a:");
+        const method = isAcct ? null : walletSel.slice(2);
+        const accountId = isAcct ? walletSel.slice(2) : null;
+        // ধার দিলে (পাওনা) আসল টাকা বেরোয় — উৎসে এত টাকা আছে কিনা দেখা হয়
+        if (checkPrincipalBalance && !checkPrincipalBalance(type, method, accountId, num, initial ? initial.id : null)) {
+            setErr("⚠️ এই মাধ্যম/অ্যাকাউন্টে এত টাকা নেই");
+            return;
+        }
         onSave({
             person: person.trim(),
             type,
@@ -110,6 +133,7 @@ function DebtForm({ initial, onClose, onSave, onDelete }) {
             time: time || null,
             dueDate: dueDate || null,
             method,
+            accountId,
             note: note.trim(),
         });
     };
@@ -128,8 +152,10 @@ function DebtForm({ initial, onClose, onSave, onDelete }) {
             React.createElement("input", { style: styles.textInput, type: "time", value: time, onChange: (e) => setTime(e.target.value) })),
         React.createElement("div", { style: styles.formLabel }, "\u09AB\u09C7\u09B0\u09A4 \u09A6\u09C7\u0993\u09AF\u09BC\u09BE\u09B0 \u09B8\u09AE\u09CD\u09AD\u09BE\u09AC\u09CD\u09AF \u09A4\u09BE\u09B0\u09BF\u0996 (\u0990\u099A\u09CD\u099B\u09BF\u0995)"),
         React.createElement("input", { style: styles.textInput, type: "date", value: dueDate, onChange: (e) => setDueDate(e.target.value) }),
-        React.createElement("div", { style: styles.formLabel }, "\u09AE\u09BE\u09A7\u09CD\u09AF\u09AE"),
-        React.createElement("div", { style: styles.methodRow }, (initial && initial.method === "other" ? DEBT_METHODS : METHODS).map((mth) => (React.createElement("button", { key: mth.key, onClick: () => setMethod(mth.key), style: Object.assign(Object.assign({}, styles.methodChip), (method === mth.key ? styles.methodChipActive : {})) }, mth.label)))),
+        React.createElement("div", { style: styles.formLabel }, type === "payable" ? "কোন মাধ্যম/অ্যাকাউন্টে টাকা পেলাম" : "কোন মাধ্যম/অ্যাকাউন্ট থেকে টাকা দিলাম"),
+        React.createElement("select", { style: styles.textInput, value: walletSel, onChange: (e) => setWalletSel(e.target.value) },
+            React.createElement("optgroup", { label: "মাধ্যম" }, (initial && initial.method === "other" ? DEBT_METHODS : METHODS).map((m) => React.createElement("option", { key: `m:${m.key}`, value: `m:${m.key}` }, m.label))),
+            activeAccounts.length > 0 && React.createElement("optgroup", { label: "অ্যাকাউন্ট" }, activeAccounts.map((a) => React.createElement("option", { key: `a:${a.id}`, value: `a:${a.id}` }, a.name)))),
         React.createElement("div", { style: styles.formLabel }, "\u09A8\u09CB\u099F / \u0995\u09BE\u09B0\u09A3 (\u0990\u099A\u09CD\u099B\u09BF\u0995)"),
         React.createElement("input", { style: styles.textInput, type: "text", placeholder: "\u09AF\u09C7\u09AE\u09A8: \u0995\u09B0\u099C\u09C7 \u09B9\u09BE\u09B8\u09BE\u09A8\u09BE", value: note, onChange: (e) => setNote(e.target.value) }),
         err ? React.createElement("div", { style: styles.formErr }, err) : null,
@@ -137,7 +163,7 @@ function DebtForm({ initial, onClose, onSave, onDelete }) {
             onDelete ? React.createElement("button", { style: styles.deleteBtn, onClick: onDelete }, "\u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8") : null,
             React.createElement("button", { style: styles.saveBtn, onClick: handleSave }, "\u09B8\u0982\u09B0\u0995\u09CD\u09B7\u09A3 \u0995\u09B0\u09C1\u09A8"))));
 }
-function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onUpdateRepayment, onDeleteRepayment, onRegisterBackHandler, userAccounts, checkRepaymentBalance, checkDynamicRepaymentBalance }) {
+function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onUpdateRepayment, onDeleteRepayment, onRegisterBackHandler, userAccounts, checkRepaymentBalance, checkDynamicRepaymentBalance, checkPrincipalBalance }) {
     const [showEdit, setShowEdit] = useState(false);
     const [showRepay, setShowRepay] = useState(false);
     const [repayAmount, setRepayAmount] = useState("");
@@ -270,7 +296,7 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onUpdat
         }
     };
     if (showEdit) {
-        return (React.createElement(DebtForm, { initial: debt, onClose: () => setShowEdit(false), onSave: (patch) => {
+        return (React.createElement(DebtForm, { initial: debt, userAccounts: userAccounts, checkPrincipalBalance: checkPrincipalBalance, onClose: () => setShowEdit(false), onSave: (patch) => {
                 onUpdate(patch);
                 setShowEdit(false);
             }, onDelete: () => {
@@ -300,7 +326,7 @@ function DebtDetail({ debt, onClose, onUpdate, onDelete, onAddRepayment, onUpdat
             formatDateBn(debt.date).full,
             debt.time ? `, ${formatTimeBn(debt.time)}` : "",
             " \u09A4\u09BE\u09B0\u09BF\u0996\u09C7 ",
-            methodLabel(debt.method),
+            debt.accountId ? (((userAccounts || []).find((a) => a.id === debt.accountId) || {}).name || "মুছে ফেলা অ্যাকাউন্ট") : methodLabel(debt.method),
             "-\u098F",
             debt.dueDate ? ` · ফেরতের সম্ভাব্য তারিখ: ${formatDateBn(debt.dueDate).full}` : "",
             debt.note ? ` · কারণ: ${debt.note}` : ""),

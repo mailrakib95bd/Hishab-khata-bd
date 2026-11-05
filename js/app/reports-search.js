@@ -10,7 +10,7 @@
 
 /* ---------------- timeline ---------------- */
 function Timeline({ transactions, onOpenTx }) {
-    const [filter, setFilter] = useState("all"); // all | income | expense
+    const [filter, setFilter] = useState("all"); // all | income | expense | debt
     const today = todayStr();
     const windowStart = shiftDate(today, -6); // last 7 days including today
     const now = new Date();
@@ -22,8 +22,8 @@ function Timeline({ transactions, onOpenTx }) {
                 allIncome += t.amount;
             else
                 allExpense += t.amount;
-            if (t.date === today && t.type === "expense")
-                todayExpense += t.amount;
+            if (t.date === today && t.type === "expense" && !t.isDebtEntry)
+                todayExpense += t.amount; // ধার দেওয়া/পরিশোধ "আজ খরচ"-এ ধরা হয় না
         }
         return { balance: allIncome - allExpense, todayExpense };
     }, [transactions, today]);
@@ -47,7 +47,9 @@ function Timeline({ transactions, onOpenTx }) {
             .map(([date, items]) => {
             const dayNet = items.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0);
             const dayEndBalance = items[items.length - 1].runningBalance;
-            const shown = filter === "all" ? items : items.filter((t) => t.type === filter);
+            const shown = filter === "all" ? items
+                : filter === "debt" ? items.filter((t) => t.isDebtEntry)
+                    : items.filter((t) => t.type === filter && !t.isDebtEntry);
             return { date, items: [...shown].reverse(), dayNet, dayEndBalance };
         })
             .filter((g) => g.items.length > 0);
@@ -67,6 +69,7 @@ function Timeline({ transactions, onOpenTx }) {
             { key: "all", label: "সব" },
             { key: "income", label: "আয়" },
             { key: "expense", label: "ব্যয়" },
+            { key: "debt", label: "দেনা-পাওনা" },
         ].map((f) => (React.createElement("button", { key: f.key, onClick: () => setFilter(f.key), style: Object.assign(Object.assign({}, styles.rangeChip), (filter === f.key ? styles.rangeChipActive : {})) }, f.label)))),
         groups.length === 0 ? (React.createElement(EmptyState, { text: "\u0997\u09A4 \u09ED \u09A6\u09BF\u09A8\u09C7 \u09A6\u09C7\u0996\u09BE\u09A8\u09CB\u09B0 \u09AE\u09A4\u09CB \u0995\u09CB\u09A8\u09CB \u09B2\u09C7\u09A8\u09A6\u09C7\u09A8 \u09A8\u09C7\u0987\u0964" })) : (groups.map((g) => {
             const gDateInfo = formatDateBn(g.date);
@@ -199,7 +202,23 @@ function Reports({ transactions, categoryBudgets, budget, onSearch }) {
     const [start, end] = rangeToDates(range);
     const [showReview, setShowReview] = useState(false);
     useBackOverlay(showReview, () => setShowReview(false));
-    const filtered = useMemo(() => transactions.filter((t) => t.date >= start && t.date <= end), [transactions, start, end]);
+    // ধার নেওয়া আয় নয়, ধার দেওয়া খরচ নয় — আয়/ব্যয়/খাত/বাজেটের হিসাব শুধু আসল লেনদেনে;
+    // দেনা-পাওনার নগদ প্রবাহ নিচে আলাদা কার্ডে দেখানো হয়।
+    const ledgerInRange = useMemo(() => transactions.filter((t) => t.date >= start && t.date <= end), [transactions, start, end]);
+    const filtered = useMemo(() => ledgerInRange.filter((t) => !t.isDebtEntry), [ledgerInRange]);
+    const debtFlow = useMemo(() => {
+        let inflow = 0, outflow = 0, count = 0;
+        for (const t of ledgerInRange) {
+            if (!t.isDebtEntry)
+                continue;
+            count++;
+            if (t.type === "income")
+                inflow += t.amount;
+            else
+                outflow += t.amount;
+        }
+        return { inflow, outflow, net: inflow - outflow, count };
+    }, [ledgerInRange]);
     const income = filtered.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
     const expense = filtered.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
     const saved = income - expense;
@@ -233,7 +252,7 @@ function Reports({ transactions, categoryBudgets, budget, onSearch }) {
         const curPrefix = range;
         const prevPrefix = `${prevY}-${String(prevM + 1).padStart(2, "0")}`;
         for (const t of transactions) {
-            if (t.type !== "expense")
+            if (t.type !== "expense" || t.isDebtEntry)
                 continue;
             if (t.date.startsWith(curPrefix)) {
                 const day = parseInt(t.date.slice(8, 10), 10);
@@ -301,6 +320,18 @@ function Reports({ transactions, categoryBudgets, budget, onSearch }) {
                 React.createElement("b", null,
                     toBnDigits(savingRate),
                     "%"))),
+        debtFlow.count > 0 && (React.createElement("div", { style: styles.summaryCard },
+            React.createElement("div", { style: Object.assign(Object.assign({}, styles.summaryRow), { fontWeight: 700 }) }, "দেনা-পাওনা (এই সময়ে)"),
+            React.createElement("div", { style: styles.summaryRow },
+                React.createElement("span", null, "ধার নেওয়া / ফেরত পাওয়ায় ঢুকেছে"),
+                React.createElement("span", { style: { color: "var(--hk-success)", fontFamily: "'JetBrains Mono', monospace" } }, formatTaka(debtFlow.inflow))),
+            React.createElement("div", { style: styles.summaryRow },
+                React.createElement("span", null, "ধার দেওয়া / পরিশোধে বেরিয়েছে"),
+                React.createElement("span", { style: { color: "var(--hk-danger)", fontFamily: "'JetBrains Mono', monospace" } }, formatTaka(debtFlow.outflow))),
+            React.createElement("div", { style: styles.summaryDivider }),
+            React.createElement("div", { style: styles.summaryRow },
+                React.createElement("span", { style: { fontWeight: 700 } }, "Wallet-এ নিট প্রভাব"),
+                React.createElement("span", { style: { fontWeight: 700, color: debtFlow.net >= 0 ? "var(--hk-success)" : "var(--hk-danger)", fontFamily: "'JetBrains Mono', monospace" } }, formatTaka(debtFlow.net, { sign: true }))))),
         React.createElement("div", { style: styles.sectionTitle }, "\u0986\u09AF\u09BC \u09AC\u09A8\u09BE\u09AE \u09AC\u09CD\u09AF\u09AF\u09BC"),
         React.createElement("div", { style: styles.chartCard },
             React.createElement(IncomeExpenseBarChart, { income: income, expense: expense })),
@@ -400,40 +431,6 @@ function SearchView({ transactions, onOpenTx, seed, familyMembers, userAccounts,
             .sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : b.createdAt - a.createdAt));
     }, [transactions, q, type, method, category, familyMemberId, accountId, dateFrom, dateTo, amountMin, amountMax, cats]);
     const totalAmount = useMemo(() => results.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0), [results]);
-    // debt repayments shown as their own clearly-labeled, separate section —
-    // never merged into `results`/`totalAmount` above. They are NOT
-    // transactions and must never be counted as income/expense; this is a
-    // read-only derived view over `debts`, nothing is written anywhere.
-    const repaymentResults = useMemo(() => {
-        const query = q.trim().toLowerCase();
-        const min = parseFloat(amountMin);
-        const max = parseFloat(amountMax);
-        const rows = [];
-        (debts || []).forEach((d) => {
-            (d.repayments || []).forEach((r) => {
-                if (method !== "all" && r.method !== method)
-                    return;
-                if (accountId !== "all" && r.accountId !== accountId)
-                    return;
-                if (dateFrom && r.date < dateFrom)
-                    return;
-                if (dateTo && r.date > dateTo)
-                    return;
-                if (!isNaN(min) && r.amount < min)
-                    return;
-                if (!isNaN(max) && r.amount > max)
-                    return;
-                if (query) {
-                    const hay = `${d.person} ${r.note || ""}`.toLowerCase();
-                    if (!hay.includes(query))
-                        return;
-                }
-                rows.push({ id: r.id, debtType: d.type, person: d.person, amount: r.amount, date: r.date, time: r.time, note: r.note, method: r.method, accountId: r.accountId });
-            });
-        });
-        return rows.sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : 0));
-    }, [debts, q, method, accountId, dateFrom, dateTo, amountMin, amountMax]);
-    const repaymentAccountLabel = (r) => r.accountId ? (((userAccounts || []).find((a) => a.id === r.accountId) || {}).name || "মুছে ফেলা অ্যাকাউন্ট") : methodLabel(r.method);
     const applyQuickDate = (range) => {
         const today = todayStr();
         if (range === "today") {
@@ -491,13 +488,5 @@ function SearchView({ transactions, onOpenTx, seed, familyMembers, userAccounts,
             toBnDigits(results.length),
             "\u099F\u09BF \u09AB\u09B2\u09BE\u09AB\u09B2",
             results.length > 0 ? ` · নিট ${formatTaka(totalAmount, { sign: true })}` : ""),
-        results.length === 0 ? (React.createElement(EmptyState, { text: "\u0995\u09CB\u09A8\u09CB \u09B2\u09C7\u09A8\u09A6\u09C7\u09A8 \u09AA\u09BE\u0993\u09AF\u09BC\u09BE \u09AF\u09BE\u09AF\u09BC\u09A8\u09BF\u0964" })) : (React.createElement("div", { style: styles.txList }, results.map((t) => (React.createElement(TxRow, { key: t.id, tx: t, onClick: () => onOpenTx(t), showMethod: true, showDate: true }))))),
-        repaymentResults.length > 0 && (React.createElement("div", { style: { marginTop: 18 } },
-            React.createElement("div", { style: styles.resultCount }, "\u09A6\u09C7\u09A8\u09BE-\u09AA\u09BE\u0993\u09A8\u09BE\u09B0 \u09AA\u09B0\u09BF\u09B6\u09CB\u09A7 (", toBnDigits(repaymentResults.length), "\u099F\u09BF)"),
-            React.createElement("div", { style: styles.txList }, repaymentResults.map((r) => (React.createElement("div", { key: r.id, style: styles.txRow },
-                React.createElement("div", { style: styles.txMid },
-                    React.createElement("div", { style: styles.txCat }, r.person, " \u2014 ", r.debtType === "receivable" ? "আদায়" : "পরিশোধ"),
-                    r.note ? React.createElement("div", { style: styles.txNote }, r.note) : null,
-                    React.createElement("div", { style: styles.txMeta }, formatDateBn(r.date).full, " \u00B7 ", repaymentAccountLabel(r))),
-                React.createElement("div", { style: Object.assign(Object.assign({}, styles.txAmount), { color: r.debtType === "receivable" ? "var(--hk-success)" : "var(--hk-danger)" }) }, formatTaka(r.amount, { sign: true }))))))))));
+        results.length === 0 ? (React.createElement(EmptyState, { text: "\u0995\u09CB\u09A8\u09CB \u09B2\u09C7\u09A8\u09A6\u09C7\u09A8 \u09AA\u09BE\u0993\u09AF\u09BC\u09BE \u09AF\u09BE\u09AF\u09BC\u09A8\u09BF\u0964" })) : (React.createElement("div", { style: styles.txList }, results.map((t) => (React.createElement(TxRow, { key: t.id, tx: t, onClick: () => onOpenTx(t), showMethod: true, showDate: true })))))));
 }
