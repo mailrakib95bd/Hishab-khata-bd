@@ -273,9 +273,16 @@ service cloud.firestore {
       allow delete: if signedIn() && request.auth.uid == resource.data.invitedBy;
     }
 
+    // ক্যাটাগরি: পরিবারের যেকোনো সদস্য (viewer বাদে — অর্থাৎ Admin ও User উভয়েই) নতুন ক্যাটাগরি
+    // বানাতে পারে এবং সবাই তা দেখে। বদলানো/মুছা শুধু মালিক-এডমিন অথবা যে বানিয়েছে সে।
     match /families/{familyId}/categories/{categoryId} {
       allow read: if isMember(familyId);
-      allow write: if isOwnerOrAdmin(familyId);
+      allow create: if canWrite(familyId) &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 40;
+      allow update, delete: if isOwnerOrAdmin(familyId) ||
+        (canWrite(familyId) && resource.data.createdBy == request.auth.uid);
     }
 
     // shared product catalogue — carries NO prices (prices live in the
