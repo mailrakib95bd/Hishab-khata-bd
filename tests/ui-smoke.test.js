@@ -253,12 +253,15 @@ async function boot(userUid, extra) {
   { const tel = find(tree, (n) => n.host === "a" && String(n.props.href || "").startsWith("tel:")); assert(tel.length >= 1, "a call button for the other member (phone saved on the member screen)"); }
   ok("list sheet: note, creator, shopper, progress, and a call button to the other member");
   has("➕ পণ্য যোগ করুন"); ok("the owner/admin can manage every list, including one made by someone else");
-  // tick চাল -> কেনা হয়েছে but no price yet
-  { const cb = find(tree, (n) => n.host === "button" && n.props.role === "checkbox" && String(n.props["aria-label"]).startsWith("চাল"))[0]; assert(cb, "checkbox"); cb.props.onClick(); await tick(8); }
-  { const c = lastCall("updateShoppingItem"); assert(c && c[3] === "i1" && c[4].status === "bought" && c[4].actualUnitPrice === null && c[5].purchased === 1 && c[5].incompletePrice === 1, JSON.stringify(c && c[4])); }
-  has("প্রকৃত দাম দেওয়া হয়নি"); ok("ticking a product marks it কেনা হয়েছে; with no price entered it is flagged and NOT counted in the actual total");
-  await clickAria("চাল — বিস্তারিত"); has("পণ্য আপডেট"); await setv("70", "68"); await clickExact("সংরক্ষণ করুন"); await tick(8);
-  { const c = lastCall("updateShoppingItem"); assert(c[4].actualUnitPrice === 68 && c[5].actualTotal === 340 && c[5].incompletePrice === 0, JSON.stringify(c[4]) + JSON.stringify(c[5])); }
+  // the per-product checkbox is gone: a product can only become কেনা হয়েছে from its own sheet, with a price
+  assert(find(tree, (n) => n.host === "button" && n.props.role === "checkbox").length === 0, "no checkbox next to products");
+  ok("no checkbox next to the products in the shopping list");
+  await clickAria("চাল — বিস্তারিত"); has("পণ্য আপডেট"); await pickStatus("কেনা হয়েছে"); await clickExact("সংরক্ষণ করুন"); await tick(8);
+  has("পণ্যের মূল্য লিখুন");
+  { const c = lastCall("updateShoppingItem"); assert(!c || c[3] !== "i1" || c[4].status !== "bought", "must NOT save কেনা হয়েছে without a price"); }
+  ok("কেনা হয়েছে without a price is refused with 'পণ্যের মূল্য লিখুন' and nothing is saved");
+  await setv("70", "68"); await clickExact("সংরক্ষণ করুন"); await tick(8);
+  { const c = lastCall("updateShoppingItem"); assert(c[3] === "i1" && c[4].status === "bought" && c[4].actualUnitPrice === 68 && c[5].actualTotal === 340 && c[5].incompletePrice === 0, JSON.stringify(c[4]) + JSON.stringify(c[5])); }
   has("340"); ok("actual price 68 × 5 kg = 340 is computed and saved (estimated 350 stays separate)");
   await clickAria("মাছ — বিস্তারিত"); await pickStatus("বাজারে পাওয়া যায়নি"); await setTextarea("যেমন: আজকে বাজারে মাছ ছিল না।", "আজকে মাছ ছিল না"); await clickExact("সংরক্ষণ করুন"); await tick(8);
   { const c = lastCall("updateShoppingItem"); assert(c[3] === "i3" && c[4].status === "not_found" && c[4].reason === "আজকে মাছ ছিল না" && c[5].notFound === 1, JSON.stringify(c[4])); }

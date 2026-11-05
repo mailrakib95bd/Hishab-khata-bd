@@ -84,16 +84,23 @@ t("finishing with undecided items = আংশিক সম্পন্ন, every
 });
 
 console.log("status update by the shopper (spec §6)");
-t("কেনা হয়েছে may be saved with or without the price; a bad price is rejected", () => {
+t("কেনা হয়েছে can NOT be saved without a price; a bad price is rejected", () => {
   const it = mk({});
   const ok = C.validateStatusUpdate(it, { status: "bought", actualUnitPrice: "65", actualQuantity: "" }); assert(ok.ok); assert.strictEqual(ok.patch.actualUnitPrice, 65); assert.strictEqual(ok.patch.actualQuantity, null);
-  assert(C.validateStatusUpdate(it, { status: "bought", actualUnitPrice: "" }).ok);
+  const noPrice = C.validateStatusUpdate(it, { status: "bought", actualUnitPrice: "" });
+  assert(!noPrice.ok); assert.strictEqual(noPrice.errors.actualUnitPrice, "পণ্যের মূল্য লিখুন");
+  assert.strictEqual(C.validateStatusUpdate(it, { status: "bought" }).errors.actualUnitPrice, "পণ্যের মূল্য লিখুন");
   assert(C.validateStatusUpdate(it, { status: "bought", actualUnitPrice: "x" }).errors.actualUnitPrice);
   assert(C.validateStatusUpdate(it, { status: "bought", actualQuantity: "0" }).errors.actualQuantity);
 });
 t("পাওয়া যায়নি / দাম বেশি keep the reason; price fields are cleared", () => {
   const r = C.validateStatusUpdate(mk({}), { status: "not_found", reason: "আজকে বাজারে মাছ ছিল না।", actualUnitPrice: "99" });
   assert(r.ok); assert.strictEqual(r.patch.reason, "আজকে বাজারে মাছ ছিল না।"); assert.strictEqual(r.patch.actualUnitPrice, null);
+});
+t("বিকল্প পণ্য needs a price too; a list with an unpriced bought item can't be completed", () => {
+  assert.strictEqual(C.validateStatusUpdate(mk({}), { status: "alternative", alternative: { name: "ইলিশ", quantity: "1", unitPrice: "" } }).errors.altUnitPrice, "পণ্যের মূল্য লিখুন");
+  assert(!C.canCompleteList(C.listStats([Object.assign(mk({}), { status: "bought", actualUnitPrice: null })])));
+  assert(C.canCompleteList(C.listStats([Object.assign(mk({}), { status: "bought", actualUnitPrice: 50 })])));
 });
 t("বিকল্প পণ্য needs a name; its quantity and price are saved", () => {
   assert(C.validateStatusUpdate(mk({}), { status: "alternative", alternative: { name: " " } }).errors.altName);
