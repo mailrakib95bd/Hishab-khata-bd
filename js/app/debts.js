@@ -403,7 +403,8 @@ function TransferForm({ initial, onClose, onSave, onDelete, onCheckBalance, onCh
     // Editing seeds from whichever side each field actually used —
     // accountId takes precedence when present, exactly mirroring how
     // TransferHistoryModal decides which label to show.
-    const activeAccounts = (userAccounts || []).filter((a) => a.active !== false);
+    // সম্পাদনার সময় এই স্থানান্তরের অ্যাকাউন্ট নিষ্ক্রিয় হলেও তালিকায় থাকে (নইলে ড্রপডাউন ফাঁকা দেখাতো)
+    const activeAccounts = (userAccounts || []).filter((a) => a.active !== false || (initial && (initial.fromAccountId === a.id || initial.toAccountId === a.id)));
     const selFor = (accId, method, fallback) => accId ? `a:${accId}` : method ? `m:${method}` : fallback;
     const [fromSel, setFromSel] = useState(() => selFor(initial === null || initial === void 0 ? void 0 : initial.fromAccountId, initial === null || initial === void 0 ? void 0 : initial.fromMethod, "m:cash"));
     const [toSel, setToSel] = useState(() => selFor(initial === null || initial === void 0 ? void 0 : initial.toAccountId, initial === null || initial === void 0 ? void 0 : initial.toMethod, "m:bank"));

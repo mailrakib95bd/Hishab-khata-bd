@@ -9,7 +9,9 @@
 "use strict";
 
 /* ---------------- timeline ---------------- */
-function Timeline({ transactions, onOpenTx }) {
+// আয় +, ব্যয় −, স্থানান্তর ০ (এক পকেট থেকে অন্য পকেটে — মোট বদলায় না)
+const netOf = (t) => (t.type === "income" ? t.amount : t.type === "expense" ? -t.amount : 0);
+function Timeline({ transactions, onOpenTx, walletTotal }) {
     const [filter, setFilter] = useState("all"); // all | income | expense | debt
     const today = todayStr();
     const windowStart = shiftDate(today, -6); // last 7 days including today
@@ -20,18 +22,20 @@ function Timeline({ transactions, onOpenTx }) {
         for (const t of transactions) {
             if (t.type === "income")
                 allIncome += t.amount;
-            else
+            else if (t.type === "expense")
                 allExpense += t.amount;
             if (t.date === today && t.type === "expense" && !t.isDebtEntry)
                 todayExpense += t.amount; // ধার দেওয়া/পরিশোধ "আজ খরচ"-এ ধরা হয় না
         }
-        return { balance: allIncome - allExpense, todayExpense };
-    }, [transactions, today]);
+        // জমা = Wallet-এর মোট (হোম ও হেডারের সঙ্গে একই উৎস); স্থানান্তর শুধু পকেট বদলায়, মোট বদলায় না
+        return { balance: walletTotal != null ? walletTotal : allIncome - allExpense, todayExpense };
+    }, [transactions, today, walletTotal]);
     const groups = useMemo(() => {
         const sortedAsc = [...transactions].sort((a, b) => a.date === b.date ? a.createdAt - b.createdAt : a.date < b.date ? -1 : 1);
-        let running = 0;
+        // চলতি জমার শুরুর বিন্দু এমনভাবে ধরা হয় যাতে সর্বশেষ দিনের শেষে জমা == Wallet-এর মোট
+        let running = walletTotal != null ? walletTotal - transactions.reduce((s, t) => s + netOf(t), 0) : 0;
         const withRunning = sortedAsc.map((t) => {
-            running += t.type === "income" ? t.amount : -t.amount;
+            running += netOf(t);
             return Object.assign(Object.assign({}, t), { runningBalance: running });
         });
         const byDate = {};
@@ -45,11 +49,12 @@ function Timeline({ transactions, onOpenTx }) {
         return Object.entries(byDate)
             .sort((a, b) => (a[0] < b[0] ? 1 : -1))
             .map(([date, items]) => {
-            const dayNet = items.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0);
+            const dayNet = items.reduce((s, t) => s + netOf(t), 0);
             const dayEndBalance = items[items.length - 1].runningBalance;
             const shown = filter === "all" ? items
                 : filter === "debt" ? items.filter((t) => t.isDebtEntry)
-                    : items.filter((t) => t.type === filter && !t.isDebtEntry);
+                    : filter === "transfer" ? items.filter((t) => t.isTransferEntry)
+                        : items.filter((t) => t.type === filter && !t.isDebtEntry);
             return { date, items: [...shown].reverse(), dayNet, dayEndBalance };
         })
             .filter((g) => g.items.length > 0);
@@ -70,6 +75,7 @@ function Timeline({ transactions, onOpenTx }) {
             { key: "income", label: "আয়" },
             { key: "expense", label: "ব্যয়" },
             { key: "debt", label: "দেনা-পাওনা" },
+            { key: "transfer", label: "স্থানান্তর" },
         ].map((f) => (React.createElement("button", { key: f.key, onClick: () => setFilter(f.key), style: Object.assign(Object.assign({}, styles.rangeChip), (filter === f.key ? styles.rangeChipActive : {})) }, f.label)))),
         groups.length === 0 ? (React.createElement(EmptyState, { text: "\u0997\u09A4 \u09ED \u09A6\u09BF\u09A8\u09C7 \u09A6\u09C7\u0996\u09BE\u09A8\u09CB\u09B0 \u09AE\u09A4\u09CB \u0995\u09CB\u09A8\u09CB \u09B2\u09C7\u09A8\u09A6\u09C7\u09A8 \u09A8\u09C7\u0987\u0964" })) : (groups.map((g) => {
             const gDateInfo = formatDateBn(g.date);
@@ -205,7 +211,11 @@ function Reports({ transactions, categoryBudgets, budget, onSearch }) {
     // ধার নেওয়া আয় নয়, ধার দেওয়া খরচ নয় — আয়/ব্যয়/খাত/বাজেটের হিসাব শুধু আসল লেনদেনে;
     // দেনা-পাওনার নগদ প্রবাহ নিচে আলাদা কার্ডে দেখানো হয়।
     const ledgerInRange = useMemo(() => transactions.filter((t) => t.date >= start && t.date <= end), [transactions, start, end]);
-    const filtered = useMemo(() => ledgerInRange.filter((t) => !t.isDebtEntry), [ledgerInRange]);
+    const filtered = useMemo(() => ledgerInRange.filter((t) => !t.isDebtEntry && !t.isTransferEntry), [ledgerInRange]);
+    const transferFlow = useMemo(() => {
+        const list = ledgerInRange.filter((t) => t.isTransferEntry);
+        return { count: list.length, total: list.reduce((s, t) => s + t.amount, 0) };
+    }, [ledgerInRange]);
     const debtFlow = useMemo(() => {
         let inflow = 0, outflow = 0, count = 0;
         for (const t of ledgerInRange) {
@@ -320,6 +330,14 @@ function Reports({ transactions, categoryBudgets, budget, onSearch }) {
                 React.createElement("b", null,
                     toBnDigits(savingRate),
                     "%"))),
+        transferFlow.count > 0 && (React.createElement("div", { style: styles.summaryCard },
+            React.createElement("div", { style: Object.assign(Object.assign({}, styles.summaryRow), { fontWeight: 700 }) }, "🔁 স্থানান্তর (এই সময়ে)"),
+            React.createElement("div", { style: styles.summaryRow },
+                React.createElement("span", null, toBnDigits(transferFlow.count) + "টি স্থানান্তরে মোট সরানো হয়েছে"),
+                React.createElement("span", { style: { fontFamily: "'JetBrains Mono', monospace" } }, formatTaka(transferFlow.total))),
+            React.createElement("div", { style: styles.summaryRow },
+                React.createElement("span", { style: { fontWeight: 700 } }, "মোট Wallet-এ নিট প্রভাব"),
+                React.createElement("span", { style: { fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" } }, formatTaka(0))))),
         debtFlow.count > 0 && (React.createElement("div", { style: styles.summaryCard },
             React.createElement("div", { style: Object.assign(Object.assign({}, styles.summaryRow), { fontWeight: 700 }) }, "দেনা-পাওনা (এই সময়ে)"),
             React.createElement("div", { style: styles.summaryRow },
@@ -406,13 +424,13 @@ function SearchView({ transactions, onOpenTx, seed, familyMembers, userAccounts,
             .filter((t) => {
             if (type !== "all" && t.type !== type)
                 return false;
-            if (method !== "all" && t.method !== method)
+            if (method !== "all" && (t.isTransferEntry ? (t.fromMethod !== method && t.toMethod !== method) : t.method !== method))
                 return false;
-            if (category !== "all" && t.category !== category)
+            if (category !== "all" && (t.category !== category || t.isTransferEntry))
                 return false;
             if (familyMemberId !== "all" && t.familyMemberId !== familyMemberId)
                 return false;
-            if (accountId !== "all" && t.accountId !== accountId)
+            if (accountId !== "all" && (t.isTransferEntry ? (t.fromAccountId !== accountId && t.toAccountId !== accountId) : t.accountId !== accountId))
                 return false;
             if (dateFrom && t.date < dateFrom)
                 return false;
@@ -424,13 +442,13 @@ function SearchView({ transactions, onOpenTx, seed, familyMembers, userAccounts,
                 return false;
             if (!query)
                 return true;
-            const cat = catInfo(t.type, t.category, cats).label.toLowerCase();
+            const cat = (t.isTransferEntry ? `স্থানান্তর ${t.fromLabel} ${t.toLabel}` : t.isDebtEntry ? `${debtEntryTitle(t)} ${t.person} দেনা-পাওনা` : catInfo(t.type, t.category, cats).label).toLowerCase();
             const note = (t.note || "").toLowerCase();
             return cat.includes(query) || note.includes(query);
         })
             .sort((a, b) => (b.date > a.date ? 1 : b.date < a.date ? -1 : b.createdAt - a.createdAt));
     }, [transactions, q, type, method, category, familyMemberId, accountId, dateFrom, dateTo, amountMin, amountMax, cats]);
-    const totalAmount = useMemo(() => results.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0), [results]);
+    const totalAmount = useMemo(() => results.reduce((s, t) => s + netOf(t), 0), [results]);
     const applyQuickDate = (range) => {
         const today = todayStr();
         if (range === "today") {
