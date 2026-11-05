@@ -217,7 +217,8 @@
     const byUid = {};
     (p.contributions || []).forEach((c) => {
       const k = c.memberUid || c.memberName;
-      if (!byUid[k]) byUid[k] = { uid: c.memberUid, name: c.memberName, claimed: 0, pending: 0, approved: 0 };
+      const live = (members || []).find((m) => m.uid === c.memberUid);
+      if (!byUid[k]) byUid[k] = { uid: c.memberUid, name: (live && live.name) || c.memberName, claimed: 0, pending: 0, approved: 0 };
       byUid[k].claimed = round2(byUid[k].claimed + round2(c.claimedAmount));
       if (c.status === CONTRIBUTION_STATUS.pending) byUid[k].pending = round2(byUid[k].pending + round2(c.claimedAmount));
       if (c.status === CONTRIBUTION_STATUS.approved || c.status === CONTRIBUTION_STATUS.partial) byUid[k].approved = round2(byUid[k].approved + contributionCredit(c));

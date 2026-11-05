@@ -69,7 +69,7 @@
     return h("button", { onClick: () => ctx.openSheet({ type: "shop-list", listId: l.id }), style: Object.assign({}, S.card, { display: "block", width: "100%", textAlign: "left", cursor: "pointer", fontFamily: F, color: "inherit" }) },
       h("div", { style: S.row }, h("b", { style: { fontSize: 15.5 } }, "🧾 " + l.title), listChip(l)),
       h("div", { style: Object.assign({}, S.muted, { marginTop: 3 }) }, `${dateBn(l.shoppingDate)}${l.shoppingTime ? " · " + l.shoppingTime : ""}`),
-      h("div", { style: S.muted }, `তৈরি করেছেন: ${l.createdByName || memberName(ctx, l.createdBy)} → বাজার: ${l.assignedToName || memberName(ctx, l.assignedToUid)}${l.assignedToUid === ctx.uid ? " (আপনি)" : ""}`),
+      h("div", { style: S.muted }, `তৈরি করেছেন: ${memberName(ctx, l.createdBy, l.createdByName)} → বাজার: ${memberName(ctx, l.assignedToUid, l.assignedToName)}${l.assignedToUid === ctx.uid ? " (আপনি)" : ""}`),
       h("div", { style: { margin: "8px 0 4px" } }, h(HBar, { pct, color: "var(--hk-success)" })),
       h("div", { style: S.row }, h("span", { style: S.muted }, `${bn(st.purchased)}/${bn(st.total)} কেনা হয়েছে · ${bn(pct)}%`), h("b", { style: { fontFamily: SERIF } }, "≈ " + taka(st.estTotal))));
   }
@@ -133,7 +133,8 @@
     const [d, setD] = useState(blank); const [touched, setTouched] = useState(false);
     const [errors, setErrors] = useState({}); const [err, setErr] = useState([]); const [busy, setBusy] = useState(false);
     const set = (p) => setD((x) => Object.assign({}, x, p));
-    const onName = (v) => { const guess = !touched ? Core.guessCategoryId(v, ctx.fam.categories) : null; set(guess ? { name: v, categoryId: guess } : { name: v }); };
+    // পণ্যের নাম আর ক্যাটাগরি সম্পূর্ণ আলাদা — নাম লিখলে ক্যাটাগরি নিজে থেকে বসে/তৈরি হয় না
+    const onName = (v) => set({ name: v });
     const add = () => {
       if (busy) return;
       const v = C.validateItemDraft(d);
@@ -150,8 +151,9 @@
     return h("div", { style: S.card },
       h("div", { style: { fontWeight: 700, marginBottom: 8 } }, "➕ পণ্য যোগ করুন"),
       h("input", { style: S.input, value: d.name, maxLength: 60, placeholder: "পণ্যের নাম (যেমন: চাল)", "aria-label": "পণ্যের নাম", onChange: (e) => onName(e.target.value), onKeyDown: (e) => { if (e.key === "Enter") add(); } }), fieldErr(errors.name),
-      h("select", { style: S.input, value: d.categoryId, "aria-label": "ক্যাটাগরি", onChange: (e) => { setTouched(true); set({ categoryId: e.target.value }); } },
-        h("option", { value: "" }, "ক্যাটাগরি বেছে নিন *"), cats.map((c) => h("option", { key: c.id, value: c.id }, `${c.icon} ${c.name}`))), fieldErr(errors.categoryId),
+      h("select", { style: S.input, value: d.categoryId, "aria-label": "ক্যাটাগরি", onChange: async (e) => { const v = e.target.value; setTouched(true); if (v === "__new__") { const id = await window.FBNewCategory(ctx); if (id) set({ categoryId: id }); return; } set({ categoryId: v }); } },
+        h("option", { value: "" }, "ক্যাটাগরি বেছে নিন *"), cats.map((c) => h("option", { key: c.id, value: c.id }, `${c.icon} ${c.name}`)),
+        (ctx.vis.write || ctx.vis.admin) && h("option", { value: "__new__" }, "➕ নতুন ক্যাটাগরি তৈরি করুন")), fieldErr(errors.categoryId),
       h("div", { style: grid2 },
         h("div", null, h("input", { style: S.input, inputMode: "decimal", value: d.quantity, placeholder: "পরিমাণ (যেমন ২)", "aria-label": "পরিমাণ", onChange: (e) => set({ quantity: e.target.value }) }), fieldErr(errors.quantity)),
         h("div", null, h("select", { style: S.input, value: d.unit, "aria-label": "একক", onChange: (e) => set({ unit: e.target.value }) }, C.UNITS.map((u) => h("option", { key: u, value: u }, unitText(u)))), fieldErr(errors.unit))),
@@ -170,14 +172,11 @@
       : h("button", { style: Object.assign({}, S.btn2, { width: "100%", marginBottom: 10 }), onClick: () => setOpen(true) }, "➕ পণ্য যোগ করুন");
   }
 
-  function ItemCard({ ctx, list, it, canShop, onToggle }) {
+  function ItemCard({ ctx, list, it, canShop }) {
     const est = C.estLineTotal(it), act = C.actualLineTotal(it), purchased = C.isPurchased(it), noPrice = C.needsPrice(it);
-    const checked = it.status === "bought" || it.status === "alternative";
     const open = () => ctx.openSheet({ type: "shop-item", listId: list.id, itemId: it.id });
     return h("div", { style: Object.assign({}, S.card, { padding: "12px 12px", opacity: it.status === "cancelled" ? 0.6 : 1 }) },
       h("div", { style: { display: "flex", alignItems: "flex-start", gap: 10 } },
-        h("button", { role: "checkbox", "aria-checked": checked, "aria-label": it.name + (checked ? " — কেনা হয়েছে" : " — কেনা বাকি"), disabled: !canShop || it.status === "cancelled", onClick: () => onToggle(it),
-          style: { width: 32, height: 32, minWidth: 32, borderRadius: 8, border: "2px solid " + (checked ? "var(--hk-success)" : "var(--hk-border-strong)"), background: checked ? "var(--hk-success)" : "transparent", color: "#fff", fontSize: 18, lineHeight: 1, marginTop: 2 } }, checked ? "✓" : ""),
         h("button", { onClick: open, "aria-label": it.name + " — বিস্তারিত", style: { flex: 1, minWidth: 0, textAlign: "left", background: "none", border: "none", padding: 0, fontFamily: F, color: "inherit", cursor: "pointer" } },
           h("div", { style: S.row }, h("b", { style: { fontSize: 15, textDecoration: it.status === "cancelled" ? "line-through" : "none" } }, `${catIcon(ctx, it.categoryId)} ${it.name}`), statusChip(it.status)),
           h("div", { style: S.muted }, [it.quantity != null ? `${qtyText(it.quantity)} ${unitText(it.unit)}` : "পরিমাণ নেই", it.estUnitPrice != null ? `আনু. ${taka(it.estUnitPrice)}/${unitText(it.unit)}` : null, est != null ? `মোট ≈ ${taka(est)}` : null].filter(Boolean).join(" · ")),
@@ -211,13 +210,6 @@
     const counts = { all: rows.length, pending: rows.filter((i) => i.status === "pending").length };
     C.ITEM_STATUS.forEach((s) => { if (s !== "pending") counts[s] = rows.filter((i) => i.status === s).length; });
     const shownRows = filter === "all" ? rows : rows.filter((i) => i.status === filter);
-    const toggle = (it) => {
-      if (busy) return;
-      if (it.status !== "pending" && it.status !== "bought") { ctx.openSheet({ type: "shop-item", listId, itemId: it.id }); return; }
-      const next = it.status === "bought" ? { status: "pending", actualUnitPrice: null, actualQuantity: null, alternative: null, reason: "" } : { status: "bought", actualUnitPrice: it.actualUnitPrice, actualQuantity: it.actualQuantity, alternative: null, reason: "" };
-      const nextRows = rows.map((r) => (r.id === it.id ? Object.assign({}, r, next) : r));
-      run(setBusy, setErr, () => window.FB.updateShoppingItem(ctx.familyId, listId, it.id, next, C.listStats(nextRows)));
-    };
     const remove = () => {
       if (!window.confirm(`"${list.title}" তালিকাটি এবং এর সব পণ্য মুছে ফেলবেন? এটি ফেরানো যাবে না।`)) return;
       run(setBusy, setErr, async () => { await window.FB.deleteShoppingList(ctx.familyId, listId, rows.map((r) => r.id)); ctx.toast("তালিকা মুছে ফেলা হয়েছে"); close(); });
@@ -241,7 +233,7 @@
         : h("div", null,
           // chips wrap onto several lines — no sideways scrolling on a phone
           h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 } }, chips.map(([k, label]) => h("button", { key: k, onClick: () => setFilter(k), "aria-pressed": filter === k, style: S.chip(filter === k) }, `${label} (${bn(counts[k])})`))),
-          shownRows.map((it) => h(ItemCard, { key: it.id, ctx, list, it, canShop, onToggle: toggle }))),
+          shownRows.map((it) => h(ItemCard, { key: it.id, ctx, list, it, canShop }))),
       !canShop && list.status === "in_progress" && h("div", { style: Object.assign({}, S.card, S.muted) }, "এই তালিকা শুধু দেখার জন্য — শুধু বাজার করার দায়িত্বপ্রাপ্ত সদস্য ও তালিকা প্রস্তুতকারী পণ্যের অবস্থা বদলাতে পারেন।"),
       h("div", { style: S.card },
         h("div", { style: { fontWeight: 700, marginBottom: 8 } }, "সারাংশ"),
@@ -283,7 +275,7 @@
     const saveStatus = () => {
       if (busy) return;
       const v = C.validateStatusUpdate(it, { status, actualUnitPrice: price, actualQuantity: qty, reason, alternative: { name: altName, quantity: altQty, unitPrice: altPrice, unit: it.unit } }, { manager: canEdit });
-      if (!v.ok) { setErrors(v.errors); return; }
+      if (!v.ok) { setErrors(v.errors); if (v.errors.actualUnitPrice || v.errors.altUnitPrice) ctx.toast("পণ্যের মূল্য লিখুন"); return; }
       setErrors({});
       run(setBusy, setErr, async () => { await apply(v.patch); ctx.toast("সংরক্ষিত হয়েছে ✓"); close(); });
     };
@@ -323,7 +315,8 @@
         h("summary", { style: { fontWeight: 700, cursor: "pointer", minHeight: 36 } }, "✏️ পণ্যের তথ্য সম্পাদনা (তালিকা প্রস্তুতকারী)"),
         h("div", { style: { marginTop: 10 } },
           h("input", { style: S.input, value: e.name, maxLength: 60, "aria-label": "পণ্যের নাম", onChange: (ev) => setE((x) => Object.assign({}, x, { name: ev.target.value })) }), fieldErr(eErrors.name),
-          h("select", { style: S.input, value: e.categoryId, "aria-label": "ক্যাটাগরি", onChange: (ev) => setE((x) => Object.assign({}, x, { categoryId: ev.target.value })) }, h("option", { value: "" }, "ক্যাটাগরি *"), cats.map((c) => h("option", { key: c.id, value: c.id }, `${c.icon} ${c.name}`))), fieldErr(eErrors.categoryId),
+          h("select", { style: S.input, value: e.categoryId, "aria-label": "ক্যাটাগরি", onChange: async (ev) => { const v = ev.target.value; if (v === "__new__") { const id = await window.FBNewCategory(ctx); if (id) setE((x) => Object.assign({}, x, { categoryId: id })); return; } setE((x) => Object.assign({}, x, { categoryId: v })); } }, h("option", { value: "" }, "ক্যাটাগরি *"), cats.map((c) => h("option", { key: c.id, value: c.id }, `${c.icon} ${c.name}`)),
+            (ctx.vis.write || ctx.vis.admin) && h("option", { value: "__new__" }, "➕ নতুন ক্যাটাগরি তৈরি করুন")), fieldErr(eErrors.categoryId),
           h("div", { style: grid2 },
             h("input", { style: S.input, inputMode: "decimal", value: e.quantity, placeholder: "পরিমাণ", "aria-label": "পরিমাণ", onChange: (ev) => setE((x) => Object.assign({}, x, { quantity: ev.target.value })) }),
             h("select", { style: S.input, value: e.unit, "aria-label": "একক", onChange: (ev) => setE((x) => Object.assign({}, x, { unit: ev.target.value })) }, C.UNITS.map((u) => h("option", { key: u, value: u }, unitText(u))))),
@@ -341,14 +334,15 @@
     const st = C.listStats(items); const next = C.completionStatus(st);
     const undecided = items.filter((i) => i.status === "pending" || i.status === "awaiting");
     const canShop = C.canShop(list, ctx.me, ctx.uid);
-    const finish = () => run(setBusy, setErr, async () => {
+    const priceOk = C.canCompleteList(st);
+    const finish = () => priceOk ? run(setBusy, setErr, async () => {
       await window.FB.updateShoppingList(ctx.familyId, listId, { status: next, stats: st, completedAt: new Date().toISOString(), completedBy: ctx.uid });
       ctx.toast(next === "completed" ? "বাজার সম্পন্ন হয়েছে ✓" : "তালিকা আংশিক সম্পন্ন হিসেবে সংরক্ষিত হয়েছে ✓"); close();
-    });
+    }) : setErr(["সব কেনা পণ্যের মূল্য লিখে সংরক্ষণ করুন — তারপর বাজার সম্পন্ন করা যাবে।"]);
     const pct = C.progressPct(st);
     const cell = (label, val, tone) => h("div", { style: { background: "var(--hk-card)", border: "1px solid var(--hk-border)", borderRadius: 12, padding: "10px 6px", textAlign: "center" } }, h("div", { style: Object.assign({}, S.muted, { fontSize: 11.5 }) }, label), h("div", { style: { fontFamily: SERIF, fontSize: 22, color: tone || "inherit" } }, bn(val)));
     return h(Sheet, { title: "তালিকার সারাংশ", onClose: close,
-      footer: canShop ? h("div", null, errBox(err), h("button", { style: S.btn, disabled: busy, onClick: finish }, busy ? "সংরক্ষণ হচ্ছে…" : "নিশ্চিত করে বাজার সম্পন্ন করুন")) : null },
+      footer: canShop ? h("div", null, errBox(err), h("button", { style: S.btn, disabled: busy || !priceOk, onClick: finish }, busy ? "সংরক্ষণ হচ্ছে…" : "নিশ্চিত করে বাজার সম্পন্ন করুন")) : null },
       h("div", { style: Object.assign({}, S.hero, { textAlign: "center" }) }, h("div", { style: { fontFamily: SERIF, fontSize: 18 } }, list.title), h("div", { style: { margin: "8px 0 4px" } }, h(HBar, { pct, color: "var(--hk-success)" })), h("div", null, `${bn(pct)}% সম্পন্ন`)),
       h("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 12 } },
         cell("মোট পণ্য", st.total), cell("কেনা হয়েছে", st.purchased, "var(--hk-success)"), cell("কেনা বাকি", st.pending), cell("পাওয়া যায়নি", st.notFound, "var(--hk-danger)"), cell("দাম বেশি", st.tooExpensive, "#c77d0a"), cell("অসম্পূর্ণ দাম", st.incompletePrice, "var(--hk-danger)")),
@@ -357,7 +351,7 @@
         h("div", { style: Object.assign({}, S.row, { marginTop: 6 }) }, h("span", { style: S.muted }, "কেনা পণ্যের প্রকৃত খরচ"), h("b", { style: { fontFamily: SERIF } }, taka(st.actualTotal))),
         st.awaiting > 0 && h("div", { style: Object.assign({}, S.muted, { marginTop: 6 }) }, `${bn(st.awaiting)}টি পণ্য ক্রেতার মন্তব্যের অপেক্ষায়`),
         st.cancelled > 0 && h("div", { style: S.muted }, `${bn(st.cancelled)}টি পণ্য বাতিল (হিসাবে ধরা হয়নি)`),
-        st.incompletePrice > 0 && h("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginTop: 6 } }, `⚠ ${bn(st.incompletePrice)}টি কেনা পণ্যের প্রকৃত দাম নেই — এগুলো প্রকৃত খরচে ধরা হয়নি।`)),
+        st.incompletePrice > 0 && h("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginTop: 6 } }, `⚠ ${bn(st.incompletePrice)}টি কেনা পণ্যের মূল্য লেখা হয়নি — মূল্য লিখে সংরক্ষণ না করলে বাজার সম্পন্ন করা যাবে না।`)),
       undecided.length > 0 && h("div", { style: Object.assign({}, S.card, { borderColor: "var(--hk-danger)" }) },
         h("div", { style: { fontWeight: 700, color: "var(--hk-danger)", marginBottom: 6 } }, `${bn(undecided.length)}টি পণ্যের সিদ্ধান্ত বাকি — কোনোটা বাদ পড়েনি তো?`),
         undecided.map((i) => h("div", { key: i.id, style: S.muted }, `• ${i.name} — ${C.ITEM_STATUS_LABEL[i.status]}`))),

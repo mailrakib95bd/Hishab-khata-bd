@@ -25,6 +25,12 @@
    * walks back exactly like the mockups show, with no extra routing code.
    * ====================================================================== */
   const FP_TONE = { ok: ["var(--hk-success-mid)", "#fff"], warn: ["var(--hk-gold)", "#1a1a1a"], danger: ["var(--hk-danger)", "#fff"], neutral: ["var(--hk-track)", "var(--hk-text-muted-2)"] };
+  // সদস্যের নাম সবসময় বর্তমান সদস্য-তালিকা থেকে (uid ধরে) — নাম বদলালে পুরোনো নাম কোথাও দেখা যায় না।
+  // জমা রাখা পুরোনো নাম শুধু তখনই, যখন ওই ব্যক্তি আর পরিবারে নেই।
+  function liveName(ctx, uid, fallback) {
+    const m = ((ctx && ctx.fam && ctx.fam.members) || []).find((x) => x.uid === uid);
+    return (m && m.name) || fallback || "সদস্য";
+  }
   function FPStatusPill({ status }) {
     const meta = FPCore.PLAN_STATUS_LABEL[status] || { label: status, tone: "neutral" };
     return h("span", { style: S.pill(...FP_TONE[meta.tone]) }, meta.label);
@@ -313,7 +319,7 @@
       catch (e) { ctx.toast(friendlyError(e)); } finally { setBusy(false); }
     };
     return h("div", { style: S.card },
-      h("div", { style: S.row }, h("span", { style: { fontWeight: 700 } }, c.memberName), h("b", null, `৳${bn(c.claimedAmount)}`)),
+      h("div", { style: S.row }, h("span", { style: { fontWeight: 700 } }, liveName(ctx, c.memberUid, c.memberName)), h("b", null, `৳${bn(c.claimedAmount)}`)),
       h("div", { style: Object.assign({}, S.muted, { marginBottom: 8 }) }, `${c.date ? formatDateBn(c.date).full : ""}${c.paymentMethod ? " · " + c.paymentMethod : ""}${c.note ? " · " + c.note : ""}`),
       !showReject ? h("div", null,
         h("div", { style: { display: "flex", gap: 6, marginBottom: 8 } },
@@ -342,7 +348,7 @@
       pending.map((c) => h(FPVerifyRow, { key: c.id, ctx, plan, c })),
       resolved.length > 0 && h("div", { style: Object.assign({}, S.muted, { margin: "14px 0 6px" }) }, "আগের যাচাইকৃত অবদান"),
       resolved.map((c) => h("div", { key: c.id, style: Object.assign({}, S.card, { opacity: 0.8 }) },
-        h("div", { style: S.row }, h("span", null, c.memberName), h("span", { style: { display: "flex", alignItems: "center", gap: 6 } },
+        h("div", { style: S.row }, h("span", null, liveName(ctx, c.memberUid, c.memberName)), h("span", { style: { display: "flex", alignItems: "center", gap: 6 } },
           h("b", null, `৳${bn(c.status === "rejected" ? c.claimedAmount : c.receivedAmount)}`),
           h("span", { style: S.pill(...FP_TONE[FPCore.CONTRIBUTION_STATUS_LABEL[c.status].tone]) }, FPCore.CONTRIBUTION_STATUS_LABEL[c.status].label))))));
   }
@@ -444,7 +450,7 @@
             }))
         : (pendingContribs.length === 0 ? h(Empty, { icon: "✅", title: "কোনো পেন্ডিং অবদান নেই", text: "" })
           : pendingContribs.map(({ plan, contribution: c }) => h("div", { key: c.id, style: S.card },
-              h("div", { style: S.row }, h("span", { style: { fontWeight: 700 } }, `${c.memberName} → ${plan.title}`), h("b", null, `৳${bn(c.claimedAmount)}`)),
+              h("div", { style: S.row }, h("span", { style: { fontWeight: 700 } }, `${liveName(ctx, c.memberUid, c.memberName)} → ${plan.title}`), h("b", null, `৳${bn(c.claimedAmount)}`)),
               h("button", { onClick: () => ctx.openSheet({ type: "plan-verify", planId: plan.id }), style: { background: "none", border: "none", color: "var(--hk-gold)", fontFamily: F, fontSize: 13, padding: "6px 0" } }, "যাচাই করুন ›")))));
   }
 
@@ -459,7 +465,7 @@
         log.map((e) => h("div", { key: e.id, style: { position: "relative", marginBottom: 16 } },
           h("div", { style: { position: "absolute", left: -21, top: 3, width: 10, height: 10, borderRadius: "50%", background: "var(--hk-gold)" } }),
           h("div", { style: S.muted }, `${new Date(e.ts).toLocaleDateString("bn-BD")} ${new Date(e.ts).toLocaleTimeString("bn-BD", { hour: "2-digit", minute: "2-digit" })}`),
-          h("div", { style: { fontWeight: 600 } }, e.actorName), h("div", null, e.details)))));
+          h("div", { style: { fontWeight: 600 } }, liveName(ctx, e.actorUid, e.actorName)), h("div", null, e.details)))));
   }
 
   /* ---------------------------- 14. Edit Plan ---------------------------- */

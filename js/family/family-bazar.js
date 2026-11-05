@@ -226,6 +226,18 @@
   const safe = async (p, fallback) => { try { return await p; } catch (e) { return fallback; } };
   const EMPTY_FAM = { loading: false, error: "", members: [], budget: null, categories: [], products: [], stats: { monthly: [], cats: [], other: [] }, prices: [], plans: [], shopLists: [] };
 
+  // নির্বাচনের ড্রপডাউন থেকেই নতুন ক্যাটাগরি বানানো — ক্যাটাগরি সবসময় ইচ্ছা করে আলাদাভাবে তৈরি হয়,
+  // পণ্যের নাম থেকে নয়। বানালে পরিবারের সবাই দেখতে পায়। ফেরত দেয় ক্যাটাগরির id (বা null)।
+  window.FBNewCategory = async function (ctx) {
+    const n = (window.prompt("নতুন ক্যাটাগরির নাম লিখুন") || "").trim();
+    if (!n) return null;
+    if (n.length > 40) { ctx.toast("নাম ৪০ অক্ষরের মধ্যে লিখুন"); return null; }
+    const dup = Core.allCategories(ctx.fam.categories).find((c) => Core.nameKey(c.name) === Core.nameKey(n));
+    if (dup) { ctx.toast("এই নামে ক্যাটাগরি আগেই আছে — সেটিই বেছে নেওয়া হলো"); return dup.id; }
+    try { const id = await window.FB.addFamilyCategory(ctx.familyId, { name: n, icon: "🏷️", group: "grocery" }); ctx.toast("ক্যাটাগরি তৈরি হয়েছে ✓"); return id; }
+    catch (e) { ctx.toast("ক্যাটাগরি তৈরি করা যায়নি"); return null; }
+  };
+
   function useFamilyData(user) {
     const uid = user && user.uid;
     const [top, setTop] = useState({ loading: !!uid, error: "", families: [], incoming: [] });
@@ -277,11 +289,15 @@
         setFam((f) => Object.assign({}, f, { plans }));
       });
       // বাজার তালিকা (js/family/family-shopping.js) — shared by every member of the family
+      const unsubCats = window.FB.subscribeFamilyCategories ? window.FB.subscribeFamilyCategories(activeId, (categories) => {
+        if (dead) return;
+        setFam((f) => Object.assign({}, f, { categories }));
+      }) : () => {};
       const unsubShop = window.FB.subscribeShoppingLists ? window.FB.subscribeShoppingLists(activeId, (shopLists) => {
         if (dead) return;
         setFam((f) => Object.assign({}, f, { shopLists }));
       }) : () => {};
-      return () => { dead = true; unsubMembers(); unsubPlans(); unsubShop(); };
+      return () => { dead = true; unsubMembers(); unsubPlans(); unsubCats(); unsubShop(); };
     }, [activeId]);
 
     const myMember = fam.members.find((m) => m.uid === uid) || null;
@@ -308,12 +324,12 @@
       try {
         const [budget, categories, products, prices] = await Promise.all([
           safe(window.FB.getFamilyBudget(familyId), null),
-          safe(window.FB.familyCategories(familyId), []),
+          window.FB.subscribeFamilyCategories ? Promise.resolve(null) : safe(window.FB.familyCategories(familyId), []),
           safe(window.FB.familyProducts(familyId), []),
           safe(window.FB.priceRows(familyId, { months: [cm, pm], seeAll: vis.prices, max: 300 }), []),
         ]);
         if (mine !== seq.current) return;
-        setFam((f) => Object.assign({}, f, { budget, categories, products, prices }));
+        setFam((f) => Object.assign({}, f, categories ? { budget, categories, products, prices } : { budget, products, prices }));
       } catch (e) {
         if (mine !== seq.current) return;
         setFam((f) => Object.assign({}, f, { error: friendlyError(e) }));
@@ -632,7 +648,7 @@
       setRows((rs) => rs.map((r, j) => {
         if (j !== i) return r;
         const n = Object.assign({}, r, { productName: v, productId: known ? known.id : null });
-        if (!r.catTouched) n.categoryId = (known && known.categoryId) || (pref && pref.categoryId) || Core.guessCategoryId(v, fam.categories) || n.categoryId;
+        if (!r.catTouched) n.categoryId = (known && known.categoryId) || (pref && pref.categoryId) || n.categoryId;
         if (!r.unitTouched && ((known && known.defaultUnit) || (pref && pref.unit))) n.unit = (pref && pref.unit) || known.defaultUnit;
         return n;
       }));
@@ -641,7 +657,7 @@
       setDirty(true);
       setRows((rs) => {
         const blank = rs.findIndex((r) => !r.productName.trim() && !r.quantity && !r.unitPrice);
-        const filled = Object.assign(blankRow(), { productName: p.name, unit: p.unit || "kg", categoryId: p.categoryId || Core.guessCategoryId(p.name, fam.categories) || "", catTouched: !!p.categoryId, unitTouched: true });
+        const filled = Object.assign(blankRow(), { productName: p.name, unit: p.unit || "kg", categoryId: p.categoryId || "", catTouched: !!p.categoryId, unitTouched: true });
         if (blank >= 0) return rs.map((r, j) => (j === blank ? Object.assign(filled, { key: r.key }) : r));
         return rs.concat(filled);
       });
@@ -700,9 +716,10 @@
         h("div", { style: Object.assign({}, S.row, { marginBottom: 6 }) }, h("b", { style: { fontSize: 13 } }, `পণ্য ${bn(i + 1)}`),
           rows.length > 1 && h("button", { "aria-label": "পণ্য বাদ দিন", onClick: () => { setRows((rs) => rs.filter((_, j) => j !== i)); setDirty(true); }, style: { background: "none", border: "none", color: "var(--hk-danger)", fontSize: 13, minHeight: 36, fontFamily: F } }, "✕ বাদ দিন")),
         h("input", { style: S.input, list: "fb-products", placeholder: "পণ্যের নাম (যেমন: চাল)", value: r.productName, maxLength: 80, onChange: (e) => onName(i, e.target.value) }),
-        h("select", { style: S.input, value: r.categoryId, onChange: (e) => patchRow(i, { categoryId: e.target.value, catTouched: true }), "aria-label": "ক্যাটাগরি" },
+        h("select", { style: S.input, value: r.categoryId, onChange: async (e) => { const v = e.target.value; if (v === "__new__") { const id = await window.FBNewCategory(ctx); if (id) patchRow(i, { categoryId: id, catTouched: true }); return; } patchRow(i, { categoryId: v, catTouched: true }); }, "aria-label": "ক্যাটাগরি" },
           h("option", { value: "" }, "ক্যাটাগরি (ঐচ্ছিক)"),
-          Core.CATEGORY_GROUPS.map((g) => h("optgroup", { key: g.key, label: g.label }, cats.filter((c) => c.group === g.key).map((c) => h("option", { key: c.id, value: c.id }, `${c.icon} ${c.name}`))))),
+          Core.CATEGORY_GROUPS.map((g) => h("optgroup", { key: g.key, label: g.label }, cats.filter((c) => c.group === g.key).map((c) => h("option", { key: c.id, value: c.id }, `${c.icon} ${c.name}`)))),
+          (vis.write || vis.admin) && h("option", { value: "__new__" }, "➕ নতুন ক্যাটাগরি তৈরি করুন")),
         h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 } },
           h("div", null, h("label", { style: S.label }, "পরিমাণ"), h("input", { style: S.input, inputMode: "decimal", placeholder: "৫", value: r.quantity, onChange: (e) => patchRow(i, { quantity: e.target.value }) })),
           h("div", null, h("label", { style: S.label }, "একক"), h("select", { style: S.input, value: r.unit, onChange: (e) => patchRow(i, { unit: e.target.value, unitTouched: true }) }, Core.UNITS.map((u) => h("option", { key: u, value: u }, unitText(u))))),
@@ -1248,11 +1265,11 @@
     };
     const rowFor = (c, isCustom) => h("div", { key: c.id, style: Object.assign({}, S.row, { padding: "9px 0", borderBottom: "1px solid var(--hk-border-light)" }) },
       h("span", null, `${c.icon || "🏷️"}  ${c.name}`),
-      isCustom && ctx.vis.admin && h("span", { style: { display: "flex", gap: 6 } },
+      isCustom && (ctx.vis.admin || (c.createdBy && c.createdBy === ctx.uid)) && h("span", { style: { display: "flex", gap: 6 } },
         h("button", { style: Object.assign({}, S.btn2, { minHeight: 34, padding: "4px 10px" }), onClick: () => { setErr(""); setEditing({ id: c.id, name: c.name, icon: c.icon, group: c.group }); } }, "বদলান"),
         h("button", { style: Object.assign({}, S.danger, { minHeight: 34, padding: "4px 10px" }), disabled: busy, onClick: () => { if (window.confirm(`"${c.name}" ক্যাটাগরি মুছবেন? আগের কেনাকাটায় নামটি থেকে যাবে।`)) run(() => window.FB.deleteFamilyCategory(ctx.familyId, c.id), "মুছে ফেলা হয়েছে"); } }, "মুছুন")));
     return h("div", null,
-      ctx.vis.admin && !editing && h("button", { style: Object.assign({}, S.btn, { marginBottom: 12 }), onClick: () => { setErr(""); setEditing({ id: null, name: "", icon: "🏷️", group: "grocery" }); } }, "+ নতুন ক্যাটাগরি"),
+      (ctx.vis.admin || ctx.vis.write) && !editing && h("button", { style: Object.assign({}, S.btn, { marginBottom: 12 }), onClick: () => { setErr(""); setEditing({ id: null, name: "", icon: "🏷️", group: "grocery" }); } }, "+ নতুন ক্যাটাগরি"),
       editing && h("div", { style: S.card },
         h("label", { style: S.label }, "নাম"), h("input", { style: S.input, value: editing.name, maxLength: 40, autoFocus: true, onChange: (e) => setEditing(Object.assign({}, editing, { name: e.target.value })) }),
         h("label", { style: S.label }, "আইকন (ইমোজি)"), h("input", { style: S.input, value: editing.icon || "", maxLength: 4, onChange: (e) => setEditing(Object.assign({}, editing, { icon: e.target.value })) }),
@@ -1262,7 +1279,7 @@
       !editing && err && h(ErrorBox, { msg: err }),
       custom.length > 0 && h("div", { style: S.card }, h("div", { style: S.h2 }, "আপনাদের ক্যাটাগরি"), custom.map((c) => rowFor(c, true))),
       (Core.CATEGORY_GROUPS || []).map((g) => h("div", { key: g.key, style: S.card }, h("div", { style: S.h2 }, g.label), Core.DEFAULT_CATEGORIES.filter((c) => c.group === g.key).map((c) => rowFor(c, false)))),
-      !ctx.vis.admin && h("div", { style: S.muted }, "নতুন ক্যাটাগরি শুধু মালিক ও এডমিন যোগ করতে পারেন।"));
+      !(ctx.vis.admin || ctx.vis.write) && h("div", { style: S.muted }, "শুধু দেখার অনুমতি থাকলে নতুন ক্যাটাগরি যোগ করা যায় না।"));
   }
 
   function SearchView({ ctx }) {

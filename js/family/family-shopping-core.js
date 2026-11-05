@@ -117,15 +117,20 @@
     if (status === "cancelled" && !reason) errors.reason = "বাতিলের কারণ লিখুন";
     const patch = { status, reason, actualUnitPrice: null, actualQuantity: null, alternative: null };
     if (status === "bought") {
-      if (!isBlank(input.actualUnitPrice)) { const p = parseNum(input.actualUnitPrice); if (isNaN(p) || p < 0) errors.actualUnitPrice = "প্রকৃত দাম সঠিক নয়"; else patch.actualUnitPrice = round2(p); }
+      // মূল্য ছাড়া কোনো পণ্য "কেনা হয়েছে" হিসেবে সংরক্ষণ করা যাবে না
+      if (isBlank(input.actualUnitPrice)) errors.actualUnitPrice = "পণ্যের মূল্য লিখুন";
+      else { const p = parseNum(input.actualUnitPrice); if (isNaN(p) || p < 0) errors.actualUnitPrice = "প্রকৃত দাম সঠিক নয়"; else patch.actualUnitPrice = round2(p); }
       if (!isBlank(input.actualQuantity)) { const q = parseNum(input.actualQuantity); if (isNaN(q) || q <= 0) errors.actualQuantity = "কেনা পরিমাণ সঠিক নয়"; else patch.actualQuantity = round3(q); }
+      else if (it.quantity == null) errors.actualQuantity = "কেনা পরিমাণ লিখুন (মোট মূল্য হিসাব করতে)";
     }
     if (status === "alternative") {
       const a = (input && input.alternative) || {}; const nm = String(a.name || "").trim();
       if (!nm) errors.altName = "বিকল্প পণ্যের নাম লিখুন";
       let aq = null, ap = null;
       if (!isBlank(a.quantity)) { aq = parseNum(a.quantity); if (isNaN(aq) || aq <= 0) errors.altQuantity = "বিকল্প পণ্যের পরিমাণ সঠিক নয়"; else aq = round3(aq); }
-      if (!isBlank(a.unitPrice)) { ap = parseNum(a.unitPrice); if (isNaN(ap) || ap < 0) errors.altUnitPrice = "বিকল্প পণ্যের দাম সঠিক নয়"; else ap = round2(ap); }
+      else errors.altQuantity = "কেনা পরিমাণ লিখুন";
+      if (isBlank(a.unitPrice)) errors.altUnitPrice = "পণ্যের মূল্য লিখুন";
+      else { ap = parseNum(a.unitPrice); if (isNaN(ap) || ap < 0) errors.altUnitPrice = "বিকল্প পণ্যের দাম সঠিক নয়"; else ap = round2(ap); }
       patch.alternative = { name: nm.slice(0, 60), quantity: aq, unit: String(a.unit || it.unit || ""), unitPrice: ap };
     }
     if (Object.keys(errors).length) return { ok: false, errors };
@@ -166,6 +171,8 @@
   const progressPct = (st) => (st && st.total > 0 ? Math.round((st.purchased / st.total) * 100) : 0);
   // completing with undecided items = "আংশিক সম্পন্ন"; everything decided = "সম্পন্ন"
   const completionStatus = (st) => (st.undecided > 0 ? "partial" : "completed");
+  // সব কেনা পণ্যের মূল্য সংরক্ষিত না থাকলে বাজার সম্পন্ন করা যাবে না
+  const canCompleteList = (st) => !!st && !(st.incompletePrice > 0);
 
   /* ------------------------------- permissions ------------------------------- */
   // member = a family member doc ({status, role, ...}) — same shape family-bazar-core.js uses
@@ -213,7 +220,7 @@
     ITEM_STATUS, ITEM_STATUS_LABEL, ITEM_STATUS_TONE, SHOPPER_STATUSES, LIST_STATUS, LIST_STATUS_LABEL, UNITS,
     parseNum, round2, randomId, isValidYmd,
     blankItemDraft, validateItemDraft, item, validateListDraft, buildList, validateStatusUpdate,
-    estLineTotal, boughtQty, actualLineTotal, isPurchased, needsPrice, listStats, progressPct, completionStatus,
+    estLineTotal, boughtQty, actualLineTotal, isPurchased, needsPrice, listStats, progressPct, completionStatus, canCompleteList,
     canCreateList, isManager, isShopper, canEditStructure, canShop, canDeleteList, canReopen, isOpen,
     copyDraft, purchaseSeed, sortNewest, filterLists, pendingForShopper,
   };
