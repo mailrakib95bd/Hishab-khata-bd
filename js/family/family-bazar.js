@@ -67,6 +67,14 @@
       localStorage.setItem(prefKey(uid), JSON.stringify(p));
     } catch (e) { /* storage full / private mode — hints only */ }
   }
+  // সর্বশেষ যে অ্যাকাউন্ট থেকে বাজার করা হয়েছিল — পরেরবার সেটিই আগে থেকে বাছা থাকে (শুধু ইঙ্গিত)
+  function rememberPayment(uid, pay) {
+    try { const p = readPrefs(uid); p.payment = pay; localStorage.setItem(prefKey(uid), JSON.stringify(p)); } catch (e) { /* hints only */ }
+  }
+  // ব্যালেন্স মাইনাস হলে চিহ্নসহ দেখায় (formatTaka শুধু পরিমাণ দেখায়, মাইনাস লুকিয়ে ফেলে)
+  const balText = (n) => ((Number(n) || 0) < 0 ? "−" : "") + money(Math.abs(Number(n) || 0));
+  // r = wallet.check()/wallet.shortFor()-এর ফল। যে অ্যাকাউন্টে টাকা কম, তার নাম নিয়ে সতর্কবার্তা — বাজার তালিকাতেও এটাই দেখায়।
+  const walletShortMsg = (r) => `${r.label} অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই (আছে ${balText(r.balance)}, লাগবে ${money(r.need)})। কেনাকাটা সম্পন্ন করতে আগে টাকা যোগ করুন।`;
   const activeKey = (uid) => `hk-fb-active:${uid}`;
 
   /* ------------------------------------------------------------------ *
@@ -631,6 +639,14 @@
     const [busy, setBusy] = useState(false);
     const [dirty, setDirty] = useState(false);
     const busyRef = useRef(false);
+    // পেমেন্ট অ্যাকাউন্ট: খরচ ঠিক এই অ্যাকাউন্ট থেকে কাটে, আর এতে টাকা না থাকলে ক্রয় সংরক্ষণই হয় না (নিচে wallet.check)।
+    // সম্পাদনায় আগে যে অ্যাকাউন্ট থেকে গিয়েছিল সেটিই বাছা থাকে; নতুন ক্রয়ে সর্বশেষ ব্যবহৃত অ্যাকাউন্ট (না থাকলে ক্যাশ)।
+    const wallet = ctx.wallet || null;
+    const [payment, setPayment] = useState(() => {
+      if (!wallet) return undefined;
+      const own = initial ? wallet.paymentFor(purchaseId.current) : null;
+      return own || (prefs.payment && wallet.options.some((o) => o.value === prefs.payment) ? prefs.payment : "m:cash");
+    });
 
     const productNames = useMemo(() => {
       const set = new Map();
@@ -664,6 +680,10 @@
     };
 
     const runningTotal = Core.round2(rows.reduce((s, r) => s + (isNaN(rowTotalOf(r)) ? 0 : rowTotalOf(r)), 0));
+    // লাইভ যাচাই: টাইপ করতে করতেই দেখা যায় বাছা অ্যাকাউন্টে টাকা আছে কি না (সংরক্ষণের সময় আবার যাচাই হয়)
+    const live = wallet && runningTotal > 0 ? wallet.check(payment, runningTotal, purchaseId.current) : null;
+    const payOptions = !wallet ? [] : wallet.options.some((o) => o.value === payment) ? wallet.options
+      : wallet.options.concat([{ value: payment, label: wallet.check(payment, 0, purchaseId.current).label, balance: wallet.check(payment, 0, purchaseId.current).balance }]);
 
     const submit = async () => {
       if (busyRef.current) return;                  // no double submission
@@ -681,13 +701,19 @@
       v.items.forEach((it) => { const k = findProduct(fam.products, it.productName); if (k) it.productId = k.id; });
       setErrors([]);
       const p = Core.buildPurchase({ purchaseId: purchaseId.current, memberId: uid, memberName: ctx.me.name, date, market, location, note, trackPrice, items: v.items, createdAt: initial && initial.createdAt });
+      // টাকা না থাকলে কিছুই সংরক্ষণ হয় না — না Family-র তালিকায়, না ব্যক্তিগত খরচে; Wallet কৃত্রিমভাবে মাইনাস হয় না
+      if (wallet) {
+        const r = wallet.check(payment, p.total, purchaseId.current);
+        if (!r.ok) { setErrors([walletShortMsg(r)]); return; }
+      }
       busyRef.current = true; setBusy(true);
       try {
         const old = initial ? Object.assign({}, initial) : null;
         if (old) delete old.id;
         await window.FB.savePurchase(ctx.familyId, old, p);
         rememberPrefs(uid, p);
-        ctx.afterPurchaseChange(old, p);
+        if (wallet) rememberPayment(uid, payment);
+        ctx.afterPurchaseChange(old, p, payment);
         if (initial) {
           ctx.closeAll(); // edited from the details page: details would show the OLD data, so leave both
         } else {
@@ -701,14 +727,19 @@
     const sel = Object.assign({}, S.input, { marginBottom: 0 });
     return h(Sheet, { title: initial ? "কেনাকাটা সম্পাদনা" : "নতুন বাজার যোগ করুন", onClose: guardedClose,
       footer: h("div", null,
-        errors.length > 0 && h("div", { style: { color: "var(--hk-danger)", fontSize: 13, marginBottom: 8, lineHeight: 1.5 } }, errors.map((e, i) => h("div", { key: i }, "• " + e))),
+        errors.length > 0 && h("div", { role: "alert", style: { color: "var(--hk-danger)", fontSize: 13, marginBottom: 8, lineHeight: 1.5 } }, errors.map((e, i) => h("div", { key: i }, "• " + e))),
+        errors.length === 0 && live && !live.ok && h("div", { role: "alert", style: { color: "var(--hk-danger)", fontSize: 13, marginBottom: 8, lineHeight: 1.5 } }, "⚠ " + walletShortMsg(live)),
         h("div", { style: Object.assign({}, S.row, { marginBottom: 8 }) }, h("span", { style: S.muted }, "সর্বমোট"), h("span", { style: { fontFamily: SERIF, fontSize: 24 } }, money(runningTotal))),
-        h("button", { style: S.btn, disabled: busy, onClick: submit }, busy ? "সংরক্ষণ হচ্ছে…" : initial ? "পরিবর্তন সংরক্ষণ করুন" : "সংরক্ষণ করুন")) },
+        h("button", { style: S.btn, disabled: busy || !!(live && !live.ok), onClick: submit }, busy ? "সংরক্ষণ হচ্ছে…" : initial ? "পরিবর্তন সংরক্ষণ করুন" : "সংরক্ষণ করুন")) },
       h("datalist", { id: "fb-products" }, productNames.map((n) => h("option", { key: n, value: n }))),
       h("datalist", { id: "fb-markets" }, (prefs.markets || []).map((n) => h("option", { key: n, value: n }))),
       h("datalist", { id: "fb-locations" }, (prefs.locations || []).map((n) => h("option", { key: n, value: n }))),
       h("label", { style: S.label }, "তারিখ"),
       h("input", { type: "date", style: S.input, value: date, max: today(), onChange: (e) => { setDate(e.target.value); setDirty(true); } }),
+      wallet && h("div", null,
+        h("label", { style: S.label }, "পেমেন্ট অ্যাকাউন্ট (এখান থেকেই খরচ কাটবে)"),
+        h("select", { style: S.input, value: payment, "aria-label": "পেমেন্ট অ্যাকাউন্ট", onChange: (e) => { setPayment(e.target.value); setDirty(true); setErrors([]); } },
+          payOptions.map((o) => h("option", { key: o.value, value: o.value }, `${o.label} — ব্যালেন্স ${balText(o.balance)}`)))),
       !initial && quick.length > 0 && h("div", { style: { marginBottom: 12 } },
         h("div", { style: S.label }, "দ্রুত যোগ — আগে কেনা পণ্য"),
         h("div", { style: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 } }, quick.map((p) => h("button", { key: p.name, style: S.chip(false), onClick: () => addQuick(p) }, "+ " + p.name)))),
@@ -1376,7 +1407,7 @@
     return children;
   }
 
-  function Module({ user, onClose, mode, section, startView, onExpenseSync, otherByMonth }) {
+  function Module({ user, onClose, mode, section, startView, wallet, onExpenseSync, otherByMonth }) {
     const embedded = mode === "embedded";
     const FPl = window.FamilyPlanning;
     const FS = window.FamilyShopping;
@@ -1420,12 +1451,12 @@
       uid, user, familyId: D.activeId, activeId: D.activeId, families: D.top.families, family: D.family, incoming: D.top.incoming,
       emailVerified: !!(window.FB && window.FB.emailVerified && window.FB.emailVerified()),
       fam: D.fam, vis: D.vis, me: D.myMember, purchaseTick, inviteTick, prevMonthKey: Core.addMonths(cm, -1),
-      myOther: otherByMonth || null, toast, openSheet: setSheet, closeAll, loadTop: D.loadTop, reload: D.reload,
+      myOther: otherByMonth || null, wallet: wallet || null, toast, openSheet: setSheet, closeAll, loadTop: D.loadTop, reload: D.reload,
       setActive: (id) => { D.setActive(id); setStack([]); setTab("home"); setMoreView(null); },
       goMore: (v) => { setView("bazar"); setTab("more"); setMoreView(v); },
       bumpInvites: () => setInviteTick((n) => n + 1),
       afterAccept: async (fid) => { await D.loadTop(fid); D.setActive(fid); setStack([]); setTab("home"); },
-      afterPurchaseChange: (oldP, newP) => {
+      afterPurchaseChange: (oldP, newP, payment) => {
         const amount = D.fam.budget && D.fam.budget.monthlyAmount;
         let lvl = null;
         if (amount && D.vis.totals) {
@@ -1439,7 +1470,7 @@
         // always this account's own purchase (Firestore rules require
         // memberId === uid), so it also belongs in this account's own
         // personal expense ledger, in addition to the shared family view
-        if (onExpenseSync) onExpenseSync(oldP, newP ? Object.assign({}, newP, { familyId: D.activeId }) : null);
+        if (onExpenseSync) onExpenseSync(oldP, newP ? Object.assign({}, newP, { familyId: D.activeId }) : null, payment);
       },
     });
 
@@ -1549,6 +1580,6 @@
   }
 
   // building blocks the separate Family Planning file (family-planning.js) reuses
-  window.FBShared = { CallButtons, Core, taka, unitText, qtyText, dateBn, h, R_Fragment, FPCore, bn, today, F, SERIF, S, Sheet, Toggle, Avatar, Empty, HBar, friendlyError };
+  window.FBShared = { walletShortMsg, CallButtons, Core, taka, unitText, qtyText, dateBn, h, R_Fragment, FPCore, bn, today, F, SERIF, S, Sheet, Toggle, Avatar, Empty, HBar, friendlyError };
   window.FamilyBazar = { Module, useFamilyAlerts };
 })();

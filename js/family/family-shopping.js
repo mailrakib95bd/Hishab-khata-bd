@@ -14,7 +14,7 @@
   const SH = window.FBShared;
   const C = window.FSCore;
   if (!SH || !C) { console.warn("family-shopping.js: needs family-shopping-core.js and family-bazar.js loaded first"); return; }
-  const { h, bn, today, F, SERIF, S, Sheet, Empty, HBar, friendlyError, Core, taka, unitText, qtyText, dateBn, CallButtons } = SH;
+  const { h, bn, today, F, SERIF, S, Sheet, Empty, HBar, friendlyError, Core, taka, unitText, qtyText, dateBn, CallButtons, walletShortMsg } = SH;
 
   /* ------------------------------ small pieces ------------------------------ */
   const TONE = { success: ["var(--hk-success)", "#fff"], danger: ["var(--hk-danger)", "#fff"], warn: ["#c77d0a", "#fff"], info: ["#2f6fb5", "#fff"], gold: ["var(--hk-gold)", "#1a1a1a"], muted: ["var(--hk-border)", "var(--hk-text)"] };
@@ -41,6 +41,9 @@
     }, [ctx.familyId, listId]);
     return items;
   }
+  // তালিকা তৈরি/পাঠানো কোনো খরচ ধরে না — ব্যয় হিসাবে ঢোকে শুধু ক্রয় সংরক্ষিত হলে (💰 বাজারের হিসাবে যোগ করুন → পেমেন্ট অ্যাকাউন্ট থেকে কাটে)।
+  // কিন্তু টাকা নেই এমন বাজার "কেনা হয়েছে" বা "সম্পন্ন" বলে সংরক্ষণও করা যায় না: need টাকা একটি অ্যাকাউন্ট একাই দিতে না পারলে কারণসহ ফেরত দেয়।
+  const walletShort = (ctx, amount) => (ctx.wallet && amount > 0 ? ctx.wallet.shortFor(amount) : null);
   const findList = (ctx, id) => (ctx.fam.shopLists || []).find((l) => l.id === id) || null;
   const run = async (setBusy, setErr, fn) => { setBusy(true); setErr([]); try { await fn(); setBusy(false); return true; } catch (e) { setErr([friendlyError(e)]); setBusy(false); return false; } };
 
@@ -277,6 +280,13 @@
       const v = C.validateStatusUpdate(it, { status, actualUnitPrice: price, actualQuantity: qty, reason, alternative: { name: altName, quantity: altQty, unitPrice: altPrice, unit: it.unit } }, { manager: canEdit });
       if (!v.ok) { setErrors(v.errors); if (v.errors.actualUnitPrice || v.errors.altUnitPrice) ctx.toast("পণ্যের মূল্য লিখুন"); return; }
       setErrors({});
+      // কেনা (বা বিকল্প কেনা) সংরক্ষণে এই তালিকার মোট প্রকৃত খরচ বাড়লে, আগে দেখা হয় Wallet-এ এত টাকা আছে কি না
+      // (মোট খরচ কমলে — যেমন "পাওয়া যায়নি" — কখনো আটকায় না)। টাকা না থাকলে পণ্য "কেনা হয়েছে" হিসেবে সংরক্ষিত হয় না।
+      const need = C.listStats(items.map((r) => (r.id === it.id ? Object.assign({}, r, v.patch) : r))).actualTotal;
+      if (need > C.listStats(items).actualTotal) {
+        const short = walletShort(ctx, need);
+        if (short) { setErr([walletShortMsg(short)]); ctx.toast("পর্যাপ্ত ব্যালেন্স নেই"); return; }
+      }
       run(setBusy, setErr, async () => { await apply(v.patch); ctx.toast("সংরক্ষিত হয়েছে ✓"); close(); });
     };
     const saveInfo = () => {
@@ -288,7 +298,7 @@
       run(setBusy, setErr, async () => { await apply({ name, categoryId, quantity, unit, estUnitPrice, note }); ctx.toast("পণ্যের তথ্য সংরক্ষিত হয়েছে ✓"); close(); });
     };
     const radio = (s) => h("label", { key: s, style: { display: "flex", alignItems: "center", gap: 10, minHeight: 44, padding: "6px 10px", borderRadius: 10, border: "1px solid " + (status === s ? "var(--hk-gold)" : "var(--hk-border)"), marginBottom: 6, opacity: canShop ? 1 : 0.6 } },
-      h("input", { type: "radio", name: "st", checked: status === s, disabled: !canShop, onChange: () => setStatus(s), style: { width: 20, height: 20 } }), h("span", { style: { flex: 1 } }, s === "cancelled" ? "বাতিল (কারণসহ)" : C.ITEM_STATUS_LABEL[s]), statusChip(s));
+      h("input", { type: "radio", name: "st", checked: status === s, disabled: !canShop, onChange: () => { setStatus(s); setErr([]); }, style: { width: 20, height: 20 } }), h("span", { style: { flex: 1 } }, s === "cancelled" ? "বাতিল (কারণসহ)" : C.ITEM_STATUS_LABEL[s]), statusChip(s));
 
     return h(Sheet, { title: "পণ্য আপডেট", onClose: close, footer: canShop ? h("div", null, errBox(err), h("button", { style: S.btn, disabled: busy, onClick: saveStatus }, busy ? "সংরক্ষণ হচ্ছে…" : "সংরক্ষণ করুন")) : null },
       h("div", { style: S.card },
@@ -299,14 +309,14 @@
       h("label", { style: S.label }, "অবস্থা নির্বাচন করুন *"), statuses.map(radio), fieldErr(errors.status),
       status === "bought" && h("div", null,
         h("div", { style: grid2 },
-          h("div", null, h("label", { style: S.label }, "প্রকৃত একক দাম (৳)"), h("input", { style: S.input, inputMode: "decimal", disabled: !canShop, value: price, placeholder: it.estUnitPrice != null ? String(it.estUnitPrice) : "দাম", onChange: (ev) => setPrice(ev.target.value) }), fieldErr(errors.actualUnitPrice)),
-          h("div", null, h("label", { style: S.label }, `কেনা পরিমাণ (${unitText(it.unit)})`), h("input", { style: S.input, inputMode: "decimal", disabled: !canShop, value: qty, placeholder: it.quantity != null ? String(it.quantity) : "পরিমাণ", onChange: (ev) => setQty(ev.target.value) }), fieldErr(errors.actualQuantity))),
+          h("div", null, h("label", { style: S.label }, "প্রকৃত একক দাম (৳)"), h("input", { style: S.input, inputMode: "decimal", disabled: !canShop, value: price, placeholder: it.estUnitPrice != null ? String(it.estUnitPrice) : "দাম", onChange: (ev) => { setPrice(ev.target.value); setErr([]); } }), fieldErr(errors.actualUnitPrice)),
+          h("div", null, h("label", { style: S.label }, `কেনা পরিমাণ (${unitText(it.unit)})`), h("input", { style: S.input, inputMode: "decimal", disabled: !canShop, value: qty, placeholder: it.quantity != null ? String(it.quantity) : "পরিমাণ", onChange: (ev) => { setQty(ev.target.value); setErr([]); } }), fieldErr(errors.actualQuantity))),
         h("div", { style: Object.assign({}, S.row, { marginBottom: 8 }) }, h("span", { style: S.muted }, "মোট দাম"), h("b", { style: { fontFamily: SERIF } }, live == null ? "দাম দিলে হিসাব হবে" : taka(live)))),
       status === "alternative" && h("div", null,
         h("label", { style: S.label }, "বিকল্প পণ্যের নাম *"), h("input", { style: S.input, value: altName, maxLength: 60, disabled: !canShop, placeholder: "যেমন: ইলিশ (ফ্রোজেন)", onChange: (ev) => setAltName(ev.target.value) }), fieldErr(errors.altName),
         h("div", { style: grid2 },
-          h("div", null, h("label", { style: S.label }, "কেনা পরিমাণ"), h("input", { style: S.input, inputMode: "decimal", disabled: !canShop, value: altQty, placeholder: "যেমন ১", onChange: (ev) => setAltQty(ev.target.value) }), fieldErr(errors.altQuantity)),
-          h("div", null, h("label", { style: S.label }, "প্রকৃত একক দাম (৳)"), h("input", { style: S.input, inputMode: "decimal", disabled: !canShop, value: altPrice, placeholder: "যেমন ২৮০", onChange: (ev) => setAltPrice(ev.target.value) }), fieldErr(errors.altUnitPrice))),
+          h("div", null, h("label", { style: S.label }, "কেনা পরিমাণ"), h("input", { style: S.input, inputMode: "decimal", disabled: !canShop, value: altQty, placeholder: "যেমন ১", onChange: (ev) => { setAltQty(ev.target.value); setErr([]); } }), fieldErr(errors.altQuantity)),
+          h("div", null, h("label", { style: S.label }, "প্রকৃত একক দাম (৳)"), h("input", { style: S.input, inputMode: "decimal", disabled: !canShop, value: altPrice, placeholder: "যেমন ২৮০", onChange: (ev) => { setAltPrice(ev.target.value); setErr([]); } }), fieldErr(errors.altUnitPrice))),
         h("div", { style: Object.assign({}, S.row, { marginBottom: 8 }) }, h("span", { style: S.muted }, "মোট দাম"), h("b", { style: { fontFamily: SERIF } }, live == null ? "দাম দিলে হিসাব হবে" : taka(live)))),
       status !== "pending" && h("div", null,
         h("label", { style: S.label }, status === "cancelled" ? "বাতিলের কারণ *" : "কারণ / মন্তব্য (ঐচ্ছিক)"),
@@ -335,14 +345,16 @@
     const undecided = items.filter((i) => i.status === "pending" || i.status === "awaiting");
     const canShop = C.canShop(list, ctx.me, ctx.uid);
     const priceOk = C.canCompleteList(st);
-    const finish = () => priceOk ? run(setBusy, setErr, async () => {
+    // বাজার সম্পন্ন করতে হলে কেনা পণ্যের মোট প্রকৃত খরচ Wallet-এ থাকতে হবে — না থাকলে সম্পন্ন করা যায় না
+    const short = walletShort(ctx, st.actualTotal);
+    const finish = () => short ? undefined : priceOk ? run(setBusy, setErr, async () => {
       await window.FB.updateShoppingList(ctx.familyId, listId, { status: next, stats: st, completedAt: new Date().toISOString(), completedBy: ctx.uid });
       ctx.toast(next === "completed" ? "বাজার সম্পন্ন হয়েছে ✓" : "তালিকা আংশিক সম্পন্ন হিসেবে সংরক্ষিত হয়েছে ✓"); close();
     }) : setErr(["সব কেনা পণ্যের মূল্য লিখে সংরক্ষণ করুন — তারপর বাজার সম্পন্ন করা যাবে।"]);
     const pct = C.progressPct(st);
     const cell = (label, val, tone) => h("div", { style: { background: "var(--hk-card)", border: "1px solid var(--hk-border)", borderRadius: 12, padding: "10px 6px", textAlign: "center" } }, h("div", { style: Object.assign({}, S.muted, { fontSize: 11.5 }) }, label), h("div", { style: { fontFamily: SERIF, fontSize: 22, color: tone || "inherit" } }, bn(val)));
     return h(Sheet, { title: "তালিকার সারাংশ", onClose: close,
-      footer: canShop ? h("div", null, errBox(err), h("button", { style: S.btn, disabled: busy || !priceOk, onClick: finish }, busy ? "সংরক্ষণ হচ্ছে…" : "নিশ্চিত করে বাজার সম্পন্ন করুন")) : null },
+      footer: canShop ? h("div", null, errBox(err), h("button", { style: S.btn, disabled: busy || !priceOk || !!short, onClick: finish }, busy ? "সংরক্ষণ হচ্ছে…" : "নিশ্চিত করে বাজার সম্পন্ন করুন")) : null },
       h("div", { style: Object.assign({}, S.hero, { textAlign: "center" }) }, h("div", { style: { fontFamily: SERIF, fontSize: 18 } }, list.title), h("div", { style: { margin: "8px 0 4px" } }, h(HBar, { pct, color: "var(--hk-success)" })), h("div", null, `${bn(pct)}% সম্পন্ন`)),
       h("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 12 } },
         cell("মোট পণ্য", st.total), cell("কেনা হয়েছে", st.purchased, "var(--hk-success)"), cell("কেনা বাকি", st.pending), cell("পাওয়া যায়নি", st.notFound, "var(--hk-danger)"), cell("দাম বেশি", st.tooExpensive, "#c77d0a"), cell("অসম্পূর্ণ দাম", st.incompletePrice, "var(--hk-danger)")),
@@ -351,7 +363,8 @@
         h("div", { style: Object.assign({}, S.row, { marginTop: 6 }) }, h("span", { style: S.muted }, "কেনা পণ্যের প্রকৃত খরচ"), h("b", { style: { fontFamily: SERIF } }, taka(st.actualTotal))),
         st.awaiting > 0 && h("div", { style: Object.assign({}, S.muted, { marginTop: 6 }) }, `${bn(st.awaiting)}টি পণ্য ক্রেতার মন্তব্যের অপেক্ষায়`),
         st.cancelled > 0 && h("div", { style: S.muted }, `${bn(st.cancelled)}টি পণ্য বাতিল (হিসাবে ধরা হয়নি)`),
-        st.incompletePrice > 0 && h("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginTop: 6 } }, `⚠ ${bn(st.incompletePrice)}টি কেনা পণ্যের মূল্য লেখা হয়নি — মূল্য লিখে সংরক্ষণ না করলে বাজার সম্পন্ন করা যাবে না।`)),
+        st.incompletePrice > 0 && h("div", { style: { color: "var(--hk-danger)", fontSize: 12.5, marginTop: 6 } }, `⚠ ${bn(st.incompletePrice)}টি কেনা পণ্যের মূল্য লেখা হয়নি — মূল্য লিখে সংরক্ষণ না করলে বাজার সম্পন্ন করা যাবে না।`),
+        short && h("div", { role: "alert", style: { color: "var(--hk-danger)", fontSize: 13, marginTop: 8, lineHeight: 1.5 } }, "⚠ " + walletShortMsg(short))),
       undecided.length > 0 && h("div", { style: Object.assign({}, S.card, { borderColor: "var(--hk-danger)" }) },
         h("div", { style: { fontWeight: 700, color: "var(--hk-danger)", marginBottom: 6 } }, `${bn(undecided.length)}টি পণ্যের সিদ্ধান্ত বাকি — কোনোটা বাদ পড়েনি তো?`),
         undecided.map((i) => h("div", { key: i.id, style: S.muted }, `• ${i.name} — ${C.ITEM_STATUS_LABEL[i.status]}`))),
