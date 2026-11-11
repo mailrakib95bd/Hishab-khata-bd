@@ -32,6 +32,18 @@ const snippet = src.slice(start, closeBrace)
   .replace("const FAMILY_BAZAR_EXPENSE_CATEGORY", "var FAMILY_BAZAR_EXPENSE_CATEGORY")
   .replace("const syncFamilyBazarExpense", "var syncFamilyBazarExpense");
 
+// syncFamilyBazarExpense now delegates the "one purchase = exactly one expense" rule to the pure
+// applyFamilyPurchaseToTransactions (tested on its own in family-wallet.test.js); the sandbox below
+// must contain the same real source of it, taken straight from app.js, or the call would not resolve.
+const helperSrc = (() => {
+  const a = src.indexOf("function applyFamilyPurchaseToTransactions(");
+  const fnSrc = src.slice(a, src.indexOf("\n}\n", a) + 3);
+  const c = src.indexOf("const payFieldsOf =");
+  const constSrc = src.slice(c, src.indexOf(";\n", c) + 2);
+  assert(a !== -1 && c !== -1, "applyFamilyPurchaseToTransactions / payFieldsOf not found in app.js");
+  return constSrc + "\n" + fnSrc;
+})();
+
 let passed = 0;
 function t(name, fn) {
   try { fn(); passed++; console.log("  ✓ " + name); }
@@ -56,6 +68,7 @@ function makeState(initial) {
     Object, Array,
   };
   vm.createContext(ctx);
+  vm.runInContext(helperSrc, ctx, { filename: "applyFamilyPurchaseToTransactions.js" });
   vm.runInContext(snippet, ctx, { filename: "syncFamilyBazarExpense.js" });
   return {
     state, persistCalls,

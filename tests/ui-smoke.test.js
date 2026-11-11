@@ -12,6 +12,7 @@ const assert = require("assert");
 /* ---------------- mini React ---------------- */
 const Fragment = Symbol("Fragment");
 let root = null, dirty = false, tree = null;
+let testWallet; const syncCalls = []; // Family বাজার ↔ Wallet দৃশ্যের জন্য (অন্য দৃশ্যে undefined/খালি)
 const store = new Map();
 let cur = null;
 function h(type, props, ...kids) { props = props || {}; const children = kids.length === 1 ? kids[0] : kids; return { type, props: Object.assign({}, props, kids.length ? { children } : {}) }; }
@@ -52,6 +53,24 @@ async function click(label, idx = 0) { const b = buttons(label)[idx]; assert(b, 
 async function back() { const bs = buttons("‹"); const b = bs[bs.length - 1]; assert(b, "no back button"); b.props.onClick(); await tick(); }
 function has(s) { assert(text(tree).includes(s), `missing "${s}" in:\n${text(tree).slice(0, 900)}`); }
 function hasNot(s) { assert(!text(tree).includes(s), `unexpected "${s}"`); }
+
+/* ---------------- real Wallet code, straight out of app.js (never a copy) ---------------- */
+const walletApi = (() => {
+  const appSrc = fs.readFileSync(path.join(__dirname, "..", "js", "app", "app.js"), "utf8");
+  const fnOf = (name) => { const a = appSrc.indexOf("function " + name + "("); assert(a !== -1, name + " not found"); return appSrc.slice(a, appSrc.indexOf("\n}\n", a) + 3); };
+  const cstOf = (name) => { const a = appSrc.indexOf("const " + name + " ="); assert(a !== -1, name + " not found"); const b = appSrc.indexOf("\n];", a); const c = appSrc.indexOf(";\n", a); return appSrc.slice(a, (appSrc.slice(a, a + 40).includes("[") && b !== -1 && b < c + 400 ? b + 3 : c + 2)); };
+  const c = {}; vm.createContext(c);
+  vm.runInContext([cstOf("METHODS"), cstOf("DEBT_METHODS"), cstOf("toPaisa"), cstOf("hasEnough"), cstOf("payValueOfTx"), cstOf("payFieldsOf"), fnOf("methodLabel"),
+    fnOf("computeAccountBalances"), fnOf("computeDynamicAccountBalances"), fnOf("legacyWalletBalance"), fnOf("dynamicWalletBalance"), fnOf("computeWalletTotal"), fnOf("makeFamilyWallet"),
+    "this.api = { computeAccountBalances, computeDynamicAccountBalances, makeFamilyWallet };"].join("\n"), c);
+  return c.api;
+})();
+// a Wallet exactly as App builds it, from opening balances (e.g. { cash: 1500, bkash: 100 })
+const walletWith = (opening) => {
+  const accounts = walletApi.computeAccountBalances([], opening, [], [], []), dyn = walletApi.computeDynamicAccountBalances([], [], [], []);
+  return walletApi.makeFamilyWallet({ accounts, dynamicBalances: dyn, accountOpening: opening, transactions: [], transfers: [], debts: [], userAccounts: [] });
+};
+const setWallet = (w) => { testWallet = w; root = h(root.type, Object.assign({}, root.props, { wallet: w })); render(); };
 
 /* ---------------- environment ---------------- */
 const Core = require("../js/family/family-bazar-core.js");
@@ -204,7 +223,8 @@ async function boot(userUid, extra) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "js", "family", "family-shopping.js"), "utf8"), ctxObj, { filename: "family-shopping.js" });
   const { Module, useFamilyAlerts } = win.FamilyBazar;
   assert(Module && useFamilyAlerts, "exports");
-  root = h(Module, { user: extra === "none" ? null : { uid: userUid, displayName: "x", email: "x@gmail.com" }, mode: /^embedded/.test(extra || "") ? "embedded" : "full", startView: /dashboard$/.test(extra || "") ? "dashboard" : /planning$/.test(extra || "") ? "planning" : /lists$/.test(extra || "") ? "lists" : "bazar", onClose() {} });
+  syncCalls.length = 0;
+  root = h(Module, { wallet: testWallet, onExpenseSync: (...a) => syncCalls.push(a), user: extra === "none" ? null : { uid: userUid, displayName: "x", email: "x@gmail.com" }, mode: /^embedded/.test(extra || "") ? "embedded" : "full", startView: /dashboard$/.test(extra || "") ? "dashboard" : /planning$/.test(extra || "") ? "planning" : /lists$/.test(extra || "") ? "lists" : "bazar", onClose() {} });
   render(); await tick(10);
 }
 
@@ -429,6 +449,62 @@ async function boot(userUid, extra) {
   assert.strictEqual(newP.items[0].productId, Core.productIdFor("চাল")); assert.strictEqual(newP.location, "গাইবান্ধা");
   ok("saved once with stable product id, member and location");
   has("বাজেটের ৯০% ছাড়িয়েছে"); ok("sheet closed; budget 90% warning shown when ৳670 + ৳320 crosses the ৳1,000 budget (spec scenario 10)");
+
+  // ===== Family বাজার ↔ Wallet (spec ৩-৪): টাকা না থাকলে কেনাকাটা আটকায়, থাকলে সংরক্ষিত হয় ও বাছা অ্যাকাউন্ট থেকে কাটে =====
+  const addPurchaseForm = async () => {
+    await click("বাজার যোগ করুন"); has("নতুন বাজার যোগ করুন");
+    await setv("পণ্যের নাম (যেমন: চাল)", "চাল"); await setv("৫", "5"); await setv("৬৪", "64"); // ৫ × ৬৪ = ৳৩২০
+  };
+  const savedPurchases = () => win.FB.calls.filter((c) => c[0] === "savePurchase");
+  testWallet = walletWith({ cash: 0 });
+  await boot("u1"); await addPurchaseForm();
+  has("ক্যাশ অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই"); has("কেনাকাটা সম্পন্ন করতে আগে টাকা যোগ করুন");
+  assert(find(tree, (n) => n.host === "button" && text(n).trim() === "সংরক্ষণ করুন")[0].props.disabled === true, "save button is disabled while the account is short");
+  await clickExact("সংরক্ষণ করুন"); await tick(8); // even if the disabled button is somehow pressed, submit() itself must refuse
+  assert.strictEqual(savedPurchases().length, 0, "nothing saved to the family list"); assert.strictEqual(syncCalls.length, 0, "nothing added to the personal expenses either");
+  ok("ক্যাশে টাকা নেই: বাজার আটকায়, সতর্কবার্তায় অ্যাকাউন্টের নাম, Family-তেও না ব্যক্তিগত খরচেও না কিছুই সংরক্ষণ হয় না");
+
+  testWallet = walletWith({ cash: 1500, bkash: 100 });
+  await boot("u1"); await addPurchaseForm(); hasNot("পর্যাপ্ত ব্যালেন্স নেই");
+  has("ক্যাশ — ব্যালেন্স ৳1,500"); has("বিকাশ — ব্যালেন্স ৳100"); ok("পেমেন্ট অ্যাকাউন্ট নির্বাচকে প্রতিটি অ্যাকাউন্টের ব্যালেন্স দেখায়");
+  await setAria("পেমেন্ট অ্যাকাউন্ট", "m:bkash", "select"); has("বিকাশ অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই");
+  await clickExact("সংরক্ষণ করুন"); await tick(8); assert.strictEqual(savedPurchases().length, 0);
+  ok("ক্যাশে ১,৫০০ থাকলেও বিকাশে ১০০ — বিকাশ বাছলে আটকায় এবং সতর্কবার্তায় 'বিকাশ'-এর নাম আসে (ক্যাশের টাকা ধরা হয় না)");
+  await setAria("পেমেন্ট অ্যাকাউন্ট", "m:cash", "select"); hasNot("পর্যাপ্ত ব্যালেন্স নেই");
+  await clickExact("সংরক্ষণ করুন"); await tick(10);
+  assert.strictEqual(savedPurchases().length, 1, "saved once"); assert.strictEqual(savedPurchases()[0][3].total, 320);
+  assert.strictEqual(syncCalls.length, 1, "personal ledger synced exactly once"); assert.strictEqual(syncCalls[0][2], "m:cash", "…from the chosen account");
+  assert.strictEqual(syncCalls[0][1].total, 320);
+  ok("ক্যাশে যথেষ্ট টাকা: ৳৩২০-র বাজার সংরক্ষিত হয়, এবং ব্যক্তিগত খরচে ঠিক একবার, ক্যাশ অ্যাকাউন্ট নির্দেশ করে যায়");
+
+  // বাজার তালিকা: পাঠানো/তৈরি খরচ নয়; "কেনা হয়েছে" ও "সম্পন্ন" দুটোই Wallet দেখে
+  testWallet = walletWith({ cash: 400 });
+  await boot("u1", "embedded-lists");
+  assert.strictEqual(syncCalls.length, 0, "creating / receiving a list never creates an expense");
+  await click("সাপ্তাহিক বাজার"); await tick();
+  await clickAria("চাল — বিস্তারিত"); await pickStatus("কেনা হয়েছে"); await setv("70", "68"); await clickExact("সংরক্ষণ করুন"); await tick(8);
+  { const c = lastCall("updateShoppingItem"); assert(c && c[3] === "i1" && c[4].status === "bought" && c[5].actualTotal === 340, "৳৩৪০ ≤ ক্যাশ ৳৪০০ → সংরক্ষিত"); }
+  ok("তালিকা: ৳৩৪০-র কেনা পণ্য, ক্যাশে ৳৪০০ আছে — 'কেনা হয়েছে' সংরক্ষিত হয়");
+  const itemUpdates = () => win.FB.calls.filter((c) => c[0] === "updateShoppingItem").length;
+  { const before = itemUpdates();
+    await clickAria("আলু — বিস্তারিত"); await pickStatus("কেনা হয়েছে"); await setv("30", "40"); await clickExact("সংরক্ষণ করুন"); await tick(8); // +৳৮০ → মোট ৳৪২০ > ৳৪০০
+    has("ক্যাশ অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই"); has("কেনাকাটা সম্পন্ন করতে আগে টাকা যোগ করুন");
+    assert.strictEqual(itemUpdates(), before, "পণ্যটি 'কেনা হয়েছে' হিসেবে সংরক্ষিত হয়নি"); }
+  ok("তালিকা: আরও ৳৮০ যোগ হলে মোট ৳৪২০ > ক্যাশ ৳৪০০ — 'কেনা হয়েছে' সংরক্ষণ আটকায়, কারণসহ সতর্কবার্তা, কিছুই সংরক্ষিত হয় না");
+  { await pickStatus("বাজারে পাওয়া যায়নি"); await setTextarea("যেমন: আজকে বাজারে মাছ ছিল না।", "নেই"); const before = itemUpdates(); await clickExact("সংরক্ষণ করুন"); await tick(8);
+    assert.strictEqual(itemUpdates(), before + 1, "খরচ না বাড়ালে (পাওয়া যায়নি) কখনো আটকায় না"); }
+  ok("তালিকা: খরচ না-বাড়ানো পরিবর্তন (পাওয়া যায়নি) Wallet যা-ই হোক আটকায় না");
+  setWallet(walletWith({ cash: 300 })); // এখন ৳৩৪০-র কেনা পণ্য, কিন্তু সবচেয়ে বেশি টাকার অ্যাকাউন্টে মাত্র ৳৩০০
+  await click("বাজার সম্পন্ন করুন"); await tick(); has("তালিকার সারাংশ"); has("ক্যাশ অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই");
+  assert(find(tree, (n) => n.host === "button" && text(n).includes("নিশ্চিত করে বাজার সম্পন্ন করুন"))[0].props.disabled === true, "complete button disabled");
+  { const done = () => win.FB.calls.filter((c) => c[0] === "updateShoppingList" && c[3] && c[3].completedAt).length;
+    await click("নিশ্চিত করে বাজার সম্পন্ন করুন"); await tick(8); assert.strictEqual(done(), 0, "বাজার সম্পন্ন হয়নি");
+    setWallet(walletWith({ cash: 400 })); await tick(); hasNot("পর্যাপ্ত ব্যালেন্স নেই");
+    await click("নিশ্চিত করে বাজার সম্পন্ন করুন"); await tick(8); assert.strictEqual(done(), 1, "টাকা থাকলে সম্পন্ন হয়"); }
+  ok("তালিকা: ৳৩৪০ লাগবে, ক্যাশে ৳৩০০ → 'বাজার সম্পন্ন' আটকায়; ৳৪০০ হলে সম্পন্ন হয়");
+  assert.strictEqual(syncCalls.length, 0, "তালিকা তৈরি, পাঠানো, কেনা ও সম্পন্ন করা কোনোটাই খরচ ঢোকায়নি — শুধু ক্রয় সংরক্ষণেই ঢোকে");
+  ok("তালিকা নিজে কোনো ব্যয় ঢোকায় না (শুধু ক্রয়-ফর্মের সফল পেমেন্টে)");
+  testWallet = undefined;
 
   console.log(`\n${n} UI smoke checks passed`);
   process.exit(0); // the fake renderer never runs real effect cleanups, so
