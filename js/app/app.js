@@ -223,30 +223,36 @@ const hasEnough = (balance, amount) => toPaisa(balance) - toPaisa(amount) >= 0;
 // with no method counts as cash (old data, Family Bazar sync) — so check and display always agree.
 function legacyWalletBalance(method, data, exclude) {
     const x = exclude || {};
+    // computeAccountBalances-এর সঙ্গে হুবহু একই নিয়ম: যে নামযুক্ত অ্যাকাউন্ট আর তালিকায় নেই তার accountId "নামযুক্ত" ধরা হয় না,
+    // টাকাটা এন্ট্রির নিজস্ব মাধ্যমে (না থাকলে ক্যাশে) গোনা হয় — নইলে প্রদর্শিত ব্যালেন্স আর যাচাইয়ের ব্যালেন্স আলাদা হয়ে যেত।
+    const known = data.userAccounts ? new Set(data.userAccounts.map((a) => a.id)) : null;
+    const named = (id) => !!id && (!known || known.has(id));
     let sum = (data.accountOpening && data.accountOpening[method]) || 0;
     for (const t of data.transactions || []) {
         if (x.txId && t.id === x.txId)
             continue;
-        if (t.accountId || (t.method || "cash") !== method)
+        if (named(t.accountId) || (t.method || "cash") !== method)
             continue;
         sum += t.type === "income" ? t.amount : -t.amount;
     }
     for (const tr of data.transfers || []) {
         if (x.transferId && tr.id === x.transferId)
             continue;
-        if (tr.fromMethod === method)
+        if (tr.status && tr.status !== "success")
+            continue; // অপেক্ষমাণ/ব্যর্থ স্থানান্তর কোনো ব্যালেন্স বদলায় না
+        if ((tr.fromMethod || (tr.fromAccountId && !named(tr.fromAccountId) ? "cash" : null)) === method)
             sum -= tr.amount;
-        if (tr.toMethod === method)
+        if ((tr.toMethod || (tr.toAccountId && !named(tr.toAccountId) ? "cash" : null)) === method)
             sum += tr.amount;
     }
     for (const d of data.debts || []) {
-        if (d.method === method && !d.accountId && !(x.debtId && d.id === x.debtId)) {
+        if ((d.method || (d.accountId ? "cash" : null)) === method && !named(d.accountId) && !(x.debtId && d.id === x.debtId)) {
             sum += (d.type === "payable" ? 1 : -1) * d.amount;
         }
         for (const r of d.repayments || []) {
             if (x.repaymentId && r.id === x.repaymentId)
                 continue;
-            if (r.method !== method)
+            if ((r.method || (r.accountId && !named(r.accountId) ? "cash" : null)) !== method)
                 continue;
             sum += (d.type === "receivable" ? 1 : -1) * r.amount;
         }
@@ -270,13 +276,18 @@ const DEFAULT_ACCOUNTS = METHODS.map((m) => ({ key: m.key, label: m.label }));
 // expense recorded against that method, plus/minus any transfers in/out.
 // Only methods with any activity or a non-zero opening balance are
 // returned, richest balance first.
-function computeAccountBalances(transactions, accountOpening, transfers, debts) {
+function computeAccountBalances(transactions, accountOpening, transfers, debts, userAccounts) {
     const sums = {};
+    // নামযুক্ত অ্যাকাউন্ট আর তালিকায় না থাকলে (যেমন অ্যাকাউন্ট-তালিকা ছাড়া পুরোনো ব্যাকআপ রিস্টোর) তার accountId-ওয়ালা
+    // লেনদেনের টাকা কোনো ব্যালেন্সেই গোনা হতো না: "আয়" সংখ্যায় থাকত কিন্তু "মোট সম্পদ"-এ থাকত না। তাই অজানা accountId
+    // এন্ট্রির নিজস্ব মাধ্যমে (না থাকলে ক্যাশে) গোনা হয় — টাকা কখনো নীরবে হারায় না। userAccounts না দিলে আগের আচরণই বহাল।
+    const known = userAccounts ? new Set(userAccounts.map((a) => a.id)) : null;
+    const named = (id) => !!id && (!known || known.has(id));
     for (const t of transactions) {
         // a transaction paid from a NAMED account (accountId) is that account's money
         // only — computeDynamicAccountBalances counts it. Counting it here too (the form
         // also stores a default method) took the same taka out of the cash wallet twice.
-        if (t.accountId)
+        if (named(t.accountId))
             continue;
         const key = t.method || "cash";
         sums[key] = (sums[key] || 0) + (t.type === "income" ? t.amount : -t.amount);
@@ -286,11 +297,16 @@ function computeAccountBalances(transactions, accountOpening, transfers, debts) 
     // Dynamic DBBL → Legacy Bank). Only touch this legacy sum when that
     // side actually used a legacy method; the dynamic side of the same
     // transfer is picked up separately by computeDynamicAccountBalances.
+    // স্থানান্তরের অবস্থা: শুধু সফল (বা অবস্থা-ক্ষেত্রহীন পুরোনো) স্থানান্তর টাকা সরায়; অপেক্ষমাণ/ব্যর্থ কোনো ব্যালেন্স বদলায় না।
     for (const tr of transfers || []) {
-        if (tr.fromMethod)
-            sums[tr.fromMethod] = (sums[tr.fromMethod] || 0) - tr.amount;
-        if (tr.toMethod)
-            sums[tr.toMethod] = (sums[tr.toMethod] || 0) + tr.amount;
+        if (tr.status && tr.status !== "success")
+            continue;
+        const from = tr.fromMethod || (tr.fromAccountId && !named(tr.fromAccountId) ? "cash" : null);
+        const to = tr.toMethod || (tr.toAccountId && !named(tr.toAccountId) ? "cash" : null);
+        if (from)
+            sums[from] = (sums[from] || 0) - tr.amount;
+        if (to)
+            sums[to] = (sums[to] || 0) + tr.amount;
     }
     // debt repayments move real money too: paying off something you owe
     // (payable) leaves an account the same way an expense would; collecting
@@ -300,14 +316,16 @@ function computeAccountBalances(transactions, accountOpening, transfers, debts) 
     // guessed, so past balances don't silently shift under existing data.
     for (const d of debts || []) {
         // মূল ধার: নিলে (দেনা) wallet বাড়ে, দিলে (পাওনা) কমে — পরিশোধের উল্টো দিক
-        if (d.method && !d.accountId) {
-            sums[d.method] = (sums[d.method] || 0) + (d.type === "payable" ? 1 : -1) * d.amount;
+        const dKey = d.method || (d.accountId ? "cash" : null);
+        if (dKey && !named(d.accountId)) {
+            sums[dKey] = (sums[dKey] || 0) + (d.type === "payable" ? 1 : -1) * d.amount;
         }
         for (const r of d.repayments || []) {
-            if (!r.method)
+            const rKey = r.method || (r.accountId && !named(r.accountId) ? "cash" : null);
+            if (!rKey)
                 continue;
             const sign = d.type === "receivable" ? 1 : -1;
-            sums[r.method] = (sums[r.method] || 0) + sign * r.amount;
+            sums[rKey] = (sums[rKey] || 0) + sign * r.amount;
         }
     }
     return METHODS.map((m) => {
@@ -329,6 +347,8 @@ function computeDynamicAccountBalances(transactions, userAccounts, transfers, de
         sums[t.accountId] = (sums[t.accountId] || 0) + (t.type === "income" ? t.amount : -t.amount);
     }
     for (const tr of transfers || []) {
+        if (tr.status && tr.status !== "success")
+            continue; // অপেক্ষমাণ/ব্যর্থ স্থানান্তর কোনো ব্যালেন্স বদলায় না
         if (tr.fromAccountId)
             sums[tr.fromAccountId] = (sums[tr.fromAccountId] || 0) - tr.amount;
         if (tr.toAccountId)
@@ -361,6 +381,88 @@ function computeWalletTotal(legacyBalances, dynamicBalances) {
         sum += a.balance || 0;
     return sum;
 }
+/* ---------------- Family বাজার ↔ Wallet ---------------- */
+// পেমেন্টের মান একটাই স্ট্রিং: "m:<মাধ্যম>" (ক্যাশ/বিকাশ/নগদ/রকেট/ব্যাংক/কার্ড) অথবা "a:<নামযুক্ত অ্যাকাউন্টের id>" —
+// TransferForm-এর নির্বাচকের মতোই। লেনদেনে এটি { method, accountId } হয়ে সংরক্ষিত হয় (নামযুক্ত অ্যাকাউন্টে method "cash" রাখা হয়,
+// ঠিক TransactionForm-এর মতো; ব্যালেন্সে accountId-ই প্রাধান্য পায়, তাই একই টাকা দু'বার গোনা হয় না)।
+const payFieldsOf = (pay) => (String(pay || "").indexOf("a:") === 0 ? { method: "cash", accountId: String(pay).slice(2) } : { method: String(pay || "m:cash").replace(/^m:/, "") || "cash", accountId: null });
+const payValueOfTx = (t) => (t && t.accountId ? "a:" + t.accountId : "m:" + ((t && t.method) || "cash"));
+// Family বাজারের জন্য Wallet-এর একটি "ছবি": কোন অ্যাকাউন্টে কত টাকা, কেনাকাটার আগে যাচাই (check), তালিকার জন্য যাচাই (shortFor)।
+// ব্যালেন্স আসে সেই একই ইঞ্জিন থেকেই যা Header/Dashboard দেখায় (legacyWalletBalance / dynamicWalletBalance) — আলাদা কোনো হিসাব নেই।
+// ক্রয় সম্পাদনার সময় ওই ক্রয়ের নিজের আগের খরচ বাদ দিয়ে যাচাই হয় (purchaseId দিয়ে খুঁজে), নইলে নিজের টাকাই দু'বার কাটা পড়ত।
+function makeFamilyWallet(d) {
+    const data = { accountOpening: d.accountOpening, transactions: d.transactions, transfers: d.transfers, debts: d.debts, userAccounts: d.userAccounts };
+    const accts = d.userAccounts || [];
+    const txOf = (purchaseId) => (purchaseId ? (d.transactions || []).find((t) => t.familyPurchaseId === purchaseId) || null : null);
+    const options = METHODS.map((m) => {
+        const row = (d.accounts || []).find((a) => a.key === m.key);
+        return { value: "m:" + m.key, label: m.label, balance: row ? row.balance : 0 };
+    }).concat((d.dynamicBalances || []).filter((a) => a.active !== false).map((a) => ({ value: "a:" + a.id, label: a.name, balance: a.balance })));
+    return {
+        total: computeWalletTotal(d.accounts, d.dynamicBalances),
+        options,
+        // payment: "m:cash" | "a:<id>", amount: টাকা, purchaseId: সম্পাদনার ক্ষেত্রে ক্রয়ের id
+        check(payment, amount, purchaseId) {
+            const pay = payment || "m:cash";
+            const own = txOf(purchaseId);
+            const x = own ? { txId: own.id } : {};
+            let label, balance;
+            if (pay.indexOf("a:") === 0) {
+                const id = pay.slice(2), acc = accts.find((a) => a.id === id);
+                label = acc ? acc.name : "মুছে ফেলা অ্যাকাউন্ট";
+                balance = acc ? dynamicWalletBalance(id, data, x) : 0;
+            }
+            else {
+                const key = pay.slice(2);
+                label = methodLabel(key);
+                balance = legacyWalletBalance(key, data, x);
+            }
+            return { ok: hasEnough(balance, amount), payment: pay, label, balance, need: amount };
+        },
+        // এই ক্রয়ের খরচ যে অ্যাকাউন্ট থেকে গেছে (না থাকলে null)
+        paymentFor(purchaseId) {
+            const t = txOf(purchaseId);
+            return t ? payValueOfTx(t) : null;
+        },
+        // বাজার তালিকার জন্য: কোন অ্যাকাউন্ট ঠিক করা নেই, তাই দেখা হয় এমন কোনো একটি অ্যাকাউন্ট আছে কি না যেটি একাই পুরো টাকা দিতে পারে
+        // (ক্রয় পরে একটিমাত্র অ্যাকাউন্ট থেকেই হয়)। না থাকলে সবচেয়ে বেশি টাকার অ্যাকাউন্টটির নাম ও ব্যালেন্স ফেরত দেয়; যথেষ্ট থাকলে null।
+        shortFor(amount) {
+            if (!(toPaisa(amount) > 0))
+                return null;
+            let best = null;
+            for (const o of options)
+                if (!best || toPaisa(o.balance) > toPaisa(best.balance))
+                    best = o;
+            if (!best || hasEnough(best.balance, amount))
+                return null;
+            return { label: best.label, balance: best.balance, need: amount };
+        },
+    };
+}
+// একটি Family বাজারের ক্রয়কে ব্যক্তিগত লেনদেনে (খরচ হিসেবে) বসানো/বদলানো/মোছা — একটি ক্রয় = ঠিক একটি খরচ (familyPurchaseId দিয়ে),
+// তাই বারবার সিঙ্ক হলেও দু'বার গোনা হয় না। payment না দিলে আগের অ্যাকাউন্টই থাকে (নীরবে ক্যাশে সরে না); নতুন ক্রয়ে না দিলে ক্যাশ।
+// আগের অন্য কোনো লেনদেন ছোঁয়া হয় না।
+function applyFamilyPurchaseToTransactions(transactions, oldPurchase, newPurchase, payment, categoryKey, mkId, now) {
+    const purchaseId = (newPurchase || oldPurchase || {}).purchaseId;
+    if (!purchaseId)
+        return transactions;
+    const existing = transactions.find((t) => t.familyPurchaseId === purchaseId);
+    if (!newPurchase)
+        return existing ? transactions.filter((t) => t.id !== existing.id) : transactions;
+    const note = [newPurchase.market, newPurchase.location].filter(Boolean).join(" • ") || "ফ্যামিলি বাজার";
+    const patch = {
+        type: "expense", amount: newPurchase.total, date: newPurchase.date,
+        category: categoryKey, note,
+        familyPurchaseId: purchaseId, familyId: newPurchase.familyId || null, source: "family-bazar",
+    };
+    if (payment)
+        Object.assign(patch, payFieldsOf(payment));
+    else if (!existing)
+        Object.assign(patch, payFieldsOf("m:cash"));
+    return existing
+        ? transactions.map((t) => (t.id === existing.id ? Object.assign({}, t, patch) : t))
+        : [...transactions, Object.assign({ id: mkId(), createdAt: now }, patch)];
+}
 // প্রতিটি স্থানান্তর একটি এন্ট্রি (দুই পাশে দুটি নয়) — সাম্প্রতিক লেনদেন, টাইমলাইন, রিপোর্ট ও অ্যাকাউন্টের ইতিহাসে দেখানোর জন্য।
 // এগুলোও সংরক্ষিত হয় না; `transfers` থেকে বানানো হয় এবং কখনো ব্যালেন্সে যোগ হয় না (ব্যালেন্স আলাদাভাবে transfers থেকেই)।
 // type: "transfer" — আয়ও নয়, ব্যয়ও নয়: মোট Wallet-এ নিট প্রভাব ০, শুধু এক পকেট থেকে অন্য পকেটে যাওয়া।
@@ -374,6 +476,7 @@ function transferCashEntries(transfers, userAccounts) {
     return (transfers || []).map((tr) => ({
         id: `transfer:${tr.id}`, isTransferEntry: true, transferId: tr.id, type: "transfer", category: "transfer",
         amount: tr.amount, date: tr.date, time: tr.time || null, note: tr.note || "", createdAt: tr.createdAt || 0,
+        status: tr.status || "success", // সফল | অপেক্ষমাণ | ব্যর্থ — পুরোনো স্থানান্তরে ক্ষেত্রটি নেই, সেগুলো সফল
         fromLabel: side(tr, "from"), toLabel: side(tr, "to"),
         fromMethod: tr.fromMethod || null, toMethod: tr.toMethod || null, fromAccountId: tr.fromAccountId || null, toAccountId: tr.toAccountId || null,
         method: null, accountId: null,
@@ -1628,7 +1731,9 @@ function App() {
     // (same `purchaseId` across an edit); newPurchase null means it was
     // deleted there, so the matching personal transaction is deleted too.
     const FAMILY_BAZAR_EXPENSE_CATEGORY = { key: "family_bazar", label: "ফ্যামিলি বাজার", icon: "🛒" };
-    const syncFamilyBazarExpense = (oldPurchase, newPurchase) => {
+    // payment: "m:<মাধ্যম>" | "a:<অ্যাকাউন্ট id>" — Family বাজারের ক্রয়-ফর্ম যে অ্যাকাউন্ট বেছে নিয়েছে (যাচাই সেখানেই আগে হয়ে গেছে)।
+    // খরচটি ঠিক সেই অ্যাকাউন্ট থেকে কাটে, তাই মোট Wallet ও ওই অ্যাকাউন্টের ব্যালেন্স একসঙ্গে বদলায়; লজিক applyFamilyPurchaseToTransactions-এ (টেস্টেড)।
+    const syncFamilyBazarExpense = (oldPurchase, newPurchase, payment) => {
         const purchaseId = (newPurchase || oldPurchase || {}).purchaseId;
         if (!purchaseId) return;
         let cats = expenseCats;
@@ -1636,21 +1741,7 @@ function App() {
             cats = [...cats, FAMILY_BAZAR_EXPENSE_CATEGORY];
             setExpenseCats(cats);
         }
-        const existing = transactions.find((t) => t.familyPurchaseId === purchaseId);
-        let next = transactions;
-        if (!newPurchase) {
-            if (existing) next = transactions.filter((t) => t.id !== existing.id);
-        } else {
-            const note = [newPurchase.market, newPurchase.location].filter(Boolean).join(" • ") || "ফ্যামিলি বাজার";
-            const patch = {
-                type: "expense", amount: newPurchase.total, date: newPurchase.date,
-                category: FAMILY_BAZAR_EXPENSE_CATEGORY.key, note,
-                familyPurchaseId: purchaseId, familyId: newPurchase.familyId || null, source: "family-bazar",
-            };
-            next = existing
-                ? transactions.map((t) => (t.id === existing.id ? Object.assign({}, t, patch) : t))
-                : [...transactions, Object.assign({ id: uid(), createdAt: Date.now() }, patch)];
-        }
+        const next = applyFamilyPurchaseToTransactions(transactions, oldPurchase, newPurchase, payment, FAMILY_BAZAR_EXPENSE_CATEGORY.key, uid, Date.now());
         if (next !== transactions) setTransactions(next);
         if (next !== transactions || cats !== expenseCats) persistAll(Object.assign({ transactions: next }, cats !== expenseCats ? { expenseCats: cats } : {}));
     };
@@ -1730,6 +1821,11 @@ function App() {
         const amount = computeBazarTotal(item);
         if (!amount || amount <= 0)
             return;
+        // এই খরচ ক্যাশ থেকে কাটে — ক্যাশে যথেষ্ট টাকা না থাকলে খরচ সংরক্ষণই হয় না (Wallet কৃত্রিমভাবে মাইনাস হয় না)
+        if (!hasEnough(legacyWalletBalance("cash", { accountOpening, transactions, transfers, debts, userAccounts }), amount)) {
+            window.alert("ক্যাশ অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই। খরচ হিসেবে যোগ করতে আগে টাকা যোগ করুন।");
+            return;
+        }
         const txId = uid();
         const nextTx = [...transactions, {
                 id: txId,
@@ -1815,7 +1911,7 @@ function App() {
     // could silently let a later expense overdraw an account. excludeRepaymentId
     // lets repayment edit/validation exclude its own old effect, the same
     // way excludeTxId/excludeTransferId already worked for transactions/transfers.
-    const accountBalanceExcluding = (method, excludeTxId, excludeTransferId, excludeRepaymentId) => legacyWalletBalance(method, { accountOpening, transactions, transfers, debts }, { txId: excludeTxId, transferId: excludeTransferId, repaymentId: excludeRepaymentId });
+    const accountBalanceExcluding = (method, excludeTxId, excludeTransferId, excludeRepaymentId) => legacyWalletBalance(method, { accountOpening, transactions, transfers, debts, userAccounts }, { txId: excludeTxId, transferId: excludeTransferId, repaymentId: excludeRepaymentId });
     const checkAccountBalance = (method, type, amount, excludeId) => {
         if (type !== "expense")
             return true;
@@ -1847,7 +1943,7 @@ function App() {
             return true;
         if (accountId)
             return hasEnough(dynamicWalletBalance(accountId, { transactions, userAccounts, transfers, debts }, { debtId: excludeDebtId }), amount);
-        return hasEnough(legacyWalletBalance(method || "cash", { accountOpening, transactions, transfers, debts }, { debtId: excludeDebtId }), amount);
+        return hasEnough(legacyWalletBalance(method || "cash", { accountOpening, transactions, transfers, debts, userAccounts }, { debtId: excludeDebtId }), amount);
     };
     const checkDynamicRepaymentBalance = (debtType, accountId, amount, debtId, excludeRepaymentId) => {
         if (debtType === "receivable")
@@ -2179,10 +2275,12 @@ function App() {
         }, 20 * 1000);
         return () => clearInterval(id);
     }, [tasks, debts, taxes, transactions, budget, specialDays, persist]);
-    const accounts = useMemo(() => computeAccountBalances(transactions, accountOpening, transfers, debts), [transactions, accountOpening, transfers, debts]);
+    const accounts = useMemo(() => computeAccountBalances(transactions, accountOpening, transfers, debts, userAccounts), [transactions, accountOpening, transfers, debts, userAccounts]);
     // টাইমলাইন / রিপোর্ট / সার্চের জন্য: সাধারণ লেনদেন + দেনা-পাওনার নগদ প্রবাহ (ব্যালেন্স হিসাবে এটি ব্যবহার হয় না)
     const ledger = useMemo(() => [...transactions, ...debtCashEntries(debts, userAccounts), ...transferCashEntries(transfers, userAccounts)], [transactions, debts, userAccounts, transfers]);
     const walletTotal = useMemo(() => computeWalletTotal(accounts, dynamicAccountBalances), [accounts, dynamicAccountBalances]);
+    // Family বাজার/বাজার তালিকা এই একই ব্যালেন্স থেকে যাচাই করে (আলাদা ইঞ্জিন নেই) — চার প্রবেশপথেই এটি পৌঁছে দেওয়া হয়
+    const familyWallet = useMemo(() => makeFamilyWallet({ accounts, dynamicBalances: dynamicAccountBalances, accountOpening, transactions, transfers, debts, userAccounts }), [accounts, dynamicAccountBalances, accountOpening, transactions, transfers, debts, userAccounts]);
     const openLedgerEntry = (t) => {
         if (t && t.isTransferEntry) {
             const tr = transfers.find((x) => x.id === t.transferId);
@@ -2223,8 +2321,8 @@ function App() {
                     }, onTransfer: () => setShowTransfer(true), onTransferHistory: () => setShowTransferHistory(true), profileName: profileName, taxes: taxes, bazarItems: bazarItems })),
                 tab === "timeline" && (React.createElement(Timeline, { transactions: ledger, walletTotal: walletTotal, onOpenTx: openLedgerEntry })),
                 tab === "debts" && (React.createElement(DebtsView, { debts: debts, onOpenDebt: (d) => setEditingDebt(d), onAddDebt: () => setShowAddDebt(true) })),
-                tab === "family" && (React.createElement(FamilyHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
-                tab === "planning" && (React.createElement(FamilyPlanningHub, { user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
+                tab === "family" && (React.createElement(FamilyHub, { user: user, wallet: familyWallet, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
+                tab === "planning" && (React.createElement(FamilyPlanningHub, { user: user, wallet: familyWallet, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
                 tab === "reports" && React.createElement(Reports, { transactions: ledger, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
                 tab === "search" && (React.createElement(SearchView, { transactions: ledger, accounts: accounts, onOpenTx: openLedgerEntry, seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts, debts: debts }))),
             (tab === "dashboard" || tab === "timeline" || tab === "debts") && (React.createElement("button", { style: styles.fab, onClick: () => (tab === "debts" ? setShowAddDebt(true) : setShowAdd(true)), "aria-label": tab === "debts" ? "নতুন দেনা-পাওনা যোগ করুন" : "নতুন লেনদেন যোগ করুন" }, "+")),
@@ -2319,8 +2417,8 @@ function App() {
             showTaxPanel && (React.createElement(TaxPanel, { onClose: () => closeMenuPanel(setShowTaxPanel), taxes: taxes, onAdd: addTax, onUpdate: updateTax, onDelete: deleteTax, onTogglePaid: toggleTaxPaid })),
             showAccountPanel && (React.createElement(AccountPanel, { onClose: () => closeMenuPanel(setShowAccountPanel), dynamicAccountBalances: dynamicAccountBalances, onAdd: addUserAccount, onUpdate: updateUserAccount, onDelete: deleteUserAccount, onToggleActive: toggleUserAccountActive, onViewTransactions: (id) => { setShowAccountPanel(false); setSearchSeed({ accountId: id, ts: Date.now() }); setTab("search"); } })),
             showKhasra && React.createElement(KhasraKhataModule, { onClose: () => closeMenuPanel(setShowKhasra), storageId: user && user.uid ? user.uid : "guest", registerBack: (fn) => { khasraBackRef.current = fn; } }),
-            showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth }),
-            showFamilyPlanning && React.createElement(FamilyPlanningModule, { onClose: () => closeMenuPanel(setShowFamilyPlanning), user: user, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth }),
+            showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user, wallet: familyWallet, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth }),
+            showFamilyPlanning && React.createElement(FamilyPlanningModule, { onClose: () => closeMenuPanel(setShowFamilyPlanning), user: user, wallet: familyWallet, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth }),
             showNotificationCenter && (React.createElement(NotificationCenter, {
                 onClose: () => closeMenuPanel(setShowNotificationCenter),
                 notices: notices, dailyMessages: dailyMessages, tasks: tasks, debts: debts,
@@ -3276,33 +3374,33 @@ function KhasraKhataModule({ onClose, storageId, registerBack }) {
     }
     return React.createElement(Mod, { onClose: onClose, storageId: storageId, registerBack: registerBack });
 }
-function FamilyBazarModule({ onClose, user, onExpenseSync, otherByMonth }) {
+function FamilyBazarModule({ onClose, user, wallet, onExpenseSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
     if (!Mod) {
         return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "🛒 ফ্যামিলি বাজার" },
             React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি বাজার লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
     }
-    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "bazar", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth });
+    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "bazar", wallet: wallet, onExpenseSync: onExpenseSync, otherByMonth: otherByMonth });
 }
 // ফ্যামিলি বাজার ও ফ্যামিলি প্লানিং — একই Module (section: "bazar" | "planning"), দুটো আলাদা প্রবেশপথ।
 // ফ্যামিলির হেডারে (বাম→ডান): 📝 ব্যক্তিগত তালিকা (শীঘ্রই আসছে) · 🔁 পরিবার পরিবর্তন · 📦 বাজার তালিকা · 🔎 সার্চ।
-function FamilyHub({ user, onExpenseSync, otherByMonth }) {
+function FamilyHub({ user, wallet, onExpenseSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
-    return Mod ? React.createElement(Mod, { user: user, mode: "embedded", section: "bazar", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth })
+    return Mod ? React.createElement(Mod, { user: user, mode: "embedded", section: "bazar", wallet: wallet, onExpenseSync: onExpenseSync, otherByMonth: otherByMonth })
         : React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি বাজার লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
 }
-function FamilyPlanningHub({ user, onExpenseSync, otherByMonth }) {
+function FamilyPlanningHub({ user, wallet, onExpenseSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
-    return Mod && window.FamilyPlanning ? React.createElement(Mod, { user: user, mode: "embedded", section: "planning", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth })
+    return Mod && window.FamilyPlanning ? React.createElement(Mod, { user: user, mode: "embedded", section: "planning", wallet: wallet, onExpenseSync: onExpenseSync, otherByMonth: otherByMonth })
         : React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি প্লানিং লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
 }
-function FamilyPlanningModule({ onClose, user, onExpenseSync, otherByMonth }) {
+function FamilyPlanningModule({ onClose, user, wallet, onExpenseSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
     if (!Mod || !window.FamilyPlanning) {
         return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "🎯 ফ্যামিলি প্লানিং" },
             React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি প্লানিং লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
     }
-    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "planning", onExpenseSync: onExpenseSync, otherByMonth: otherByMonth });
+    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "planning", wallet: wallet, onExpenseSync: onExpenseSync, otherByMonth: otherByMonth });
 }
 /* ---------------- dynamic accounts (Phase 1) ---------------- */
 const ACCOUNT_TYPES = [

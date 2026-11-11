@@ -455,6 +455,8 @@ function TransferForm({ initial, onClose, onSave, onDelete, onCheckBalance, onCh
             fromAccountId: from.accountId || null,
             toAccountId: to.accountId || null,
             amount: num, date, time: time || null, note: note.trim(),
+            // এই ফর্ম শুধু সফল স্থানান্তরই সংরক্ষণ করে (অপর্যাপ্ত ব্যালেন্সে উপরেই আটকে যায়, কিছু কাটে না) — অবস্থা: সফল
+            status: "success",
         });
     };
     return (React.createElement(ModalShell, { onClose: onClose, title: initial ? "\u09B8\u09CD\u09A5\u09BE\u09A8\u09BE\u09A8\u09CD\u09A4\u09B0 \u09B8\u09AE\u09CD\u09AA\u09BE\u09A6\u09A8\u09BE" : "\u099F\u09BE\u0995\u09BE \u09B8\u09CD\u09A5\u09BE\u09A8\u09BE\u09A8\u09CD\u09A4\u09B0" },
