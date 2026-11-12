@@ -131,7 +131,7 @@
       id: r.id || randomId(),
       memberUid: r.memberUid || null, memberName: r.memberName || "",
       claimedAmount: round2(parseNum(r.claimedAmount) || 0),
-      date: r.date || null, paymentMethod: r.paymentMethod || "", note: String(r.note || "").trim(),
+      date: r.date || null, paymentMethod: r.paymentMethod || "", payAccount: r.payAccount || null, note: String(r.note || "").trim(),
       receiptName: r.receiptName || null,
       status: r.status || CONTRIBUTION_STATUS.pending,
       receivedAmount: r.receivedAmount != null ? round2(parseNum(r.receivedAmount)) : null,

@@ -1407,7 +1407,7 @@
     return children;
   }
 
-  function Module({ user, onClose, mode, section, startView, wallet, onExpenseSync, otherByMonth }) {
+  function Module({ user, onClose, mode, section, startView, wallet, onExpenseSync, onPlanSync, otherByMonth }) {
     const embedded = mode === "embedded";
     const FPl = window.FamilyPlanning;
     const FS = window.FamilyShopping;
@@ -1424,6 +1424,12 @@
       return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
     }, []);
     const D = useFamilyData(user);
+    // অনুমোদিত/প্রত্যাখ্যাত অবদান অনুযায়ী ব্যক্তিগত লেনদেন মিলিয়ে নেওয়া (অনুমোদনে কাটে, প্রত্যাখ্যানে ফেরত)
+    const planSyncRef = useRef(null);
+    planSyncRef.current = onPlanSync || null;
+    useEffect(() => {
+      if (planSyncRef.current && D.fam && D.fam.plans && user && user.uid) planSyncRef.current(D.fam.plans, user.uid);
+    }, [D.fam && D.fam.plans]);
     const [tab, setTab] = useState("home");
     const [moreView, setMoreView] = useState(null);
     // a STACK, not a single slot: opening a sheet from a sheet pushes, and

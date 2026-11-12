@@ -269,6 +269,9 @@
     const [claimedAmount, setClaimedAmount] = useState("");
     const [date, setDate] = useState(today());
     const [paymentMethod, setPaymentMethod] = useState(FPCore.PAYMENT_METHODS[0]);
+    // কোন অ্যাকাউন্ট থেকে টাকা যাবে (মালিকের অনুমোদন পেলে মূল ব্যালেন্স থেকে এখান থেকেই কাটবে)
+    const wallet = ctx.wallet || null;
+    const [payAccount, setPayAccount] = useState("m:cash");
     const [note, setNote] = useState("");
     const [errors, setErrors] = useState([]);
     const [busy, setBusy] = useState(false);
@@ -276,9 +279,13 @@
     const save = async () => {
       const v = FPCore.validateContributionDraft({ claimedAmount, date });
       if (!v.ok) { setErrors(v.errors); return; }
+      if (wallet) {
+        const r = wallet.check(payAccount, v.claimedAmount);
+        if (!r.ok) { setErrors([`${r.label} অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই (আছে ৳${bn(r.balance)}, লাগবে ৳${bn(r.need)})।`]); return; }
+      }
       setErrors([]); setBusy(true);
       try {
-        await window.FB.addContribution(ctx.familyId, plan.id, { claimedAmount: v.claimedAmount, date, paymentMethod, note }, ctx.uid, ctx.me.name);
+        await window.FB.addContribution(ctx.familyId, plan.id, { claimedAmount: v.claimedAmount, date, paymentMethod, payAccount: wallet ? payAccount : null, note }, ctx.uid, ctx.me.name);
         ctx.toast("অবদান জমা দেওয়া হয়েছে — যাচাইয়ের অপেক্ষায়"); close();
       } catch (e) { setErrors([friendlyError(e)]); } finally { setBusy(false); }
     };
@@ -295,6 +302,8 @@
       h("input", { type: "date", style: S.input, max: today(), value: date, onChange: (e) => setDate(e.target.value) }),
       h("label", { style: S.label }, "পেমেন্ট মাধ্যম"),
       h("select", { style: S.input, value: paymentMethod, onChange: (e) => setPaymentMethod(e.target.value) }, FPCore.PAYMENT_METHODS.map((m) => h("option", { key: m, value: m }, m))),
+      wallet && h("label", { style: S.label }, "কোন অ্যাকাউন্ট থেকে টাকা যাবে"),
+      wallet && h("select", { style: S.input, value: payAccount, onChange: (e) => setPayAccount(e.target.value) }, wallet.options.map((o) => h("option", { key: o.value, value: o.value }, `${o.label} — ব্যালেন্স ৳${bn(o.balance)}`))),
       h("label", { style: S.label }, "নোট (ঐচ্ছিক)"),
       h("input", { style: S.input, value: note, onChange: (e) => setNote(e.target.value) }));
   }
