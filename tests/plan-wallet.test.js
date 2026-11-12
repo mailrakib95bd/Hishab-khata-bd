@@ -1,0 +1,16 @@
+const assert = require("assert"), fs = require("fs"), vm = require("vm");
+const src = fs.readFileSync(__dirname + "/../js/app/app.js", "utf8");
+const grab = (n) => { const i = src.indexOf("function " + n + "("); let d = 0, j = src.indexOf("{", i); for (let k = j; k < src.length; k++) { if (src[k] === "{") d++; if (src[k] === "}" && --d === 0) return src.slice(i, k + 1); } };
+const payFieldsOf = (pay) => (String(pay || "").indexOf("a:") === 0 ? { method: "cash", accountId: String(pay).slice(2) } : { method: String(pay || "m:cash").replace(/^m:/, "") || "cash", accountId: null });
+const ctx = { payFieldsOf }; vm.createContext(ctx); vm.runInContext(grab("applyPlanContributionsToTransactions"), ctx);
+const f = ctx.applyPlanContributionsToTransactions; let n = 0; const mk = () => "id" + ++n;
+const plan = (st, extra) => [{ title: "ঈদ", contributions: [Object.assign({ id: "c1", memberUid: "me", claimedAmount: 500, date: "2026-11-01", payAccount: "a:dbbl", status: st }, extra)] }];
+const old = [{ id: "x", type: "income", amount: 9 }];
+let t = f(old, plan("pending"), "me", "family_plan", mk, 1); assert.strictEqual(t, old, "pending: no change");
+t = f(old, plan("approved"), "me", "family_plan", mk, 1); assert.strictEqual(t.length, 2); assert.strictEqual(t[1].amount, 500); assert.strictEqual(t[1].accountId, "dbbl");
+const t2 = f(t, plan("approved"), "me", "family_plan", mk, 1); assert.strictEqual(t2, t, "idempotent");
+const t3 = f(t, plan("partial", { receivedAmount: 300 }), "me", "family_plan", mk, 1); assert.strictEqual(t3[1].amount, 300);
+const t4 = f(t, plan("rejected"), "me", "family_plan", mk, 1); assert.strictEqual(t4.length, 1, "rejected refunds"); assert.strictEqual(t4[0], old[0]);
+assert.strictEqual(f(old, plan("approved"), "other", "k", mk, 1), old, "others' contributions ignored");
+assert.strictEqual(f(old, plan("approved", { payAccount: null }), "me", "k", mk, 1), old, "old contributions untouched");
+console.log("plan-wallet: 7 passed");
