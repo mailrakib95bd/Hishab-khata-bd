@@ -439,6 +439,32 @@ function makeFamilyWallet(d) {
         },
     };
 }
+// ফ্যামিলি প্ল্যানিংয়ের অবদান: মালিক অনুমোদন (বা আংশিক) করলে নিজের বেছে নেওয়া অ্যাকাউন্ট থেকে খরচ হিসেবে
+// কাটে; প্রত্যাখ্যান/অপেক্ষমাণ হলে কোনো খরচ থাকে না (আগে কেটে থাকলে ফেরত)। অবদান-id দিয়ে একটাই এন্ট্রি, তাই
+// বারবার চালালেও দু'বার কাটে না। অ্যাকাউন্ট ছাড়া পুরোনো অবদান ছোঁয়া হয় না।
+function applyPlanContributionsToTransactions(transactions, plans, memberUid, categoryKey, mkId, now) {
+    let next = transactions;
+    for (const plan of plans || []) {
+        for (const c of plan.contributions || []) {
+            if (!c || !c.id || !c.payAccount || c.memberUid !== memberUid)
+                continue;
+            const done = c.status === "approved" || c.status === "partial";
+            const credit = done ? Math.round((Number(c.receivedAmount != null ? c.receivedAmount : c.claimedAmount) || 0) * 100) / 100 : 0;
+            const existing = next.find((t) => t.familyContribId === c.id);
+            if (!(credit > 0)) {
+                if (existing)
+                    next = next.filter((t) => t.id !== existing.id);
+                continue;
+            }
+            const patch = Object.assign({ type: "expense", amount: credit, date: c.date, category: categoryKey, note: (plan.title || "ফ্যামিলি প্ল্যানিং") + " • অবদান", familyContribId: c.id, source: "family-planning" }, payFieldsOf(c.payAccount));
+            if (!existing)
+                next = [...next, Object.assign({ id: mkId(), createdAt: now }, patch)];
+            else if (Object.keys(patch).some((k) => existing[k] !== patch[k]))
+                next = next.map((t) => (t.id === existing.id ? Object.assign({}, t, patch) : t));
+        }
+    }
+    return next;
+}
 // একটি Family বাজারের ক্রয়কে ব্যক্তিগত লেনদেনে (খরচ হিসেবে) বসানো/বদলানো/মোছা — একটি ক্রয় = ঠিক একটি খরচ (familyPurchaseId দিয়ে),
 // তাই বারবার সিঙ্ক হলেও দু'বার গোনা হয় না। payment না দিলে আগের অ্যাকাউন্টই থাকে (নীরবে ক্যাশে সরে না); নতুন ক্রয়ে না দিলে ক্যাশ।
 // আগের অন্য কোনো লেনদেন ছোঁয়া হয় না।
@@ -1745,6 +1771,18 @@ function App() {
         if (next !== transactions) setTransactions(next);
         if (next !== transactions || cats !== expenseCats) persistAll(Object.assign({ transactions: next }, cats !== expenseCats ? { expenseCats: cats } : {}));
     };
+    const FAMILY_PLAN_EXPENSE_CATEGORY = { key: "family_plan", label: "ফ্যামিলি প্ল্যানিং", icon: "🎯" };
+    const syncFamilyPlanContributions = (plans, memberUid) => {
+        const next = applyPlanContributionsToTransactions(transactions, plans, memberUid, FAMILY_PLAN_EXPENSE_CATEGORY.key, uid, Date.now());
+        if (next === transactions) return;
+        let cats = expenseCats;
+        if (!cats.some((c) => c.key === FAMILY_PLAN_EXPENSE_CATEGORY.key)) {
+            cats = [...cats, FAMILY_PLAN_EXPENSE_CATEGORY];
+            setExpenseCats(cats);
+        }
+        setTransactions(next);
+        persistAll(Object.assign({ transactions: next }, cats !== expenseCats ? { expenseCats: cats } : {}));
+    };
     // Personal (non-Family-Bazar) expenses per month, straight from the
     // dashboard timeline. Family Bazar purchases are already in the timeline
     // as synced transactions (familyPurchaseId) — they're left out here so the
@@ -2321,8 +2359,8 @@ function App() {
                     }, onTransfer: () => setShowTransfer(true), onTransferHistory: () => setShowTransferHistory(true), profileName: profileName, taxes: taxes, bazarItems: bazarItems })),
                 tab === "timeline" && (React.createElement(Timeline, { transactions: ledger, walletTotal: walletTotal, onOpenTx: openLedgerEntry })),
                 tab === "debts" && (React.createElement(DebtsView, { debts: debts, onOpenDebt: (d) => setEditingDebt(d), onAddDebt: () => setShowAddDebt(true) })),
-                tab === "family" && (React.createElement(FamilyHub, { user: user, wallet: familyWallet, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
-                tab === "planning" && (React.createElement(FamilyPlanningHub, { user: user, wallet: familyWallet, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth })),
+                tab === "family" && (React.createElement(FamilyHub, { user: user, wallet: familyWallet, onExpenseSync: syncFamilyBazarExpense, onPlanSync: syncFamilyPlanContributions, otherByMonth: otherExpenseByMonth })),
+                tab === "planning" && (React.createElement(FamilyPlanningHub, { user: user, wallet: familyWallet, onExpenseSync: syncFamilyBazarExpense, onPlanSync: syncFamilyPlanContributions, otherByMonth: otherExpenseByMonth })),
                 tab === "reports" && React.createElement(Reports, { transactions: ledger, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
                 tab === "search" && (React.createElement(SearchView, { transactions: ledger, accounts: accounts, onOpenTx: openLedgerEntry, seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts, debts: debts }))),
             (tab === "dashboard" || tab === "timeline" || tab === "debts") && (React.createElement("button", { style: styles.fab, onClick: () => (tab === "debts" ? setShowAddDebt(true) : setShowAdd(true)), "aria-label": tab === "debts" ? "নতুন দেনা-পাওনা যোগ করুন" : "নতুন লেনদেন যোগ করুন" }, "+")),
@@ -2417,8 +2455,8 @@ function App() {
             showTaxPanel && (React.createElement(TaxPanel, { onClose: () => closeMenuPanel(setShowTaxPanel), taxes: taxes, onAdd: addTax, onUpdate: updateTax, onDelete: deleteTax, onTogglePaid: toggleTaxPaid })),
             showAccountPanel && (React.createElement(AccountPanel, { onClose: () => closeMenuPanel(setShowAccountPanel), dynamicAccountBalances: dynamicAccountBalances, onAdd: addUserAccount, onUpdate: updateUserAccount, onDelete: deleteUserAccount, onToggleActive: toggleUserAccountActive, onViewTransactions: (id) => { setShowAccountPanel(false); setSearchSeed({ accountId: id, ts: Date.now() }); setTab("search"); } })),
             showKhasra && React.createElement(KhasraKhataModule, { onClose: () => closeMenuPanel(setShowKhasra), storageId: user && user.uid ? user.uid : "guest", registerBack: (fn) => { khasraBackRef.current = fn; } }),
-            showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user, wallet: familyWallet, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth }),
-            showFamilyPlanning && React.createElement(FamilyPlanningModule, { onClose: () => closeMenuPanel(setShowFamilyPlanning), user: user, wallet: familyWallet, onExpenseSync: syncFamilyBazarExpense, otherByMonth: otherExpenseByMonth }),
+            showFamilyBazar && React.createElement(FamilyBazarModule, { onClose: () => closeMenuPanel(setShowFamilyBazar), user: user, wallet: familyWallet, onExpenseSync: syncFamilyBazarExpense, onPlanSync: syncFamilyPlanContributions, otherByMonth: otherExpenseByMonth }),
+            showFamilyPlanning && React.createElement(FamilyPlanningModule, { onClose: () => closeMenuPanel(setShowFamilyPlanning), user: user, wallet: familyWallet, onExpenseSync: syncFamilyBazarExpense, onPlanSync: syncFamilyPlanContributions, otherByMonth: otherExpenseByMonth }),
             showNotificationCenter && (React.createElement(NotificationCenter, {
                 onClose: () => closeMenuPanel(setShowNotificationCenter),
                 notices: notices, dailyMessages: dailyMessages, tasks: tasks, debts: debts,
@@ -2920,7 +2958,7 @@ function Dashboard({ transactions, ledger, walletTotal, dynamicAccounts, userAcc
     // "আমার টাকা": সাধারণ মাধ্যম + নামযুক্ত অ্যাকাউন্ট — সবই হিরো কার্ডের মোটের অংশ
     const topAccounts = useMemo(() => [
         ...(accounts || []).filter((a) => a.hasActivity || a.opening),
-        ...(dynamicAccounts || []).filter((a) => a.hasActivity || a.balance !== 0).map((a) => ({ key: "acc:" + a.id, label: a.name, balance: a.balance })),
+        ...(dynamicAccounts || []).filter((a) => (a.hasActivity || a.balance !== 0) && a.type !== "bank").map((a) => ({ key: "acc:" + a.id, label: a.name, balance: a.balance })),
     ].slice(0, 9), [accounts, dynamicAccounts]);
     const isNewUser = transactions.length === 0 && debts.length === 0 && budget <= 0;
     if (isNewUser) {
@@ -3374,33 +3412,33 @@ function KhasraKhataModule({ onClose, storageId, registerBack }) {
     }
     return React.createElement(Mod, { onClose: onClose, storageId: storageId, registerBack: registerBack });
 }
-function FamilyBazarModule({ onClose, user, wallet, onExpenseSync, otherByMonth }) {
+function FamilyBazarModule({ onClose, user, wallet, onExpenseSync, onPlanSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
     if (!Mod) {
         return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "🛒 ফ্যামিলি বাজার" },
             React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি বাজার লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
     }
-    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "bazar", wallet: wallet, onExpenseSync: onExpenseSync, otherByMonth: otherByMonth });
+    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "bazar", wallet: wallet, onExpenseSync: onExpenseSync, onPlanSync: onPlanSync, otherByMonth: otherByMonth });
 }
 // ফ্যামিলি বাজার ও ফ্যামিলি প্লানিং — একই Module (section: "bazar" | "planning"), দুটো আলাদা প্রবেশপথ।
 // ফ্যামিলির হেডারে (বাম→ডান): 📝 ব্যক্তিগত তালিকা (শীঘ্রই আসছে) · 🔁 পরিবার পরিবর্তন · 📦 বাজার তালিকা · 🔎 সার্চ।
-function FamilyHub({ user, wallet, onExpenseSync, otherByMonth }) {
+function FamilyHub({ user, wallet, onExpenseSync, onPlanSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
-    return Mod ? React.createElement(Mod, { user: user, mode: "embedded", section: "bazar", wallet: wallet, onExpenseSync: onExpenseSync, otherByMonth: otherByMonth })
+    return Mod ? React.createElement(Mod, { user: user, mode: "embedded", section: "bazar", wallet: wallet, onExpenseSync: onExpenseSync, onPlanSync: onPlanSync, otherByMonth: otherByMonth })
         : React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি বাজার লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
 }
-function FamilyPlanningHub({ user, wallet, onExpenseSync, otherByMonth }) {
+function FamilyPlanningHub({ user, wallet, onExpenseSync, onPlanSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
-    return Mod && window.FamilyPlanning ? React.createElement(Mod, { user: user, mode: "embedded", section: "planning", wallet: wallet, onExpenseSync: onExpenseSync, otherByMonth: otherByMonth })
+    return Mod && window.FamilyPlanning ? React.createElement(Mod, { user: user, mode: "embedded", section: "planning", wallet: wallet, onExpenseSync: onExpenseSync, onPlanSync: onPlanSync, otherByMonth: otherByMonth })
         : React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি প্লানিং লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।");
 }
-function FamilyPlanningModule({ onClose, user, wallet, onExpenseSync, otherByMonth }) {
+function FamilyPlanningModule({ onClose, user, wallet, onExpenseSync, onPlanSync, otherByMonth }) {
     const Mod = window.FamilyBazar && window.FamilyBazar.Module;
     if (!Mod || !window.FamilyPlanning) {
         return React.createElement(ModalShell, { onClose: onClose, fullScreen: true, title: "🎯 ফ্যামিলি প্লানিং" },
             React.createElement("div", { style: styles.taskEmpty }, "ফ্যামিলি প্লানিং লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।"));
     }
-    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "planning", wallet: wallet, onExpenseSync: onExpenseSync, otherByMonth: otherByMonth });
+    return React.createElement(Mod, { onClose: onClose, user: user, mode: "full", section: "planning", wallet: wallet, onExpenseSync: onExpenseSync, onPlanSync: onPlanSync, otherByMonth: otherByMonth });
 }
 /* ---------------- dynamic accounts (Phase 1) ---------------- */
 const ACCOUNT_TYPES = [
@@ -3514,6 +3552,12 @@ function taxDueInfo(t) {
     return { key: "ok", label: `${toBnDigits(diffDays)} দিন বাকি`, color: "var(--hk-text-muted)", daysLeft: diffDays };
 }
 const QUICK_AMOUNTS = [50, 100, 200, 500, 1000];
+// ঐচ্ছিক অ্যাকাউন্ট কেবল নিজের মাধ্যমের অধীনে দেখাবে: ব্যাংক→ব্যাংক, MFS→বিকাশ/নগদ/রকেট, কার্ড→কার্ড, ক্যাশ→ক্যাশ
+function accountsForMethod(userAccounts, method) {
+    const typesOf = { bank: ["bank"], bkash: ["mfs"], nagad: ["mfs"], rocket: ["mfs"], card: ["card"], cash: ["cash", "other"] };
+    const ok = typesOf[method] || [];
+    return (userAccounts || []).filter((a) => a.active !== false && ok.indexOf(a.type) !== -1);
+}
 function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onCheckBalance, onCheckDynamicBalance, userAccounts }) {
     const catCtx = useCategories();
     const [type, setType] = useState((initial === null || initial === void 0 ? void 0 : initial.type) || presetType || "expense");
@@ -3527,6 +3571,7 @@ function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onChe
     const incomeBankLegacy = !!(initial && initial.type === "income" && initial.method === "bank");
     const methodChoices = type === "income" && !incomeBankLegacy ? METHODS.filter((m) => m.key !== "bank") : METHODS;
     const [accountId, setAccountId] = useState((initial === null || initial === void 0 ? void 0 : initial.accountId) || "");
+    const methodAccounts = accountsForMethod(userAccounts, method).concat(initial && initial.accountId && !accountsForMethod(userAccounts, method).some((a) => a.id === initial.accountId) ? (userAccounts || []).filter((a) => a.id === initial.accountId) : []);
     const [err, setErr] = useState("");
     // archived categories stay out of the picker for *new* selections, but
     // if the transaction being edited already used one, it stays visible
@@ -3587,12 +3632,12 @@ function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onChe
         React.createElement("div", { style: styles.formLabel }, "\u09A4\u09BE\u09B0\u09BF\u0996"),
         React.createElement("input", { style: styles.textInput, type: "date", value: date, max: todayStr(), onChange: (e) => setDate(e.target.value) }),
         React.createElement("div", { style: styles.formLabel }, "\u09AE\u09BE\u09A7\u09CD\u09AF\u09AE"),
-        React.createElement("div", { style: styles.methodRow }, methodChoices.map((m) => (React.createElement("button", { key: m.key, onClick: () => setMethod(m.key), style: Object.assign(Object.assign({}, styles.methodChip), (method === m.key ? styles.methodChipActive : {})) }, m.label)))),
-        (userAccounts || []).filter((a) => a.active !== false).length > 0 && (React.createElement("div", null,
+        React.createElement("div", { style: styles.methodRow }, methodChoices.map((m) => (React.createElement("button", { key: m.key, onClick: () => { setMethod(m.key); if (accountId && !accountsForMethod(userAccounts, m.key).some((a) => a.id === accountId)) setAccountId(""); }, style: Object.assign(Object.assign({}, styles.methodChip), (method === m.key ? styles.methodChipActive : {})) }, m.label)))),
+        methodAccounts.length > 0 && (React.createElement("div", null,
             React.createElement("div", { style: styles.formLabel }, "\u09A8\u09BF\u09B0\u09CD\u09A6\u09BF\u09B7\u09CD\u099F \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F (\u0990\u099A\u09CD\u099B\u09BF\u0995)"),
             React.createElement("select", { style: styles.textInput, value: accountId, onChange: (e) => setAccountId(e.target.value) },
                 React.createElement("option", { value: "" }, "\u2014 \u09A8\u09BF\u09B0\u09CD\u09AC\u09BE\u099A\u09A8 \u0995\u09B0\u09C1\u09A8 \u2014"),
-                userAccounts.filter((a) => a.active !== false).map((a) => React.createElement("option", { key: a.id, value: a.id }, a.name))))),
+                methodAccounts.map((a) => React.createElement("option", { key: a.id, value: a.id }, a.name))))),
         err ? React.createElement("div", { style: styles.formErr }, err) : null,
         React.createElement("div", { style: styles.formActions },
             onDelete ? (React.createElement("button", { style: styles.deleteBtn, onClick: onDelete }, "\u09AE\u09C1\u099B\u09C7 \u09AB\u09C7\u09B2\u09C1\u09A8")) : null,
