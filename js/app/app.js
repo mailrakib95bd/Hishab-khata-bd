@@ -377,8 +377,12 @@ function computeWalletTotal(legacyBalances, dynamicBalances) {
     let sum = 0;
     for (const a of legacyBalances || [])
         sum += a.balance || 0;
-    for (const a of dynamicBalances || [])
+    for (const a of dynamicBalances || []) {
+        // ব্যাংক-ধরনের ঐচ্ছিক অ্যাকাউন্টের ব্যালেন্স শুধু অ্যাকাউন্ট ব্যবস্থাপনায় থাকে; মোট ওয়ালেটে যোগ হয় না
+        if (a.type === "bank")
+            continue;
         sum += a.balance || 0;
+    }
     return sum;
 }
 /* ---------------- Family বাজার ↔ Wallet ---------------- */
@@ -499,7 +503,15 @@ function transferCashEntries(transfers, userAccounts) {
             return ((userAccounts || []).find((a) => a.id === accId) || {}).name || "মুছে ফেলা অ্যাকাউন্ট";
         return methodLabel(tr[`${p}Method`]);
     };
-    return (transfers || []).map((tr) => ({
+    // ব্যাংক (ব্যাংক মাধ্যম বা ব্যাংক-ধরনের অ্যাকাউন্ট)-এ নিলে "জমা", ব্যাংক থেকে অন্যত্র নিলে "উত্তোলন"
+    const isBank = (tr, p) => {
+        const accId = tr[`${p}AccountId`];
+        if (accId)
+            return ((userAccounts || []).find((a) => a.id === accId) || {}).type === "bank";
+        return tr[`${p}Method`] === "bank";
+    };
+    const bankDir = (tr) => (isBank(tr, "to") && !isBank(tr, "from") ? "deposit" : isBank(tr, "from") && !isBank(tr, "to") ? "withdraw" : null);
+    return (transfers || []).map((tr) => ({ bankDir: bankDir(tr),
         id: `transfer:${tr.id}`, isTransferEntry: true, transferId: tr.id, type: "transfer", category: "transfer",
         amount: tr.amount, date: tr.date, time: tr.time || null, note: tr.note || "", createdAt: tr.createdAt || 0,
         status: tr.status || "success", // সফল | অপেক্ষমাণ | ব্যর্থ — পুরোনো স্থানান্তরে ক্ষেত্রটি নেই, সেগুলো সফল
@@ -3142,7 +3154,7 @@ function TxRow({ tx, onClick, showMethod, showDate, hideSymbol }) {
                 React.createElement("div", { style: styles.txCat }, tx.fromLabel, " → ", tx.toLabel),
                 tx.note ? React.createElement("div", { style: styles.txNote }, tx.note) : null,
                 React.createElement("div", { style: styles.txMeta },
-                    "স্থানান্তর",
+                    tx.bankDir === "deposit" ? "স্থানান্তর · ব্যাংকে জমা" : tx.bankDir === "withdraw" ? "স্থানান্তর · ব্যাংক থেকে উত্তোলন" : "স্থানান্তর",
                     showDate ? " · " + formatDateBn(tx.date).full : null,
                     tx.time ? " · " + formatTimeBn(tx.time) : null)),
             React.createElement("div", { style: Object.assign(Object.assign({}, styles.txAmount), { color: "var(--hk-text-muted)" }) }, formatTaka(tx.amount, { symbol: !hideSymbol }))));
@@ -3442,15 +3454,21 @@ function FamilyPlanningModule({ onClose, user, wallet, onExpenseSync, onPlanSync
 }
 /* ---------------- dynamic accounts (Phase 1) ---------------- */
 const ACCOUNT_TYPES = [
-    { key: "cash", label: "\u0995\u09CD\u09AF\u09BE\u09B6" },
     { key: "bank", label: "\u09AC\u09CD\u09AF\u09BE\u0982\u0995" },
-    { key: "mfs", label: "MFS/\u0993\u09AF\u09BC\u09BE\u09B2\u09C7\u099F" },
     { key: "card", label: "\u0995\u09BE\u09B0\u09CD\u09A1" },
+    { key: "custom", label: "Custom" },
+];
+// আগে তৈরি করা অ্যাকাউন্টের পুরোনো ধরন — নতুন ফর্মে দেওয়া হয় না, কিন্তু নামটি দেখানো ও আগের মতোই কাজ করে
+const LEGACY_ACCOUNT_TYPES = [
+    { key: "cash", label: "\u0995\u09CD\u09AF\u09BE\u09B6" },
+    { key: "mfs", label: "MFS/\u0993\u09AF\u09BC\u09BE\u09B2\u09C7\u099F" },
     { key: "other", label: "\u0985\u09A8\u09CD\u09AF\u09BE\u09A8\u09CD\u09AF" },
 ];
+const CUSTOM_PARENT_METHODS = ["bkash", "nagad", "rocket", "card"];
 function AccountForm({ initial, onClose, onSave }) {
     const [name, setName] = useState((initial === null || initial === void 0 ? void 0 : initial.name) || "");
     const [type, setType] = useState((initial === null || initial === void 0 ? void 0 : initial.type) || "bank");
+    const [parentMethod, setParentMethod] = useState((initial && initial.parentMethod) || "");
     const [openingBalance, setOpeningBalance] = useState(initial ? String(initial.openingBalance) : "0");
     const [openingBalanceDate, setOpeningBalanceDate] = useState((initial === null || initial === void 0 ? void 0 : initial.openingBalanceDate) || todayStr());
     const [err, setErr] = useState("");
@@ -3458,7 +3476,11 @@ function AccountForm({ initial, onClose, onSave }) {
         React.createElement("label", { style: admStyles.label }, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u09C7\u09B0 \u09A8\u09BE\u09AE * (\u09AF\u09C7\u09AE\u09A8: DBBL, bKash Personal)"),
         React.createElement("input", { style: admStyles.input, value: name, onChange: (e) => setName(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "\u09A7\u09B0\u09A8"),
-        React.createElement("select", { style: admStyles.input, value: type, onChange: (e) => setType(e.target.value) }, ACCOUNT_TYPES.map((t) => React.createElement("option", { key: t.key, value: t.key }, t.label))),
+        React.createElement("select", { style: admStyles.input, value: type, onChange: (e) => setType(e.target.value) }, ACCOUNT_TYPES.concat(LEGACY_ACCOUNT_TYPES.filter((t) => initial && initial.type === t.key)).map((t) => React.createElement("option", { key: t.key, value: t.key }, t.label))),
+        type === "custom" && React.createElement("label", { style: admStyles.label }, "কোন মাধ্যমের অধীনে থাকবে"),
+        type === "custom" && React.createElement("select", { style: admStyles.input, value: parentMethod, onChange: (e) => setParentMethod(e.target.value) },
+            React.createElement("option", { value: "" }, "কোনোটির অধীনে নয় (নিজেই আলাদা মাধ্যম)"),
+            CUSTOM_PARENT_METHODS.map((k) => React.createElement("option", { key: k, value: k }, methodLabel(k)))),
         React.createElement("label", { style: admStyles.label }, "\u09B6\u09C1\u09B0\u09C1\u09B0 \u09AC\u09CD\u09AF\u09BE\u09B2\u09C7\u09A8\u09CD\u09B8"),
         React.createElement("input", { style: admStyles.input, type: "number", inputMode: "decimal", value: openingBalance, onChange: (e) => setOpeningBalance(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "\u09B6\u09C1\u09B0\u09C1\u09B0 \u09A4\u09BE\u09B0\u09BF\u0996"),
@@ -3469,7 +3491,7 @@ function AccountForm({ initial, onClose, onSave }) {
                     setErr("অ্যাকাউন্টের নাম লিখুন");
                     return;
                 }
-                onSave({ name: name.trim(), type, openingBalance: parseFloat(openingBalance) || 0, openingBalanceDate });
+                onSave({ name: name.trim(), type, parentMethod: type === "custom" ? (parentMethod || null) : null, openingBalance: parseFloat(openingBalance) || 0, openingBalanceDate });
             } }, "সংরক্ষণ করুন")));
 }
 function AccountPanel({ onClose, dynamicAccountBalances, onAdd, onUpdate, onDelete, onToggleActive, onViewTransactions }) {
@@ -3498,7 +3520,7 @@ function AccountPanel({ onClose, dynamicAccountBalances, onAdd, onUpdate, onDele
                 React.createElement("div", { style: admStyles.row },
                     React.createElement("div", null,
                         React.createElement("div", { style: { fontWeight: 600 } }, a.name, a.active === false && React.createElement("span", { style: { fontSize: 10.5, marginLeft: 6 } }, "(নিষ্ক্রিয়)")),
-                        React.createElement("div", { style: admStyles.muted }, (ACCOUNT_TYPES.find((t) => t.key === a.type) || {}).label || a.type)),
+                        React.createElement("div", { style: admStyles.muted }, (ACCOUNT_TYPES.concat(LEGACY_ACCOUNT_TYPES).find((t) => t.key === a.type) || {}).label || a.type)),
                     React.createElement("div", { style: { fontWeight: 700, color: a.balance < 0 ? "var(--hk-danger)" : undefined } }, formatBalance(a.balance))),
                 blockedMsg === a.id && (React.createElement("div", { style: { fontSize: 12, color: "var(--hk-danger)", marginTop: 6 } }, "এই অ্যাকাউন্টে লেনদেন/লেনদেনের ইতিহাস আছে বলে মুছে ফেলা যাবে না — বরং নিষ্ক্রিয় করুন।")),
                 React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" } },
@@ -3556,7 +3578,11 @@ const QUICK_AMOUNTS = [50, 100, 200, 500, 1000];
 function accountsForMethod(userAccounts, method) {
     const typesOf = { bank: ["bank"], bkash: ["mfs"], nagad: ["mfs"], rocket: ["mfs"], card: ["card"], cash: ["cash", "other"] };
     const ok = typesOf[method] || [];
-    return (userAccounts || []).filter((a) => a.active !== false && ok.indexOf(a.type) !== -1);
+    return (userAccounts || []).filter((a) => a.active !== false && (ok.indexOf(a.type) !== -1 || (a.type === "custom" && a.parentMethod === method)));
+}
+// কোনো মাধ্যমের অধীনে না থাকা Custom অ্যাকাউন্ট — বিকাশ/নগদ/রকেট/কার্ডের পাশে নিজেই একটি মাধ্যম হিসেবে দেখায়
+function standaloneAccounts(userAccounts, selectedId) {
+    return (userAccounts || []).filter((a) => a.type === "custom" && !a.parentMethod && (a.active !== false || a.id === selectedId));
 }
 function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onCheckBalance, onCheckDynamicBalance, userAccounts }) {
     const catCtx = useCategories();
@@ -3571,7 +3597,9 @@ function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onChe
     const incomeBankLegacy = !!(initial && initial.type === "income" && initial.method === "bank");
     const methodChoices = type === "income" && !incomeBankLegacy ? METHODS.filter((m) => m.key !== "bank") : METHODS;
     const [accountId, setAccountId] = useState((initial === null || initial === void 0 ? void 0 : initial.accountId) || "");
-    const methodAccounts = accountsForMethod(userAccounts, method).concat(initial && initial.accountId && !accountsForMethod(userAccounts, method).some((a) => a.id === initial.accountId) ? (userAccounts || []).filter((a) => a.id === initial.accountId) : []);
+    const standaloneList = standaloneAccounts(userAccounts, initial && initial.accountId);
+    const standaloneSel = standaloneList.some((a) => a.id === accountId);
+    const methodAccounts = standaloneSel ? [] : accountsForMethod(userAccounts, method).concat(initial && initial.accountId && !accountsForMethod(userAccounts, method).some((a) => a.id === initial.accountId) ? (userAccounts || []).filter((a) => a.id === initial.accountId) : []);
     const [err, setErr] = useState("");
     // archived categories stay out of the picker for *new* selections, but
     // if the transaction being edited already used one, it stays visible
@@ -3632,7 +3660,8 @@ function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onChe
         React.createElement("div", { style: styles.formLabel }, "\u09A4\u09BE\u09B0\u09BF\u0996"),
         React.createElement("input", { style: styles.textInput, type: "date", value: date, max: todayStr(), onChange: (e) => setDate(e.target.value) }),
         React.createElement("div", { style: styles.formLabel }, "\u09AE\u09BE\u09A7\u09CD\u09AF\u09AE"),
-        React.createElement("div", { style: styles.methodRow }, methodChoices.map((m) => (React.createElement("button", { key: m.key, onClick: () => { setMethod(m.key); if (accountId && !accountsForMethod(userAccounts, m.key).some((a) => a.id === accountId)) setAccountId(""); }, style: Object.assign(Object.assign({}, styles.methodChip), (method === m.key ? styles.methodChipActive : {})) }, m.label)))),
+        React.createElement("div", { style: styles.methodRow }, methodChoices.map((m) => (React.createElement("button", { key: m.key, onClick: () => { setMethod(m.key); if (accountId && (standaloneSel || !accountsForMethod(userAccounts, m.key).some((a) => a.id === accountId))) setAccountId(""); }, style: Object.assign(Object.assign({}, styles.methodChip), (method === m.key && !standaloneSel ? styles.methodChipActive : {})) }, m.label))),
+            standaloneList.map((a) => (React.createElement("button", { key: "acc:" + a.id, onClick: () => { setMethod("cash"); setAccountId(a.id); }, style: Object.assign(Object.assign({}, styles.methodChip), (accountId === a.id ? styles.methodChipActive : {})) }, a.name)))),
         methodAccounts.length > 0 && (React.createElement("div", null,
             React.createElement("div", { style: styles.formLabel }, "\u09A8\u09BF\u09B0\u09CD\u09A6\u09BF\u09B7\u09CD\u099F \u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F (\u0990\u099A\u09CD\u099B\u09BF\u0995)"),
             React.createElement("select", { style: styles.textInput, value: accountId, onChange: (e) => setAccountId(e.target.value) },
