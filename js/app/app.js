@@ -2970,7 +2970,7 @@ function Dashboard({ transactions, ledger, walletTotal, dynamicAccounts, userAcc
     // "আমার টাকা": সাধারণ মাধ্যম + নামযুক্ত অ্যাকাউন্ট — সবই হিরো কার্ডের মোটের অংশ
     const topAccounts = useMemo(() => [
         ...(accounts || []).filter((a) => a.hasActivity || a.opening),
-        ...(dynamicAccounts || []).filter((a) => (a.hasActivity || a.balance !== 0) && a.type !== "bank").map((a) => ({ key: "acc:" + a.id, label: a.name, balance: a.balance })),
+        ...(dynamicAccounts || []).filter((a) => (a.hasActivity || a.balance !== 0) && a.type !== "bank").map((a) => ({ key: "acc:" + a.id, label: a.name, balance: a.balance, acct: a })),
     ].slice(0, 9), [accounts, dynamicAccounts]);
     const isNewUser = transactions.length === 0 && debts.length === 0 && budget <= 0;
     if (isNewUser) {
@@ -3127,7 +3127,7 @@ function Dashboard({ transactions, ledger, walletTotal, dynamicAccounts, userAcc
             React.createElement("span", null, "মোট Wallet"),
             React.createElement("b", { style: { fontFamily: "'JetBrains Mono', monospace", color: availableBalance < 0 ? "var(--hk-danger)" : "var(--hk-text)" } }, formatBalance(availableBalance))),
         topAccounts.length > 0 && (React.createElement("div", { style: styles.walletGrid }, topAccounts.map((a) => (React.createElement("div", { key: a.key, style: Object.assign(Object.assign({}, styles.walletTile), { borderColor: ACCOUNT_COLORS[a.key] || "var(--hk-border)" }) },
-            React.createElement("span", { style: styles.walletTileIcon }, ACCOUNT_ICONS[a.key] || "💰"),
+            React.createElement("span", { style: styles.walletTileIcon }, a.acct && providerOf(a.acct) ? React.createElement(AccountLogo, { account: a.acct, size: 30 }) : (ACCOUNT_ICONS[a.key] || "💰")),
             React.createElement("div", null,
                 React.createElement("div", { style: styles.walletTileLabel }, a.label),
                 React.createElement("div", { style: Object.assign(Object.assign({}, styles.walletTileVal), { color: a.balance < 0 ? "var(--hk-danger)" : ACCOUNT_COLORS[a.key] || "var(--hk-text)" }) }, formatBalance(a.balance)))))))),
@@ -3456,19 +3456,51 @@ function FamilyPlanningModule({ onClose, user, wallet, onExpenseSync, onPlanSync
 const ACCOUNT_TYPES = [
     { key: "bank", label: "\u09AC\u09CD\u09AF\u09BE\u0982\u0995" },
     { key: "card", label: "\u0995\u09BE\u09B0\u09CD\u09A1" },
-    { key: "custom", label: "Custom" },
+    { key: "mfs", label: "MFS" },
 ];
 // আগে তৈরি করা অ্যাকাউন্টের পুরোনো ধরন — নতুন ফর্মে দেওয়া হয় না, কিন্তু নামটি দেখানো ও আগের মতোই কাজ করে
 const LEGACY_ACCOUNT_TYPES = [
     { key: "cash", label: "\u0995\u09CD\u09AF\u09BE\u09B6" },
-    { key: "mfs", label: "MFS/\u0993\u09AF\u09BC\u09BE\u09B2\u09C7\u099F" },
+    { key: "custom", label: "Custom" },
     { key: "other", label: "\u0985\u09A8\u09CD\u09AF\u09BE\u09A8\u09CD\u09AF" },
 ];
 const CUSTOM_PARENT_METHODS = ["bkash", "nagad", "rocket", "card"];
+
+// অ্যাকাউন্টের "মাধ্যম" (প্রতিষ্ঠান): [কী, নাম, লোগোর সংক্ষেপ, রং]। অ্যাকাউন্টে শুধু `provider` কী জমা হয়।
+// লোগো এখানে প্রতিষ্ঠানের রং ও সংক্ষিপ্ত চিহ্নে আঁকা ব্যাজ (আসল ছবি-লোগো নয়)।
+const ACCOUNT_PROVIDERS = {
+    bank: [["sonali", "সোনালী ব্যাংক", "সো", "#0B5D9E"], ["janata", "জনতা ব্যাংক", "জ", "#1E7B3A"], ["agrani", "অগ্রণী ব্যাংক", "অ", "#B3261E"], ["rupali", "রূপালী ব্যাংক", "রূ", "#1565C0"], ["basic", "বেসিক ব্যাংক", "BASIC"], ["bdbl", "বাংলাদেশ ডেভেলপমেন্ট ব্যাংক", "BDBL"], ["krishi", "বাংলাদেশ কৃষি ব্যাংক", "কৃষি", "#2E7D32"], ["rakub", "রাজশাহী কৃষি উন্নয়ন ব্যাংক", "RAKUB"], ["probashi", "প্রবাসী কল্যাণ ব্যাংক", "প্রকব"], ["karmasangsthan", "কর্মসংস্থান ব্যাংক", "কর্ম"], ["ansar", "আনসার-ভিডিপি উন্নয়ন ব্যাংক", "AVD"], ["grameen", "গ্রামীণ ব্যাংক", "গ্রা", "#E65100"],
+        ["islami", "ইসলামী ব্যাংক বাংলাদেশ", "IBBL", "#006B3F"], ["dbbl", "ডাচ-বাংলা ব্যাংক (DBBL)", "DBBL", "#0F7B5F"], ["brac", "ব্র্যাক ব্যাংক", "BRAC", "#0072BC"], ["city", "সিটি ব্যাংক", "CITY", "#C62828"], ["ebl", "ইস্টার্ন ব্যাংক (EBL)", "EBL", "#E53935"], ["prime", "প্রাইম ব্যাংক", "PRIME"], ["mtb", "মিউচুয়াল ট্রাস্ট ব্যাংক (MTB)", "MTB"], ["dhaka", "ঢাকা ব্যাংক", "ঢাকা"], ["southeast", "সাউথইস্ট ব্যাংক", "SEBL"], ["standard", "স্ট্যান্ডার্ড ব্যাংক", "STD"], ["one", "ওয়ান ব্যাংক", "ONE"], ["bankasia", "ব্যাংক এশিয়া", "ASIA"], ["mercantile", "মার্কেন্টাইল ব্যাংক", "MBL"], ["ncc", "এনসিসি ব্যাংক", "NCC"], ["nrb", "এনআরবি ব্যাংক", "NRB"], ["nrbc", "এনআরবি কমার্শিয়াল ব্যাংক", "NRBC"], ["nrbglobal", "এনআরবি গ্লোবাল ব্যাংক", "NRBG"], ["premier", "প্রিমিয়ার ব্যাংক", "PBL"], ["pubali", "পূবালী ব্যাংক", "পূবা"], ["trust", "ট্রাস্ট ব্যাংক", "TBL"], ["ucb", "ইউনাইটেড কমার্শিয়াল ব্যাংক (UCB)", "UCB"], ["uttara", "উত্তরা ব্যাংক", "উত্তরা"], ["jamuna", "যমুনা ব্যাংক", "যমুনা"], ["midland", "মিডল্যান্ড ব্যাংক", "MDL"], ["modhumoti", "মধুমতি ব্যাংক", "মধু"], ["meghna", "মেঘনা ব্যাংক", "মেঘনা"], ["shimanto", "সীমান্ত ব্যাংক", "সীমান্ত"], ["sbac", "সাউথ বাংলা এগ্রিকালচার ব্যাংক", "SBAC"], ["sibl", "সোশ্যাল ইসলামী ব্যাংক", "SIBL"], ["fsibl", "ফার্স্ট সিকিউরিটি ইসলামী ব্যাংক", "FSIBL"], ["alarafah", "আল-আরাফাহ ইসলামী ব্যাংক", "AIBL"], ["icbi", "আইসিবি ইসলামিক ব্যাংক", "ICBI"], ["exim", "এক্সিম ব্যাংক", "EXIM"], ["shahjalal", "শাহজালাল ইসলামী ব্যাংক", "SJIBL"], ["union", "ইউনিয়ন ব্যাংক", "UBL"], ["community", "কমিউনিটি ব্যাংক", "CBL"], ["citizens", "সিটিজেনস ব্যাংক", "CZB"], ["padma", "পদ্মা ব্যাংক", "পদ্মা"], ["globalislami", "গ্লোবাল ইসলামী ব্যাংক", "GIB"], ["commerce", "বাংলাদেশ কমার্স ব্যাংক", "BCBL"],
+        ["citina", "সিটিব্যাংক এন.এ.", "Citi"], ["hsbc", "এইচএসবিসি", "HSBC", "#DB0011"], ["scb", "স্ট্যান্ডার্ড চার্টার্ড", "SC", "#0473EA"], ["ceylon", "কমার্শিয়াল ব্যাংক অব সিলন", "CBC"], ["sbi", "স্টেট ব্যাংক অব ইন্ডিয়া", "SBI"], ["habib", "হাবিব ব্যাংক", "HBL"], ["nbp", "ন্যাশনাল ব্যাংক অব পাকিস্তান", "NBP"], ["woori", "উরি ব্যাংক", "WRB"], ["alfalah", "ব্যাংক আল-ফালাহ", "BAF"], ["otherbank", "অন্যান্য ব্যাংক", "ব্যাংক"]],
+    card: [["dbblcard", "ডাচ-বাংলা কার্ড", "DBBL", "#0F7B5F"], ["citycard", "সিটি কার্ড", "CITY", "#C62828"], ["braccard", "ব্র্যাক ব্যাংক কার্ড", "BRAC", "#0072BC"], ["eblcard", "ইবিএল কার্ড", "EBL", "#E53935"], ["islamicard", "ইসলামী ব্যাংক কার্ড", "IBBL", "#006B3F"], ["sccard", "স্ট্যান্ডার্ড চার্টার্ড কার্ড", "SC", "#0473EA"], ["hsbccard", "এইচএসবিসি কার্ড", "HSBC", "#DB0011"], ["asiacard", "ব্যাংক এশিয়া কার্ড", "ASIA"], ["primecard", "প্রাইম ব্যাংক কার্ড", "PRIME"], ["mtbcard", "এমটিবি কার্ড", "MTB"], ["sonalicard", "সোনালী ব্যাংক কার্ড", "সো", "#0B5D9E"], ["ucbcard", "ইউসিবি কার্ড", "UCB"], ["visa", "ভিসা কার্ড", "VISA", "#1A1F71"], ["master", "মাস্টারকার্ড", "MC", "#EB001B"], ["amex", "আমেরিকান এক্সপ্রেস", "AMEX", "#006FCF"], ["othercard", "অন্যান্য কার্ড", "কার্ড"]],
+    mfs: [["bkash", "বিকাশ", "bKash", "#E2136E"], ["nagad", "নগদ", "নগদ", "#F26522"], ["rocket", "রকেট", "Rocket", "#8C3494"], ["upay", "উপায়", "Upay", "#00A651"], ["mcash", "এমক্যাশ (Mcash)", "Mcash", "#00844A"], ["cellfin", "সেলফিন (Cellfin)", "Cellfin", "#0B5D9E"], ["surecash", "শিওরক্যাশ", "SureCash", "#E53935"], ["okwallet", "ওকে ওয়ালেট", "OK", "#F9A825"], ["tap", "ট্যাপ (TAP)", "TAP", "#1565C0"], ["mycash", "মাইক্যাশ", "MyCash", "#2E7D32"], ["pathaopay", "পাঠাও পে", "Pay", "#D32F2F"], ["othermfs", "অন্যান্য MFS", "MFS"]],
+};
+const PROVIDER_FALLBACK_COLORS = ["#0B5D9E", "#2E7D32", "#8E24AA", "#E65100", "#00838F", "#AD1457", "#5D4037", "#455A64", "#6A1B9A", "#C62828"];
+function providerOf(acc) {
+    if (!acc || !acc.provider || !ACCOUNT_PROVIDERS[acc.type])
+        return null;
+    const row = ACCOUNT_PROVIDERS[acc.type].find((r) => r[0] === acc.provider);
+    if (!row)
+        return null;
+    let h = 0;
+    for (const ch of row[0])
+        h = (h * 31 + ch.charCodeAt(0)) % PROVIDER_FALLBACK_COLORS.length;
+    return { key: row[0], label: row[1], abbr: row[2], color: row[3] || PROVIDER_FALLBACK_COLORS[h] };
+}
+// প্রতিষ্ঠানের নিজস্ব রঙের গোল লোগো-ব্যাজ; মাধ্যম ঠিক করা না থাকলে (পুরোনো অ্যাকাউন্ট) আগের 💰 আইকন
+function AccountLogo({ account, size }) {
+    const sz = size || 36;
+    const p = providerOf(account);
+    if (!p)
+        return React.createElement("span", { style: { fontSize: Math.round(sz * 0.6), lineHeight: 1 } }, "💰");
+    const len = p.abbr.length;
+    return React.createElement("span", { title: p.label, style: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: sz, height: sz, borderRadius: "50%", background: p.color, color: "#fff", fontWeight: 700, fontSize: Math.round(sz * (len <= 2 ? 0.42 : len <= 4 ? 0.28 : 0.2)), letterSpacing: 0, flexShrink: 0, overflow: "hidden", fontFamily: "'Hind Siliguri', sans-serif" } }, p.abbr);
+}
 function AccountForm({ initial, onClose, onSave }) {
     const [name, setName] = useState((initial === null || initial === void 0 ? void 0 : initial.name) || "");
     const [type, setType] = useState((initial === null || initial === void 0 ? void 0 : initial.type) || "bank");
     const [parentMethod, setParentMethod] = useState((initial && initial.parentMethod) || "");
+    const [provider, setProvider] = useState((initial && initial.provider) || "");
     const [openingBalance, setOpeningBalance] = useState(initial ? String(initial.openingBalance) : "0");
     const [openingBalanceDate, setOpeningBalanceDate] = useState((initial === null || initial === void 0 ? void 0 : initial.openingBalanceDate) || todayStr());
     const [err, setErr] = useState("");
@@ -3476,7 +3508,20 @@ function AccountForm({ initial, onClose, onSave }) {
         React.createElement("label", { style: admStyles.label }, "\u0985\u09CD\u09AF\u09BE\u0995\u09BE\u0989\u09A8\u09CD\u099F\u09C7\u09B0 \u09A8\u09BE\u09AE * (\u09AF\u09C7\u09AE\u09A8: DBBL, bKash Personal)"),
         React.createElement("input", { style: admStyles.input, value: name, onChange: (e) => setName(e.target.value) }),
         React.createElement("label", { style: admStyles.label }, "\u09A7\u09B0\u09A8"),
-        React.createElement("select", { style: admStyles.input, value: type, onChange: (e) => setType(e.target.value) }, ACCOUNT_TYPES.concat(LEGACY_ACCOUNT_TYPES.filter((t) => initial && initial.type === t.key)).map((t) => React.createElement("option", { key: t.key, value: t.key }, t.label))),
+        React.createElement("select", { style: admStyles.input, value: type, onChange: (e) => { setType(e.target.value); setProvider(""); } }, ACCOUNT_TYPES.concat(LEGACY_ACCOUNT_TYPES.filter((t) => initial && initial.type === t.key)).map((t) => React.createElement("option", { key: t.key, value: t.key }, t.label))),
+        ACCOUNT_PROVIDERS[type] && React.createElement("label", { style: admStyles.label }, "মাধ্যম"),
+        ACCOUNT_PROVIDERS[type] && React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 12 } },
+            React.createElement(AccountLogo, { account: { type, provider }, size: 38 }),
+            React.createElement("select", { style: Object.assign({}, admStyles.input, { marginBottom: 0, flex: 1 }), value: provider, onChange: (e) => {
+                    const next = e.target.value;
+                    const prevLabel = (providerOf({ type, provider }) || {}).label;
+                    const nextLabel = (providerOf({ type, provider: next }) || {}).label;
+                    if (nextLabel && (!name.trim() || name === prevLabel))
+                        setName(nextLabel);
+                    setProvider(next);
+                } },
+                React.createElement("option", { value: "" }, "— নির্বাচন করুন —"),
+                ACCOUNT_PROVIDERS[type].map((r) => React.createElement("option", { key: r[0], value: r[0] }, r[1])))),
         type === "custom" && React.createElement("label", { style: admStyles.label }, "কোন মাধ্যমের অধীনে থাকবে"),
         type === "custom" && React.createElement("select", { style: admStyles.input, value: parentMethod, onChange: (e) => setParentMethod(e.target.value) },
             React.createElement("option", { value: "" }, "কোনোটির অধীনে নয় (নিজেই আলাদা মাধ্যম)"),
@@ -3491,7 +3536,11 @@ function AccountForm({ initial, onClose, onSave }) {
                     setErr("অ্যাকাউন্টের নাম লিখুন");
                     return;
                 }
-                onSave({ name: name.trim(), type, parentMethod: type === "custom" ? (parentMethod || null) : null, openingBalance: parseFloat(openingBalance) || 0, openingBalanceDate });
+                if (!initial && ACCOUNT_PROVIDERS[type] && !provider) {
+                    setErr("মাধ্যম নির্বাচন করুন");
+                    return;
+                }
+                onSave({ name: name.trim(), type, provider: ACCOUNT_PROVIDERS[type] ? (provider || null) : null, parentMethod: type === "custom" ? (parentMethod || null) : null, openingBalance: parseFloat(openingBalance) || 0, openingBalanceDate });
             } }, "সংরক্ষণ করুন")));
 }
 function AccountPanel({ onClose, dynamicAccountBalances, onAdd, onUpdate, onDelete, onToggleActive, onViewTransactions }) {
@@ -3518,9 +3567,11 @@ function AccountPanel({ onClose, dynamicAccountBalances, onAdd, onUpdate, onDele
         dynamicAccountBalances.forEach((a) => {
             body.push(React.createElement("div", { key: a.id, style: Object.assign(Object.assign({}, admStyles.card), { opacity: a.active === false ? 0.55 : 1 }) },
                 React.createElement("div", { style: admStyles.row },
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+                    React.createElement(AccountLogo, { account: a, size: 36 }),
                     React.createElement("div", null,
                         React.createElement("div", { style: { fontWeight: 600 } }, a.name, a.active === false && React.createElement("span", { style: { fontSize: 10.5, marginLeft: 6 } }, "(নিষ্ক্রিয়)")),
-                        React.createElement("div", { style: admStyles.muted }, (ACCOUNT_TYPES.concat(LEGACY_ACCOUNT_TYPES).find((t) => t.key === a.type) || {}).label || a.type)),
+                        React.createElement("div", { style: admStyles.muted }, (ACCOUNT_TYPES.concat(LEGACY_ACCOUNT_TYPES).find((t) => t.key === a.type) || {}).label || a.type))),
                     React.createElement("div", { style: { fontWeight: 700, color: a.balance < 0 ? "var(--hk-danger)" : undefined } }, formatBalance(a.balance))),
                 blockedMsg === a.id && (React.createElement("div", { style: { fontSize: 12, color: "var(--hk-danger)", marginTop: 6 } }, "এই অ্যাকাউন্টে লেনদেন/লেনদেনের ইতিহাস আছে বলে মুছে ফেলা যাবে না — বরং নিষ্ক্রিয় করুন।")),
                 React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" } },
@@ -3578,11 +3629,11 @@ const QUICK_AMOUNTS = [50, 100, 200, 500, 1000];
 function accountsForMethod(userAccounts, method) {
     const typesOf = { bank: ["bank"], bkash: ["mfs"], nagad: ["mfs"], rocket: ["mfs"], card: ["card"], cash: ["cash", "other"] };
     const ok = typesOf[method] || [];
-    return (userAccounts || []).filter((a) => a.active !== false && (ok.indexOf(a.type) !== -1 || (a.type === "custom" && a.parentMethod === method)));
+    return (userAccounts || []).filter((a) => a.active !== false && ((a.type === "mfs" && a.provider ? a.provider === method : ok.indexOf(a.type) !== -1) || (a.type === "custom" && a.parentMethod === method)));
 }
 // কোনো মাধ্যমের অধীনে না থাকা Custom অ্যাকাউন্ট — বিকাশ/নগদ/রকেট/কার্ডের পাশে নিজেই একটি মাধ্যম হিসেবে দেখায়
 function standaloneAccounts(userAccounts, selectedId) {
-    return (userAccounts || []).filter((a) => a.type === "custom" && !a.parentMethod && (a.active !== false || a.id === selectedId));
+    return (userAccounts || []).filter((a) => ((a.type === "custom" && !a.parentMethod) || (a.type === "mfs" && a.provider && ["bkash", "nagad", "rocket"].indexOf(a.provider) === -1)) && (a.active !== false || a.id === selectedId));
 }
 function TransactionForm({ initial, presetType, onClose, onSave, onDelete, onCheckBalance, onCheckDynamicBalance, userAccounts }) {
     const catCtx = useCategories();
