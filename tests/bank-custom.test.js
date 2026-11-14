@@ -15,3 +15,17 @@ assert.strictEqual(tr({ fromAccountId: "d", toMethod: "nagad" }), "withdraw");
 assert.strictEqual(tr({ fromAccountId: "d", toMethod: "bank" }), null);
 assert.strictEqual(tr({ fromMethod: "cash", toMethod: "bkash" }), null);
 console.log("bank-custom: 10 passed");
+// মাধ্যম (provider): MFS শুধু নিজের মাধ্যমে; অজানা MFS আলাদা চিপ; প্রতিষ্ঠানের তথ্য মেলে
+const ctx2 = { ACCOUNT_PROVIDERS: null }; vm.createContext(ctx2);
+const i1 = src.indexOf("const ACCOUNT_PROVIDERS"), i2 = src.indexOf("// প্রতিষ্ঠানের নিজস্ব রঙের গোল");
+vm.runInContext(src.slice(i1, i2) + "\nthis.providerOf = providerOf; this.P = ACCOUNT_PROVIDERS;", ctx2);
+assert.strictEqual(ctx2.providerOf({ type: "mfs", provider: "bkash" }).label, "বিকাশ");
+assert.strictEqual(ctx2.providerOf({ type: "bank", provider: "dbbl" }).abbr, "DBBL");
+assert.strictEqual(ctx2.providerOf({ type: "mfs" }), null);
+assert.ok(ctx2.P.bank.length >= 55 && ctx2.P.mfs.length >= 10);
+const keys = Object.values(ctx2.P).flat().map((r) => r[0]); assert.strictEqual(new Set(keys).size, keys.length, "unique keys");
+const accs2 = [{ id: "a", type: "mfs", provider: "bkash" }, { id: "b", type: "mfs", provider: "nagad" }, { id: "u", type: "mfs", provider: "upay" }, { id: "c", type: "card", provider: "citycard" }];
+const nm = (m) => ctx.accountsForMethod(accs2, m).map((a) => a.id).join();
+assert.strictEqual(nm("bkash"), "a"); assert.strictEqual(nm("nagad"), "b"); assert.strictEqual(nm("rocket"), ""); assert.strictEqual(nm("card"), "c");
+assert.strictEqual(ctx.standaloneAccounts(accs2).map((a) => a.id).join(), "u");
+console.log("providers: 9 passed");
