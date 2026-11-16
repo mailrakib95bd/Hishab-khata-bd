@@ -3506,21 +3506,59 @@ const CUSTOM_PARENT_METHODS = ["bkash", "nagad", "rocket", "card"];
 const ACCOUNT_PROVIDERS = {
     bank: [["sonali", "সোনালী ব্যাংক", "সো", "#0B5D9E"], ["janata", "জনতা ব্যাংক", "জ", "#1E7B3A"], ["agrani", "অগ্রণী ব্যাংক", "অ", "#B3261E"], ["rupali", "রূপালী ব্যাংক", "রূ", "#1565C0"], ["basic", "বেসিক ব্যাংক", "BASIC"], ["bdbl", "বাংলাদেশ ডেভেলপমেন্ট ব্যাংক", "BDBL"], ["krishi", "বাংলাদেশ কৃষি ব্যাংক", "কৃষি", "#2E7D32"], ["rakub", "রাজশাহী কৃষি উন্নয়ন ব্যাংক", "RAKUB"], ["probashi", "প্রবাসী কল্যাণ ব্যাংক", "প্রকব"], ["karmasangsthan", "কর্মসংস্থান ব্যাংক", "কর্ম"], ["ansar", "আনসার-ভিডিপি উন্নয়ন ব্যাংক", "AVD"], ["grameen", "গ্রামীণ ব্যাংক", "গ্রা", "#E65100"],
         ["islami", "ইসলামী ব্যাংক বাংলাদেশ", "IBBL", "#006B3F"], ["dbbl", "ডাচ-বাংলা ব্যাংক (DBBL)", "DBBL", "#0F7B5F"], ["brac", "ব্র্যাক ব্যাংক", "BRAC", "#0072BC"], ["city", "সিটি ব্যাংক", "CITY", "#C62828"], ["ebl", "ইস্টার্ন ব্যাংক (EBL)", "EBL", "#E53935"], ["prime", "প্রাইম ব্যাংক", "PRIME"], ["mtb", "মিউচুয়াল ট্রাস্ট ব্যাংক (MTB)", "MTB"], ["dhaka", "ঢাকা ব্যাংক", "ঢাকা"], ["southeast", "সাউথইস্ট ব্যাংক", "SEBL"], ["standard", "স্ট্যান্ডার্ড ব্যাংক", "STD"], ["one", "ওয়ান ব্যাংক", "ONE"], ["bankasia", "ব্যাংক এশিয়া", "ASIA"], ["mercantile", "মার্কেন্টাইল ব্যাংক", "MBL"], ["ncc", "এনসিসি ব্যাংক", "NCC"], ["nrb", "এনআরবি ব্যাংক", "NRB"], ["nrbc", "এনআরবি কমার্শিয়াল ব্যাংক", "NRBC"], ["nrbglobal", "এনআরবি গ্লোবাল ব্যাংক", "NRBG"], ["premier", "প্রিমিয়ার ব্যাংক", "PBL"], ["pubali", "পূবালী ব্যাংক", "পূবা"], ["trust", "ট্রাস্ট ব্যাংক", "TBL"], ["ucb", "ইউনাইটেড কমার্শিয়াল ব্যাংক (UCB)", "UCB"], ["uttara", "উত্তরা ব্যাংক", "উত্তরা"], ["jamuna", "যমুনা ব্যাংক", "যমুনা"], ["midland", "মিডল্যান্ড ব্যাংক", "MDL"], ["modhumoti", "মধুমতি ব্যাংক", "মধু"], ["meghna", "মেঘনা ব্যাংক", "মেঘনা"], ["shimanto", "সীমান্ত ব্যাংক", "সীমান্ত"], ["sbac", "সাউথ বাংলা এগ্রিকালচার ব্যাংক", "SBAC"], ["sibl", "সোশ্যাল ইসলামী ব্যাংক", "SIBL"], ["fsibl", "ফার্স্ট সিকিউরিটি ইসলামী ব্যাংক", "FSIBL"], ["alarafah", "আল-আরাফাহ ইসলামী ব্যাংক", "AIBL"], ["icbi", "আইসিবি ইসলামিক ব্যাংক", "ICBI"], ["exim", "এক্সিম ব্যাংক", "EXIM"], ["shahjalal", "শাহজালাল ইসলামী ব্যাংক", "SJIBL"], ["union", "ইউনিয়ন ব্যাংক", "UBL"], ["community", "কমিউনিটি ব্যাংক", "CBL"], ["citizens", "সিটিজেনস ব্যাংক", "CZB"], ["padma", "পদ্মা ব্যাংক", "পদ্মা"], ["globalislami", "গ্লোবাল ইসলামী ব্যাংক", "GIB"], ["commerce", "বাংলাদেশ কমার্স ব্যাংক", "BCBL"],
-        ["citina", "সিটিব্যাংক এন.এ.", "Citi"], ["hsbc", "এইচএসবিসি", "HSBC", "#DB0011"], ["scb", "স্ট্যান্ডার্ড চার্টার্ড", "SC", "#0473EA"], ["ceylon", "কমার্শিয়াল ব্যাংক অব সিলন", "CBC"], ["sbi", "স্টেট ব্যাংক অব ইন্ডিয়া", "SBI"], ["habib", "হাবিব ব্যাংক", "HBL"], ["nbp", "ন্যাশনাল ব্যাংক অব পাকিস্তান", "NBP"], ["woori", "উরি ব্যাংক", "WRB"], ["alfalah", "ব্যাংক আল-ফালাহ", "BAF"], ["otherbank", "অন্যান্য ব্যাংক", "ব্যাংক"]],
+        ["citina", "সিটিব্যাংক এন.এ.", "Citi"], ["hsbc", "এইচএসবিসি", "HSBC", "#DB0011"], ["scb", "স্ট্যান্ডার্ড চার্টার্ড", "SC", "#0473EA"], ["ceylon", "কমার্শিয়াল ব্যাংক অব সিলন", "CBC"], ["sbi", "স্টেট ব্যাংক অব ইন্ডিয়া", "SBI"], ["habib", "হাবিব ব্যাংক", "HBL"], ["nbp", "ন্যাশনাল ব্যাংক অব পাকিস্তান", "NBP"], ["woori", "উরি ব্যাংক", "WRB"], ["alfalah", "ব্যাংক আল-ফালাহ", "BAF"], ["ific", "আইএফআইসি ব্যাংক", "IFIC", "#C62828"], ["lankabangla", "ল্যাংকাবাংলা", "LBFL", "#1E7B3A"], ["abbank", "এবি ব্যাংক", "AB", "#C62828"], ["otherbank", "অন্যান্য ব্যাংক", "ব্যাংক"]],
     card: [["dbblcard", "ডাচ-বাংলা কার্ড", "DBBL", "#0F7B5F"], ["citycard", "সিটি কার্ড", "CITY", "#C62828"], ["braccard", "ব্র্যাক ব্যাংক কার্ড", "BRAC", "#0072BC"], ["eblcard", "ইবিএল কার্ড", "EBL", "#E53935"], ["islamicard", "ইসলামী ব্যাংক কার্ড", "IBBL", "#006B3F"], ["sccard", "স্ট্যান্ডার্ড চার্টার্ড কার্ড", "SC", "#0473EA"], ["hsbccard", "এইচএসবিসি কার্ড", "HSBC", "#DB0011"], ["asiacard", "ব্যাংক এশিয়া কার্ড", "ASIA"], ["primecard", "প্রাইম ব্যাংক কার্ড", "PRIME"], ["mtbcard", "এমটিবি কার্ড", "MTB"], ["sonalicard", "সোনালী ব্যাংক কার্ড", "সো", "#0B5D9E"], ["ucbcard", "ইউসিবি কার্ড", "UCB"], ["visa", "ভিসা কার্ড", "VISA", "#1A1F71"], ["master", "মাস্টারকার্ড", "MC", "#EB001B"], ["amex", "আমেরিকান এক্সপ্রেস", "AMEX", "#006FCF"], ["othercard", "অন্যান্য কার্ড", "কার্ড"]],
-    mfs: [["bkash", "বিকাশ", "bKash", "#E2136E"], ["nagad", "নগদ", "নগদ", "#F26522"], ["rocket", "রকেট", "Rocket", "#8C3494"], ["upay", "উপায়", "Upay", "#00A651"], ["mcash", "এমক্যাশ (Mcash)", "Mcash", "#00844A"], ["cellfin", "সেলফিন (Cellfin)", "Cellfin", "#0B5D9E"], ["surecash", "শিওরক্যাশ", "SureCash", "#E53935"], ["okwallet", "ওকে ওয়ালেট", "OK", "#F9A825"], ["tap", "ট্যাপ (TAP)", "TAP", "#1565C0"], ["mycash", "মাইক্যাশ", "MyCash", "#2E7D32"], ["pathaopay", "পাঠাও পে", "Pay", "#D32F2F"], ["othermfs", "অন্যান্য MFS", "MFS"]],
+    mfs: [["bkash", "বিকাশ", "bKash", "#E2136E"], ["nagad", "নগদ", "নগদ", "#F26522"], ["rocket", "রকেট", "Rocket", "#8C3494"], ["upay", "উপায়", "Upay", "#00A651"], ["mcash", "এমক্যাশ (Mcash)", "Mcash", "#00844A"], ["cellfin", "সেলফিন (Cellfin)", "Cellfin", "#0B5D9E"], ["surecash", "শিওরক্যাশ", "SureCash", "#E53935"], ["okwallet", "ওকে ওয়ালেট", "OK", "#F9A825"], ["tap", "ট্যাপ (TAP)", "TAP", "#1565C0"], ["mycash", "মাইক্যাশ", "MyCash", "#2E7D32"], ["pathaopay", "পাঠাও পে", "Pay", "#D32F2F"], ["ucash", "ইউক্যাশ (UCash)", "UCash", "#D32F2F"], ["telecash", "টেলিক্যাশ", "Tele", "#E91E8C"], ["nexuspay", "নেক্সাসপে (NexusPay)", "Nexus", "#0F7B5F"], ["othermfs", "অন্যান্য MFS", "MFS"]],
 };
 const PROVIDER_FALLBACK_COLORS = ["#0B5D9E", "#2E7D32", "#8E24AA", "#E65100", "#00838F", "#AD1457", "#5D4037", "#455A64", "#6A1B9A", "#C62828"];
+// assets/logos/ ফোল্ডারের আসল লোগো-ফাইল (ব্যবহারকারীর দেওয়া লোগো থেকে)। কার্ড → তার ব্যাংকের লোগো।
+const PROVIDER_LOGO_FILES = ["abbank", "agrani", "alarafah", "amex", "bankasia", "bkash", "brac", "ceylon", "city", "community", "dbbl", "dhaka", "ebl", "exim", "ific", "islami", "jamuna", "janata", "lankabangla", "mcash", "meghna", "mercantile", "midland", "mtb", "nagad", "ncc", "nexuspay", "nrb", "nrbc", "one", "premier", "prime", "pubali", "rocket", "rupali", "sbac", "scb", "shahjalal", "shimanto", "sonali", "southeast", "surecash", "telecash", "trust", "ucash", "ucb", "upay"];
+const PROVIDER_LOGO_ALIAS = { dbblcard: "dbbl", citycard: "city", braccard: "brac", eblcard: "ebl", islamicard: "islami", sccard: "scb", asiacard: "bankasia", primecard: "prime", mtbcard: "mtb", sonalicard: "sonali", ucbcard: "ucb", standard: "scb", ncc: "ncc", sbac: "sbac" };
+// অ্যাকাউন্টের নামে (বাংলা/ইংরেজি) এসব লেখা থাকলে সংশ্লিষ্ট প্রতিষ্ঠানের লোগো দেখায়: "বিকাশ পার্সোনাল", "bKash Personal"
+const PROVIDER_NAME_HINTS = [
+    ["bkash", ["bkash", "বিকাশ"]], ["nagad", ["nagad", "নগদ"]], ["rocket", ["rocket", "রকেট"]], ["upay", ["upay", "উপায়"]],
+    ["mcash", ["mcash", "m cash", "এমক্যাশ", "এম ক্যাশ"]], ["ucash", ["ucash", "ইউক্যাশ"]], ["surecash", ["surecash", "শিওরক্যাশ", "সিওরক্যাশ"]],
+    ["telecash", ["telecash", "টেলিক্যাশ"]], ["nexuspay", ["nexuspay", "nexus pay", "নেক্সাস"]],
+    ["dbbl", ["dbbl", "dutch", "ডাচ"]], ["brac", ["brac", "ব্র্যাক", "ব্রাক"]], ["ebl", ["ebl", "eastern bank", "ইস্টার্ন"]],
+    ["city", ["city bank", "citybank", "সিটি ব্যাংক", "সিটি ব্যাঙ্ক"]], ["prime", ["prime bank", "প্রাইম"]], ["mtb", ["mtb", "mutual trust", "মিউচুয়াল"]],
+    ["pubali", ["pubali", "পূবালী"]], ["sonali", ["sonali", "সোনালী"]], ["janata", ["janata", "জনতা"]], ["agrani", ["agrani", "অগ্রণী"]], ["rupali", ["rupali", "রূপালী"]],
+    ["ific", ["ific", "আইএফআইসি"]], ["southeast", ["southeast", "সাউথইস্ট"]], ["mercantile", ["mercantile", "মার্কেন্টাইল"]], ["ucb", ["ucb", "united commercial", "ইউসিবি"]],
+    ["one", ["one bank", "ওয়ান ব্যাংক"]], ["trust", ["trust bank", "ট্রাস্ট ব্যাংক"]], ["exim", ["exim", "এক্সিম"]], ["shahjalal", ["shahjalal", "শাহজালাল"]],
+    ["islami", ["islami bank", "ইসলামী ব্যাংক", "ibbl"]], ["scb", ["standard chartered", "স্ট্যান্ডার্ড চার্টার্ড"]], ["dhaka", ["dhaka bank", "ঢাকা ব্যাংক"]],
+    ["nrbc", ["nrbc"]], ["nrb", ["nrb"]], ["bankasia", ["bank asia", "ব্যাংক এশিয়া"]], ["jamuna", ["jamuna", "যমুনা"]], ["meghna", ["meghna", "মেঘনা"]],
+    ["midland", ["midland", "মিডল্যান্ড"]], ["community", ["community bank", "কমিউনিটি"]], ["ncc", ["ncc"]], ["premier", ["premier", "প্রিমিয়ার"]],
+    ["sbac", ["sbac"]], ["shimanto", ["shimanto", "সীমান্ত"]], ["alarafah", ["al-arafah", "alarafah", "aibl", "আল-আরাফাহ"]], ["abbank", ["ab bank"]],
+    ["lankabangla", ["lankabangla", "ল্যাংকাবাংলা"]], ["ceylon", ["commercial bank"]], ["amex", ["amex", "american express", "আমেরিকান এক্সপ্রেস"]],
+];
 function providerOf(acc) {
-    if (!acc || !acc.provider || !ACCOUNT_PROVIDERS[acc.type])
+    if (!acc)
         return null;
-    const row = ACCOUNT_PROVIDERS[acc.type].find((r) => r[0] === acc.provider);
-    if (!row)
+    let key = null;
+    const nm = String(acc.name || "").toLowerCase();
+    if (nm) {
+        const hit = PROVIDER_NAME_HINTS.find((h) => h[1].some((w) => nm.indexOf(w) !== -1));
+        if (hit)
+            key = hit[0];
+    }
+    if (!key && acc.provider && ACCOUNT_PROVIDERS[acc.type] && ACCOUNT_PROVIDERS[acc.type].some((r) => r[0] === acc.provider))
+        key = acc.provider;
+    if (!key)
         return null;
+    let row = null;
+    for (const t of Object.keys(ACCOUNT_PROVIDERS)) {
+        row = ACCOUNT_PROVIDERS[t].find((r) => r[0] === key);
+        if (row)
+            break;
+    }
+    const logoKey = PROVIDER_LOGO_ALIAS[key] || key;
+    const logo = PROVIDER_LOGO_FILES.indexOf(logoKey) !== -1 ? "assets/logos/" + logoKey + ".png" : null;
+    if (!row && !logo)
+        return null;
+    row = row || [key, key, key.toUpperCase()];
     let h = 0;
     for (const ch of row[0])
         h = (h * 31 + ch.charCodeAt(0)) % PROVIDER_FALLBACK_COLORS.length;
-    return { key: row[0], label: row[1], abbr: row[2], color: row[3] || PROVIDER_FALLBACK_COLORS[h] };
+    return { key: row[0], label: row[1], abbr: row[2], color: row[3] || PROVIDER_FALLBACK_COLORS[h], logo };
 }
 // প্রতিষ্ঠানের নিজস্ব রঙের গোল লোগো-ব্যাজ; মাধ্যম ঠিক করা না থাকলে (পুরোনো অ্যাকাউন্ট) আগের 💰 আইকন
 function AccountLogo({ account, size }) {
@@ -3528,6 +3566,8 @@ function AccountLogo({ account, size }) {
     const p = providerOf(account);
     if (!p)
         return React.createElement("span", { style: { fontSize: Math.round(sz * 0.6), lineHeight: 1 } }, "💰");
+    if (p.logo)
+        return React.createElement("span", { title: p.label, style: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: Math.round(sz * 1.75), height: sz, background: "#fff", border: "1px solid rgba(0,0,0,0.08)", borderRadius: 8, padding: 3, boxSizing: "border-box", flexShrink: 0, overflow: "hidden" } }, React.createElement("img", { src: p.logo, alt: p.label, style: { maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" } }));
     const len = p.abbr.length;
     return React.createElement("span", { title: p.label, style: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: sz, height: sz, borderRadius: "50%", background: p.color, color: "#fff", fontWeight: 700, fontSize: Math.round(sz * (len <= 2 ? 0.42 : len <= 4 ? 0.28 : 0.2)), letterSpacing: 0, flexShrink: 0, overflow: "hidden", fontFamily: "'Hind Siliguri', sans-serif" } }, p.abbr);
 }
@@ -3546,7 +3586,7 @@ function AccountForm({ initial, onClose, onSave }) {
         React.createElement("select", { style: admStyles.input, value: type, onChange: (e) => { setType(e.target.value); setProvider(""); } }, ACCOUNT_TYPES.concat(LEGACY_ACCOUNT_TYPES.filter((t) => initial && initial.type === t.key)).map((t) => React.createElement("option", { key: t.key, value: t.key }, t.label))),
         ACCOUNT_PROVIDERS[type] && React.createElement("label", { style: admStyles.label }, "মাধ্যম"),
         ACCOUNT_PROVIDERS[type] && React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 12 } },
-            React.createElement(AccountLogo, { account: { type, provider }, size: 38 }),
+            React.createElement(AccountLogo, { account: { type, provider, name }, size: 38 }),
             React.createElement("select", { style: Object.assign({}, admStyles.input, { marginBottom: 0, flex: 1 }), value: provider, onChange: (e) => {
                     const next = e.target.value;
                     const prevLabel = (providerOf({ type, provider }) || {}).label;
