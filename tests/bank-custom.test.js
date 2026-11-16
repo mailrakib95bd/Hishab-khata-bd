@@ -29,3 +29,16 @@ const nm = (m) => ctx.accountsForMethod(accs2, m).map((a) => a.id).join();
 assert.strictEqual(nm("bkash"), "a"); assert.strictEqual(nm("nagad"), "b"); assert.strictEqual(nm("rocket"), ""); assert.strictEqual(nm("card"), "c");
 assert.strictEqual(ctx.standaloneAccounts(accs2).map((a) => a.id).join(), "u");
 console.log("providers: 9 passed");
+// নাম-ভিত্তিক লোগো: বাংলা/ইংরেজি নামে একই লোগো; ফাইল সত্যিই আছে
+vm.runInContext("this.PL = PROVIDER_LOGO_FILES; this.PA = PROVIDER_LOGO_ALIAS;", ctx2);
+const nameLogo = (n, o) => (ctx2.providerOf(Object.assign({ name: n }, o)) || {}).logo;
+assert.strictEqual(nameLogo("বিকাশ পার্সোনাল"), "assets/logos/bkash.png");
+assert.strictEqual(nameLogo("bKash Personal"), "assets/logos/bkash.png");
+assert.strictEqual(nameLogo("Nagad Business"), "assets/logos/nagad.png");
+assert.strictEqual(nameLogo("রকেট ২"), "assets/logos/rocket.png");
+assert.strictEqual(nameLogo("My Savings", { type: "card", provider: "citycard" }), "assets/logos/city.png");
+assert.strictEqual(nameLogo("Savings", { type: "bank", provider: "dbbl" }), "assets/logos/dbbl.png");
+assert.strictEqual(nameLogo("Wallet 2"), undefined);
+ctx2.PL.forEach((k) => assert.ok(fs.existsSync(__dirname + "/../assets/logos/" + k + ".png"), k));
+Object.values(ctx2.PA).forEach((k) => assert.ok(ctx2.PL.indexOf(k) !== -1, k));
+console.log("logos: ok");
