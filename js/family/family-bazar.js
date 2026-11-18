@@ -257,8 +257,9 @@
       if (!uid || !window.FB) return;
       setTop((t) => Object.assign({}, t, { loading: true, error: "" }));
       try {
-        const [families, incoming] = await Promise.all([window.FB.myFamilies(), safe(window.FB.myIncomingInvitations(), [])]);
-        setTop({ loading: false, error: "", families, incoming });
+        let inviteError = "";
+        const [families, incoming] = await Promise.all([window.FB.myFamilies(), window.FB.myIncomingInvitations().catch((e) => { inviteError = friendlyError(e); return []; })]);
+        setTop({ loading: false, error: "", families, incoming, inviteError });
         setActiveIdRaw((cur) => {
           const stored = (() => { try { return localStorage.getItem(activeKey(uid)); } catch (e) { return null; } })();
           const pick = [preferId, cur, stored].find((id) => id && families.some((f) => f.id === id));
@@ -482,11 +483,27 @@
         h("button", { style: S.btn2, disabled: busy, onClick: refresh }, "যাচাই করেছি ✓")));
   }
 
+  // Invitation না এলে কারণটা স্ক্রিনেই দেখায় — আগে ত্রুটি চুপচাপ গিলে ফেলা হতো
+  function InviteDiag({ ctx }) {
+    const info = window.FB && window.FB.authInfo ? window.FB.authInfo() : null;
+    if (!info || (ctx.incoming && ctx.incoming.length)) return null;
+    const via = info.providers.includes("google.com") ? "Google" : info.providers.includes("password") ? "ইমেইল/পাসওয়ার্ড" : "অজানা";
+    return h("div", { style: Object.assign({}, S.card, { marginBottom: 12, fontSize: 12.5 }) },
+      h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "🔎 Invitation কেন আসছে না — পরীক্ষা"),
+      h("div", { style: S.muted }, `লগইন ইমেইল: ${info.email || "নেই"}`),
+      h("div", { style: S.muted }, `লগইন পদ্ধতি: ${via}`),
+      h("div", { style: S.muted }, `ইমেইল যাচাই: ${info.verified ? "হয়েছে ✓" : "হয়নি ✗"}`),
+      h("div", { style: S.muted }, "পাওয়া Invitation: ০টি (পাঠানো ইমেইল হুবহু এটাই কি না মিলিয়ে দেখুন)"),
+      ctx.inviteError && h("div", { style: { color: "var(--hk-danger)", marginTop: 4 } }, `ত্রুটি: ${ctx.inviteError}`),
+      ctx.inviteError && /অনুমতি নেই/.test(ctx.inviteError) && h("div", { style: S.muted }, "→ Firebase Console → Firestore → Rules-এ এই প্রজেক্টের firestore.rules পুরোটা পেস্ট করে Publish করা আছে কি?"));
+  }
+
   function NoFamily({ ctx }) {
     return h("div", null,
       h(IncomingCards, { ctx }),
       !ctx.emailVerified && h(VerifyEmailCard, { ctx }),
       ctx.emailVerified && h("button", { style: Object.assign({}, S.btn2, { marginBottom: 12 }), onClick: () => ctx.loadTop() }, "🔄 নতুন Invitation আছে কি দেখুন"),
+      h(InviteDiag, { ctx }),
       h(Empty, { icon: "👨‍👩‍👧‍👦", title: "আপনার এখনো কোনো পরিবার নেই", text: "নিজের পরিবার তৈরি করুন, অথবা কেউ Invite পাঠালে এখানে দেখতে পাবেন।", action: "+ পরিবার তৈরি করুন", onAction: () => ctx.openSheet({ type: "create-family" }) }));
   }
 
@@ -1485,7 +1502,7 @@
 
     // one stable object (FamilyTab hangs `reloadInvites` on it), refreshed every render
     const ctx = Object.assign(ctxRef.current, {
-      uid, user, familyId: D.activeId, activeId: D.activeId, families: D.top.families, family: D.family, incoming: D.top.incoming,
+      uid, user, familyId: D.activeId, activeId: D.activeId, families: D.top.families, family: D.family, incoming: D.top.incoming, inviteError: D.top.inviteError || "",
       emailVerified: !!(window.FB && window.FB.emailVerified && window.FB.emailVerified()),
       fam: D.fam, vis: D.vis, me: D.myMember, purchaseTick, inviteTick, prevMonthKey: Core.addMonths(cm, -1),
       myOther: otherByMonth || null, wallet: wallet || null, toast, openSheet: setSheet, closeAll, loadTop: D.loadTop, reload: D.reload,
