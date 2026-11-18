@@ -452,10 +452,41 @@
         h("button", { style: Object.assign({}, S.btn, { marginTop: 14 }), disabled: busy || !window.FB, onClick: async () => { setBusy(true); setErr(""); try { await window.FB.signInGoogle(); } catch (e) { setErr(friendlyError(e)); } setBusy(false); } }, window.FB ? "Google দিয়ে Sign In" : "ইন্টারনেট সংযোগ দরকার")));
   }
 
+  // ইমেইল/পাসওয়ার্ডে লগইন করা অ্যাকাউন্টের ইমেইল যাচাই না থাকলে Invitation দেখা যায় না (Firestore rules-এর শর্ত) —
+  // আগে শুধু একটা লেখা দেখানো হতো, কিছু করার উপায় ছিল না। এখন যাচাই-ইমেইল পাঠানো ও যাচাই শেষে রিফ্রেশ করা যায়।
+  function VerifyEmailCard({ ctx }) {
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState("");
+    const email = (ctx.user && ctx.user.email) || "";
+    const send = async () => {
+      setBusy(true); setMsg("");
+      try { await window.FB.sendVerificationEmail(); setMsg(`${email} ঠিকানায় যাচাই-লিংক পাঠানো হয়েছে। ইনবক্স/স্প্যাম দেখে লিংকে চাপুন, তারপর নিচের \"যাচাই করেছি\" বোতাম চাপুন।`); }
+      catch (e) { setMsg(friendlyError(e)); }
+      setBusy(false);
+    };
+    const refresh = async () => {
+      setBusy(true); setMsg("");
+      try {
+        const ok = await window.FB.refreshVerification();
+        if (ok) { ctx.toast("ইমেইল যাচাই হয়েছে ✓"); await ctx.loadTop(); }
+        else setMsg("এখনো যাচাই হয়নি। ইমেইলের লিংকে চাপার পর আবার চেষ্টা করুন।");
+      } catch (e) { setMsg(friendlyError(e)); }
+      setBusy(false);
+    };
+    return h("div", { style: Object.assign({}, S.card, { borderColor: "var(--hk-gold)", marginBottom: 12 }) },
+      h("div", { style: { fontWeight: 700, marginBottom: 4 } }, "📧 Invitation পেতে ইমেইল যাচাই করুন"),
+      h("div", { style: S.muted }, `${email ? email + " " : ""}এখনো যাচাই করা নেই, তাই আপনার নামে পাঠানো Invitation দেখানো যাচ্ছে না। যাচাই-ইমেইল পাঠিয়ে লিংকে চাপুন — অথবা Google (Gmail) দিয়ে Sign In করুন।`),
+      msg && h("div", { style: { fontSize: 12.5, marginTop: 8 } }, msg),
+      h("div", { style: { display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" } },
+        h("button", { style: S.btn, disabled: busy, onClick: send }, "যাচাই-ইমেইল পাঠান"),
+        h("button", { style: S.btn2, disabled: busy, onClick: refresh }, "যাচাই করেছি ✓")));
+  }
+
   function NoFamily({ ctx }) {
     return h("div", null,
       h(IncomingCards, { ctx }),
-      !ctx.emailVerified && h("div", { style: Object.assign({}, S.card, { borderColor: "var(--hk-gold)" }) }, h("div", { style: S.muted }, "Invitation পেতে ও গ্রহণ করতে Google (Gmail) দিয়ে Sign In করা লাগে — ইমেইল/পাসওয়ার্ড অ্যাকাউন্টের ইমেইল যাচাই করা থাকে না।")),
+      !ctx.emailVerified && h(VerifyEmailCard, { ctx }),
+      ctx.emailVerified && h("button", { style: Object.assign({}, S.btn2, { marginBottom: 12 }), onClick: () => ctx.loadTop() }, "🔄 নতুন Invitation আছে কি দেখুন"),
       h(Empty, { icon: "👨‍👩‍👧‍👦", title: "আপনার এখনো কোনো পরিবার নেই", text: "নিজের পরিবার তৈরি করুন, অথবা কেউ Invite পাঠালে এখানে দেখতে পাবেন।", action: "+ পরিবার তৈরি করুন", onAction: () => ctx.openSheet({ type: "create-family" }) }));
   }
 
@@ -1123,7 +1154,7 @@
     };
     const link = window.location.origin + window.location.pathname;
     if (done) return h(Sheet, { title: "Invitation পাঠানো হয়েছে", onClose: close },
-      h(Empty, { icon: "✅", title: done, text: "এই Gmail দিয়ে Google Sign In করে অ্যাপ খুললেই Invitation দেখা যাবে। আলাদা ইমেইল স্বয়ংক্রিয়ভাবে যায় না — তাই তাকে অ্যাপের লিংকটা পাঠিয়ে দিন।" }),
+      h(Empty, { icon: "✅", title: done, text: "এই Gmail দিয়ে Google Sign In করে (অথবা ইমেইল যাচাই করে) অ্যাপ খুললেই Invitation দেখা যাবে। আলাদা ইমেইল স্বয়ংক্রিয়ভাবে যায় না — তাই তাকে অ্যাপের লিংকটা পাঠিয়ে দিন।" }),
       navigator.share && h("button", { style: Object.assign({}, S.btn, { marginBottom: 10 }), onClick: () => navigator.share({ title: "হিসাব-খাতা — ফ্যামিলি বাজার", text: `${ctx.family.name}-এ যোগ দিতে ${done} দিয়ে Google Sign In করুন`, url: link }).catch(() => {}) }, "লিংক শেয়ার করুন"),
       h("button", { style: Object.assign({}, S.btn2, { width: "100%" }), onClick: close }, "ঠিক আছে"));
 
