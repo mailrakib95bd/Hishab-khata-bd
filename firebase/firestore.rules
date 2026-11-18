@@ -107,7 +107,8 @@ service cloud.firestore {
     // Accepting is ONE batch: member doc + memberUids + invitation status.
     // The member-doc rule re-validates role / permissions against the
     // invitation, so nobody can grant themselves anything. The invited
-    // Google account must have a VERIFIED e-mail that matches.
+    // person can SEE the invitation with any sign-in whose e-mail matches, but
+    // ACCEPTING needs a VERIFIED e-mail (Google, or a confirmed password account).
     // (No real e-mail is sent — the invitation appears inside the app the next
     // time that Google account signs in.)
     // ============================================================
@@ -238,8 +239,11 @@ service cloud.firestore {
     }
 
     match /invitations/{inviteId} {
+      // Invitation পড়া: যে ইমেইলে পাঠানো, সেই ইমেইলের অ্যাকাউন্ট দেখতে পাবে — ইমেইল যাচাই থাকুক বা না থাকুক।
+      // (আগে এখানেও email_verified লাগত, ফলে ইমেইল/পাসওয়ার্ডে লগইন করা কেউ Invitation-ই দেখতেন না এবং
+      // কেন দেখছেন না তাও বুঝতেন না।) গ্রহণ/প্রত্যাখ্যান ও সদস্য হওয়া নিচে আগের মতোই যাচাইকৃত ইমেইল ছাড়া হয় না।
       allow read: if signedIn() && (
-        (request.auth.token.email_verified == true && request.auth.token.email.lower() == resource.data.invitedEmail) ||
+        ('email' in request.auth.token && request.auth.token.email.lower() == resource.data.invitedEmail) ||
         request.auth.uid == resource.data.invitedBy
       );
 
