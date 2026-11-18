@@ -112,6 +112,15 @@ function settle(p) {
     p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
   });
 }
+// গুরুত্বপূর্ণ লেখা (Invitation পাঠানো/গ্রহণ) settle()-এর মতো ৪ সেকেন্ডে "সফল" ধরে নেয় না — সার্ভারের নিশ্চিতকরণ পর্যন্ত
+// অপেক্ষা করে। ধীর নেটওয়ার্কে rules-এর প্রত্যাখ্যান ৪ সেকেন্ডের পরে এলে আগে ব্যবহারকারী "পাঠানো হয়েছে ✅" দেখত অথচ
+// Invitation সার্ভারে যেতই না। এখন প্রত্যাখ্যান/টাইমআউট স্পষ্ট ত্রুটি হয়ে ফেরে।
+function strict(p, ms = 20000) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(Object.assign(new Error("সার্ভার সাড়া দিচ্ছে না — ইন্টারনেট দেখে আবার চেষ্টা করুন"), { code: "timeout" })), ms);
+    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+  });
+}
 const setDoc = (...a) => settle(_setDoc(...a));
 const updateDoc = (...a) => settle(_updateDoc(...a));
 const deleteDoc = (...a) => settle(_deleteDoc(...a));
@@ -344,14 +353,15 @@ window.FB = {
   // ---- invitations ----
   async sendInvitation({ familyId, familyName, invitedEmail, relation, role, permissions, phone }) {
     const now = Date.now();
-    const ref = await addDoc(collection(db, "invitations"), {
+    const ref = doc(collection(db, "invitations"));
+    await strict(_setDoc(ref, {
       familyId, familyName, invitedBy: auth.currentUser.uid,
       invitedByName: auth.currentUser.displayName || auth.currentUser.email || "",
       invitedEmail: String(invitedEmail).trim().toLowerCase(), relation, role,
       permissions: window.FBCore.normalizePermissions(permissions),
       phone: String(phone || "").trim().slice(0, 20),
       status: "pending", createdAt: now, expiresAt: now + 7 * 24 * 60 * 60 * 1000,
-    });
+    }));
     return ref.id;
   },
 
@@ -359,11 +369,27 @@ window.FB = {
   async myIncomingInvitations() {
     const u = auth.currentUser;
     const email = (u.email || "").toLowerCase();
-    if (!email || !u.emailVerified) return [];
-    const snap = await getDocs(query(collection(db, "invitations"), where("invitedEmail", "==", email)));
+    if (!email) return [];
+    // ক্যাশ করা ইউজার-অবজেক্টে emailVerified পুরনো থাকতে পারে — আগে নতুন অবস্থা টানি
+    if (!u.emailVerified) { try { await u.reload(); } catch (e) { /* অফলাইন */ } }
+    if (!u.emailVerified) return [];
+    const run = () => getDocs(query(collection(db, "invitations"), where("invitedEmail", "==", email)));
+    let snap;
+    try { snap = await run(); }
+    catch (e) {
+      // টোকেনে email_verified পুরনো (false) থাকলে rules আটকায় — টোকেন নতুন করে একবার আবার চেষ্টা
+      if (e && /permission-denied/i.test(e.code || e.message || "")) { await u.getIdToken(true); snap = await run(); }
+      else throw e;
+    }
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
       .filter((i) => i.status === "pending" && i.expiresAt > Date.now())
       .sort((a, b) => b.createdAt - a.createdAt);
+  },
+  // সমস্যা ধরার জন্য: কোন ইমেইলে, কোন পদ্ধতিতে লগইন, যাচাই আছে কি না
+  authInfo() {
+    const u = auth.currentUser;
+    if (!u) return null;
+    return { email: u.email || "", verified: !!u.emailVerified, providers: (u.providerData || []).map((p) => p.providerId) };
   },
 
   // invitations I sent for one family (pending / accepted / …)
@@ -386,7 +412,7 @@ window.FB = {
       await updateDoc(doc(db, "invitations", invite.id), { status: "accepted", respondedAt: now });
       return;
     }
-    const batch = writeBatch(db);
+    const batch = _writeBatch(db);
     batch.set(memberRef, {
       uid: u.uid, name: u.displayName || (u.email || "").split("@")[0], email: (u.email || "").toLowerCase(),
       photoURL: u.photoURL || null, relation: invite.relation, role: invite.role,
@@ -395,7 +421,7 @@ window.FB = {
     });
     batch.update(doc(db, "families", invite.familyId), { memberUids: arrayUnion(u.uid), updatedAt: now });
     batch.update(doc(db, "invitations", invite.id), { status: "accepted", respondedAt: now });
-    await batch.commit();
+    await strict(batch.commit());
   },
   async rejectInvitation(inviteId) {
     await updateDoc(doc(db, "invitations", inviteId), { status: "rejected", respondedAt: Date.now() });
