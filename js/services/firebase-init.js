@@ -24,6 +24,7 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   sendPasswordResetEmail,
+  sendEmailVerification,
   signOut,
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
@@ -144,7 +145,23 @@ window.FB = {
     await signInWithEmailAndPassword(auth, email, password);
   },
   async signUpEmail(email, password) {
-    await createUserWithEmailAndPassword(auth, email, password);
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
+    // Invitation পেতে ইমেইল যাচাই লাগে — তাই সাইন-আপের সাথেই যাচাই-ইমেইল পাঠানো হয় (ব্যর্থ হলে সাইন-আপ আটকায় না)
+    try { await sendEmailVerification(cred.user); } catch (e) { /* পরে "যাচাই-ইমেইল পাঠান" বোতাম থেকে আবার পাঠানো যাবে */ }
+  },
+  // ইমেইল/পাসওয়ার্ড অ্যাকাউন্টের যাচাই-লিংক (Google অ্যাকাউন্ট আগে থেকেই যাচাইকৃত)
+  async sendVerificationEmail() {
+    const u = auth.currentUser;
+    if (!u) throw new Error("auth/no-user");
+    await sendEmailVerification(u);
+  },
+  // লিংকে ক্লিক করার পর নতুন অবস্থা টানে — emailVerified ও Firestore rules-এর টোকেন দুটোই আপডেট হয়
+  async refreshVerification() {
+    const u = auth.currentUser;
+    if (!u) return false;
+    await u.reload();
+    if (u.emailVerified) await u.getIdToken(true);
+    return !!u.emailVerified;
   },
   async resetPassword(email) {
     await sendPasswordResetEmail(auth, email);
