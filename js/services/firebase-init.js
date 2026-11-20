@@ -433,6 +433,14 @@ window.FB = {
   async acceptInvitation(invite) {
     const u = auth.currentUser;
     const now = Date.now();
+    // Firestore rules ইমেইল-যাচাই পড়ে ID টোকেন থেকে, u.emailVerified থেকে নয়। যাচাইয়ের পর টোকেন নতুন না করলে
+    // টোকেনে email_verified তখনও false থাকে ও গ্রহণ "অনুমতি নেই" হয় — তাই আগে টোকেন জোর করে নতুন করি।
+    try { await u.reload(); } catch (e) { /* অফলাইন */ }
+    let claims = null;
+    try { claims = (await u.getIdTokenResult(true)).claims; } catch (e) { /* অফলাইন — নিচে rules-ই সিদ্ধান্ত নেবে */ }
+    if (claims && claims.email_verified !== true) {
+      throw new Error("আপনার ইমেইল এখনো যাচাই হয়নি। যাচাই-লিংকে চাপুন, তারপর অ্যাপ থেকে Sign Out করে আবার Sign In করে চেষ্টা করুন।");
+    }
     const memberRef = doc(db, "families", invite.familyId, "members", u.uid);
     // আগে থেকেই সদস্য হলে (যেমন একই ইমেইলে দ্বিতীয় invitation) নতুন সদস্য তৈরি বা আগের তথ্য ওভাররাইট হবে না —
     // শুধু invitation-টি গৃহীত হিসেবে বন্ধ হবে। এক ইমেইল = এক সদস্য।
@@ -454,6 +462,7 @@ window.FB = {
     await strict(batch.commit());
   },
   async rejectInvitation(inviteId) {
+    try { await auth.currentUser.getIdToken(true); } catch (e) { /* অফলাইন */ }
     await updateDoc(doc(db, "invitations", inviteId), { status: "rejected", respondedAt: Date.now() });
   },
   async cancelInvitation(inviteId) {
