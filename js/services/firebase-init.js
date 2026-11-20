@@ -371,8 +371,8 @@ window.FB = {
     const email = (u.email || "").toLowerCase();
     if (!email) return [];
     // ক্যাশ করা ইউজার-অবজেক্টে emailVerified পুরনো থাকতে পারে — আগে নতুন অবস্থা টানি
+    // (rules-এ Invitation "দেখা" যাচাই ছাড়াই চলে; যাচাই লাগে শুধু গ্রহণ করতে — তাই এখানে আর খালি তালিকা ফেরানো হয় না)
     if (!u.emailVerified) { try { await u.reload(); } catch (e) { /* অফলাইন */ } }
-    if (!u.emailVerified) return [];
     const run = () => getDocs(query(collection(db, "invitations"), where("invitedEmail", "==", email)));
     let snap;
     try { snap = await run(); }
@@ -384,6 +384,36 @@ window.FB = {
     return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
       .filter((i) => i.status === "pending" && i.expiresAt > Date.now())
       .sort((a, b) => b.createdAt - a.createdAt);
+  },
+  // লাইভ: আমার ইমেইলে আসা অপেক্ষমাণ Invitation — কেউ পাঠালেই রিলোড ছাড়া সাথে সাথে চলে আসে।
+  // পুরনো টোকেনে permission-denied এলে টোকেন নতুন করে একবার আবার চেষ্টা করে।
+  subscribeIncomingInvitations(cb, onErr) {
+    const u = auth.currentUser;
+    const email = u ? (u.email || "").toLowerCase() : "";
+    if (!email) { cb([]); return () => {}; }
+    let off = null, dead = false, retried = false;
+    const start = () => {
+      off = onSnapshot(query(collection(db, "invitations"), where("invitedEmail", "==", email)), (snap) => {
+        if (dead) return;
+        cb(snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+          .filter((i) => i.status === "pending" && i.expiresAt > Date.now())
+          .sort((a, b) => b.createdAt - a.createdAt));
+      }, (e) => {
+        if (dead) return;
+        if (!retried && e && /permission-denied/i.test(e.code || e.message || "")) {
+          retried = true;
+          u.getIdToken(true).then(() => { if (!dead) start(); }).catch(() => onErr && onErr(e));
+        } else if (onErr) onErr(e);
+      });
+    };
+    start();
+    return () => { dead = true; if (off) off(); };
+  },
+  // লাইভ: আমার পাঠানো Invitation (এক পরিবারের) — গৃহীত/প্রত্যাখ্যাত হলে সাথে সাথে বদলায়
+  subscribeSentInvitations(familyId, cb, onErr) {
+    return onSnapshot(query(collection(db, "invitations"), where("invitedBy", "==", auth.currentUser.uid), where("familyId", "==", familyId)),
+      (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => b.createdAt - a.createdAt)),
+      (e) => { if (onErr) onErr(e); });
   },
   // সমস্যা ধরার জন্য: কোন ইমেইলে, কোন পদ্ধতিতে লগইন, যাচাই আছে কি না
   authInfo() {
