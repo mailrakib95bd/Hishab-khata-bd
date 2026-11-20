@@ -270,6 +270,21 @@
       }
     }, [uid]);
 
+    // লাইভ Invitation — কেউ পাঠালেই রিলোড ছাড়া সাথে সাথে আসে (আগে শুধু একবার, লোডের সময় আনা হতো)
+    useEffect(() => {
+      if (!uid) return undefined;
+      let off = null, dead = false;
+      const start = () => {
+        if (dead || off || !window.FB || !window.FB.subscribeIncomingInvitations) return;
+        off = window.FB.subscribeIncomingInvitations(
+          (incoming) => { if (!dead) setTop((t) => Object.assign({}, t, { incoming, inviteError: "" })); },
+          (e) => { if (!dead) setTop((t) => Object.assign({}, t, { inviteError: friendlyError(e) })); });
+      };
+      start();
+      if (!off) window.addEventListener("fb-ready", start);
+      return () => { dead = true; window.removeEventListener("fb-ready", start); if (off) off(); };
+    }, [uid]);
+
     const setActive = useCallback((id) => {
       try { localStorage.setItem(activeKey(uid), id); } catch (e) { /* ignore */ }
       setActiveIdRaw(id);
@@ -419,7 +434,9 @@
       h("div", { style: S.card }, h(PermissionList, { perms: inv.permissions }),
         h("div", { style: Object.assign({}, S.muted, { marginTop: 8 }) }, "আপনার নিজের কেনাকাটা সবসময় আপনি দেখবেন। অন্যের বিস্তারিত শুধু অনুমতি থাকলেই দেখা যায়।")),
       err && h(ErrorBox, { msg: err }),
-      state === "pending" && incoming && h("div", { style: { display: "flex", gap: 10 } },
+      // গ্রহণ করতে যাচাইকৃত ইমেইল লাগে (Firestore rules) — যাচাই না থাকলে বোতামের বদলে যাচাইয়ের উপায় দেখায়
+      state === "pending" && incoming && !ctx.emailVerified && h(VerifyEmailCard, { ctx }),
+      state === "pending" && incoming && ctx.emailVerified && h("div", { style: { display: "flex", gap: 10 } },
         h("button", { style: S.btn, disabled: busy, onClick: () => act(() => window.FB.acceptInvitation(inv), "পরিবারে যোগ দিয়েছেন 🎉", () => ctx.afterAccept(inv.familyId)) }, busy ? "অপেক্ষা করুন…" : "গ্রহণ করুন"),
         h("button", { style: S.btn2, disabled: busy, onClick: () => act(() => window.FB.rejectInvitation(inv.id), "Invitation বাতিল করা হয়েছে", () => ctx.loadTop()) }, "প্রত্যাখ্যান")),
       state === "pending" && !incoming && h("button", { style: S.danger, disabled: busy, onClick: () => act(() => window.FB.cancelInvitation(inv.id), "Invitation বাতিল হয়েছে", () => ctx.reloadInvites()) }, "Invitation বাতিল করুন"));
@@ -996,13 +1013,19 @@
     const { fam, vis, uid, family } = ctx;
     const N = useNumbers(ctx);
     const [sent, setSent] = useState({ loading: false, rows: [], error: "" });
-    const loadSent = useCallback(async () => {
-      if (!vis.manage) return;
-      setSent((s) => Object.assign({}, s, { loading: true }));
-      try { setSent({ loading: false, rows: await window.FB.familySentInvitations(ctx.familyId), error: "" }); }
-      catch (e) { setSent({ loading: false, rows: [], error: friendlyError(e) }); }
-    }, [ctx.familyId, vis.manage, ctx.inviteTick]);
-    useEffect(() => { loadSent(); }, [loadSent]);
+    // লাইভ তালিকা: পাঠানোর সাথে সাথে এবং গৃহীত/প্রত্যাখ্যাত হলে নিজে থেকেই বদলায়
+    const [sentTick, setSentTick] = useState(0);
+    const loadSent = useCallback(() => setSentTick((n) => n + 1), []);
+    useEffect(() => {
+      if (!vis.manage || !ctx.familyId) return undefined;
+      setSent((s) => Object.assign({}, s, { loading: true, error: "" }));
+      const apply = (rows) => setSent({ loading: false, rows, error: "" });
+      const fail = (e) => setSent({ loading: false, rows: [], error: friendlyError(e) });
+      if (window.FB.subscribeSentInvitations) return window.FB.subscribeSentInvitations(ctx.familyId, apply, fail);
+      let dead = false;
+      window.FB.familySentInvitations(ctx.familyId).then((r) => { if (!dead) apply(r); }, (e) => { if (!dead) fail(e); });
+      return () => { dead = true; };
+    }, [ctx.familyId, vis.manage, ctx.inviteTick, sentTick]);
     ctx.reloadInvites = loadSent;
     const shown = sent.rows.filter((i) => Core.inviteState(i) !== "accepted").slice(0, 8);
 
@@ -1605,10 +1628,16 @@
     const backRow = h("button", { onClick: () => { setStack([]); setView("bazar"); }, style: { background: "none", border: "none", color: "var(--hk-gold)", fontWeight: 600, fontSize: 14, minHeight: 44, padding: 0, fontFamily: F } }, "‹ ফ্যামিলি");
     const gate = (node) => (D.fam.loading && !D.myMember ? h(Loading) : D.fam.error ? h(ErrorBox, { msg: D.fam.error, onRetry: D.reload }) : !D.myMember ? h(Loading) : node);
     const listsBody = !FS ? h("div", { style: S.muted }, "বাজার তালিকা লোড হয়নি — পেজটি রিফ্রেশ করে আবার চেষ্টা করুন।") : gate(h(FS.Home, { ctx }));
+    // 📩 নতুন Invitation সবসময় ফ্যামিলির মূল পাতার মাথায় — আগে নিজের পরিবার থাকলে এটা শুধু ছোট 🔁 বোতামের ভেতরে লুকানো থাকত
+    const inviteBanner = D.top.incoming.length || D.top.inviteError ? h("div", { style: { marginBottom: 12 } },
+      h(IncomingCards, { ctx }),
+      !ctx.emailVerified && D.top.incoming.length > 0 && h(VerifyEmailCard, { ctx }),
+      D.top.inviteError && !D.top.incoming.length && h(InviteDiag, { ctx })) : null;
+    const bodyWithInvites = h(R_Fragment, null, inviteBanner, body);
     const content = view === "personal" ? personalBody
       : view === "lists" ? h(R_Fragment, null, backRow, listsBody)
       : view === "planning" ? planningBody
-      : embedded ? h(R_Fragment, null, tabBar, body) : body;
+      : embedded ? h(R_Fragment, null, tabBar, bodyWithInvites) : bodyWithInvites;
     const frame = embedded
       ? wrap(h("div", null, header(famTitle, nameSub, switcher), content))
       : wrap(h(R_Fragment, null, header(famTitle, nameSub, switcher), scroller(content), view === "bazar" ? tabBar : null));
@@ -1625,10 +1654,15 @@
     useEffect(() => {
       if (!uid) { setInvites([]); return undefined; }
       let dead = false;
-      const go = () => { if (window.FB && window.FB.myIncomingInvitations) window.FB.myIncomingInvitations().then((r) => { if (!dead) setInvites(r); }).catch(() => {}); };
+      let off = null;
+      // লাইভ লিসেনার: নতুন Invitation এলে ☰ মেনুর ব্যাজ সাথে সাথে বদলায়
+      const go = () => {
+        if (dead || off || !window.FB || !window.FB.subscribeIncomingInvitations) return;
+        off = window.FB.subscribeIncomingInvitations((r) => { if (!dead) setInvites(r); }, () => {});
+      };
       go();
       window.addEventListener("fb-ready", go);
-      return () => { dead = true; window.removeEventListener("fb-ready", go); };
+      return () => { dead = true; window.removeEventListener("fb-ready", go); if (off) off(); };
     }, [uid, tick]);
     return { invites, count: invites.length, refresh: () => setTick((n) => n + 1) };
   }
