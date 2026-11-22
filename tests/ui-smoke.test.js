@@ -131,6 +131,8 @@ function fakeFB(me) {
     myIncomingInvitations: async () => [],
     familyMembers: async () => members,
     subscribeFamilyMembers: (fid, cb) => { memberSubs.push(cb); cb(members.slice()); return () => { memberSubs.splice(memberSubs.indexOf(cb), 1); }; },
+    setMemberAlias: async (fid, memberUid, alias) => { calls.push(["setMemberAlias", fid, memberUid, alias]); },
+    subscribeMemberAliases: (fid, cb) => { cb({}); return () => {}; },
     updateFamilyMember: async (fid, memberUid, patch) => {
       calls.push(["updateFamilyMember", fid, memberUid, patch]);
       const i = members.findIndex((m) => m.uid === memberUid);
@@ -363,7 +365,7 @@ async function boot(userUid, extra) {
   await clickTab("পরিবার"); await click("সদস্যকে Invite"); has("Gmail"); ok("invite sheet");
   await back();
   await click("আব্বু"); await tick(); has("অনুমতি"); ok("member sheet + permissions");
-  has("প্রোফাইল তথ্য সম্পাদনা"); ok("point 5: family owner sees a section to edit another member's info");
+  has("ব্যক্তিগত ডাকনাম"); has("মোবাইল নাম্বার (শুধু আপনি, মালিক হিসেবে)"); ok("point 5: owner sees private alias + phone sections for another member");
   { const nameInp = find(tree, (x) => x.host === "input" && x.props.maxLength === 40)[0];
     const phoneInp = find(tree, (x) => x.host === "input" && x.props.type === "tel")[0];
     assert(nameInp && phoneInp, "owner-info name/phone inputs not found");
@@ -371,11 +373,17 @@ async function boot(userUid, extra) {
     phoneInp.props.onChange({ target: { value: "01888888888" } });
     await tick();
   }
+  await click("ডাকনাম সংরক্ষণ"); await tick(6);
+  { const al = win.FB.calls.find((c) => c[0] === "setMemberAlias" && c[2] === "u2");
+    assert(al && al[3] === "আব্বু (সংশোধিত)", "private alias was not saved via setMemberAlias");
+    ok("point 5: owner/admin sets a private alias (real name untouched)"); }
+  await tick(12); hasNot("সদস্যের প্রোফাইল"); await click("আব্বু-জান"); await tick(4); has("সদস্যের প্রোফাইল");
+  { const phoneInp2 = find(tree, (x) => x.host === "input" && x.props.type === "tel")[0]; phoneInp2.props.onChange({ target: { value: "01888888888" } }); await tick(); }
   await click("তথ্য সংরক্ষণ"); await tick(6);
   const infoCall = win.FB.calls.find((c) => c[0] === "updateFamilyMember" && c[2] === "u2" && "phone" in c[3]);
-  assert(infoCall, "owner editing another member's name/phone did not call updateFamilyMember");
-  assert.strictEqual(infoCall[3].name, "আব্বু (সংশোধিত)"); assert.strictEqual(infoCall[3].phone, "01888888888");
-  ok("point 5: owner can change another member's name + phone number");
+  assert(infoCall, "no updateFamilyMember phone call; calls=" + JSON.stringify(win.FB.calls.slice(-4)) + text(tree).slice(0,400));
+  assert.strictEqual(infoCall[3].phone, "01888888888"); assert(!("name" in infoCall[3]), "real name must not be overwritten by the owner");
+  ok("point 5: owner can change another member's phone number (real name untouched)");
   await click("সেটিংস"); has("পরিবারের সেটিংস"); ok("family settings sheet");
   await back();
   await clickTab("হোম"); await click("বাজার যোগ করুন"); has("নতুন বাজার যোগ করুন"); ok("add-purchase sheet"); await back();
