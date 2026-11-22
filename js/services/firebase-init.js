@@ -328,6 +328,22 @@ window.FB = {
     await updateDoc(doc(db, "families", familyId, "members", memberUid), { ...allowed, updatedAt: Date.now() });
   },
 
+  // 🔒 মালিক/এডমিনের ব্যক্তিগত ডাকনাম: families/{f}/memberAliases/{uid} — rules-এ শুধু মালিক ও এডমিন পড়তে/লিখতে পারেন।
+  // সদস্যের নিজের নাম (members/{uid}.name) অপরিবর্তিত থাকে, তাই বাকি সবাই সেটাই দেখেন।
+  subscribeMemberAliases(familyId, cb) {
+    return onSnapshot(collection(db, "families", familyId, "memberAliases"), (snap) => {
+      const map = {};
+      snap.docs.forEach((d) => { const a = d.data() && d.data().alias; if (a) map[d.id] = a; });
+      cb(map);
+    }, () => cb({}));
+  },
+  async setMemberAlias(familyId, memberUid, alias) {
+    const ref = doc(db, "families", familyId, "memberAliases", memberUid);
+    const a = String(alias || "").replace(/\s+/g, " ").trim().slice(0, 60);
+    if (!a) { await deleteDoc(ref); return; }
+    await setDoc(ref, { alias: a, setBy: auth.currentUser.uid, updatedAt: Date.now() });
+  },
+
   // আমার নাম বদলালে আমি যে সব পরিবারে আছি সেখানকার সদস্য-তথ্যেও একই নতুন নাম যায় (সবাই লাইভ দেখে)।
   // নাম ছাড়া আর কিছু ছোঁয়া হয় না। ব্যর্থ হলেও মূল কাজ আটকায় না (best-effort)।
   async syncMyNameToFamilies(name) {
