@@ -238,6 +238,18 @@ service cloud.firestore {
       );
     }
 
+    // 🔒 মালিক/এডমিনের ব্যক্তিগত ডাকনাম — অন্য কোনো সদস্য পড়তেও পারে না
+    match /families/{familyId}/memberAliases/{memberUid} {
+      allow read: if isOwnerOrAdmin(familyId);
+      allow create, update: if isOwnerOrAdmin(familyId) &&
+        exists(/databases/$(database)/documents/families/$(familyId)/members/$(memberUid)) &&
+        request.resource.data.keys().hasOnly(["alias", "setBy", "updatedAt"]) &&
+        request.resource.data.alias is string &&
+        request.resource.data.alias.size() > 0 && request.resource.data.alias.size() <= 60 &&
+        request.resource.data.setBy == request.auth.uid;
+      allow delete: if isOwnerOrAdmin(familyId);
+    }
+
     match /invitations/{inviteId} {
       // Invitation পড়া: যে ইমেইলে পাঠানো, সেই ইমেইলের অ্যাকাউন্ট দেখতে পাবে — ইমেইল যাচাই থাকুক বা না থাকুক।
       // (আগে এখানেও email_verified লাগত, ফলে ইমেইল/পাসওয়ার্ডে লগইন করা কেউ Invitation-ই দেখতেন না এবং
