@@ -394,12 +394,26 @@
     // Firestore — their history is kept — but their money must NOT count in
     // the family's totals any more, so every figure is restricted to the
     // people who are members right now.
+    // 🔒 মালিক/এডমিনের দেওয়া ব্যক্তিগত ডাকনাম — শুধু মালিক ও এডমিন দেখেন (Firestore rules-এও আটকানো);
+    // বাকি সবাই সদস্যের নিজের দেওয়া নামই দেখেন। myMember/me সবসময় আসল নামেই থাকে।
+    const [aliases, setAliases] = useState({});
+    const iAmAdmin = Core.isOwnerOrAdmin(myMember);
+    useEffect(() => {
+      setAliases({});
+      if (!iAmAdmin || !activeId || !window.FB || !window.FB.subscribeMemberAliases) return undefined;
+      return window.FB.subscribeMemberAliases(activeId, (map) => setAliases(map || {}));
+    }, [activeId, iAmAdmin]);
+    const famNamed = useMemo(() => {
+      if (!iAmAdmin || !Object.keys(aliases).length) return fam;
+      return Object.assign({}, fam, { members: fam.members.map((m) => (aliases[m.uid] ? Object.assign({}, m, { name: aliases[m.uid], realName: m.name }) : m)) });
+    }, [fam, aliases, iAmAdmin]);
     const famOut = useMemo(() => {
+      const fam = famNamed;
       const ids = new Set(fam.members.filter((m) => Core.isActive(m)).map((m) => m.uid));
       if (!ids.size) return fam;
       const keep = (arr) => (arr || []).filter((d) => ids.has(d.memberId));
       return Object.assign({}, fam, { stats: { monthly: keep(fam.stats.monthly), cats: keep(fam.stats.cats), other: keep(fam.stats.other) } });
-    }, [fam]);
+    }, [famNamed]);
     return { top, family, activeId, setActive, fam: famOut, myMember, vis, loadTop, reload: () => loadStatic(activeId) };
   }
 
@@ -626,7 +640,6 @@
     const anyMember = rows.some((r) => (r.total || 0) > 0);
 
     return h("div", null,
-      h(IncomingCards, { ctx }),
       h(BudgetBanner, { budget: N.budget, scopeAll: N.scopeAll, onOpen: () => ctx.goMore("budget") }),
       h("div", { style: S.hero },
         h("div", { style: { fontSize: 13, opacity: 0.85 } }, `এই মাসে ${scope} বাজার খরচ`),
@@ -1093,10 +1106,12 @@
     const self = memberUid === uid;
     const canEdit = m && Core.canEditMember(ctx.me, m);
     const ownerEditsInfo = m && !self && Core.isOwner(ctx.me);
+    const adminSetsAlias = m && !self && Core.isOwnerOrAdmin(ctx.me);
     const [role, setRole] = useState(m ? m.role : "member");
     const [relation, setRelation] = useState(m ? (m.relation === "self" ? "" : m.relation) : "");
     const [perms, setPerms] = useState(m ? Core.normalizePermissions(m.permissions) : {});
     const [name, setName] = useState(m ? m.name : "");
+    const [alias, setAlias] = useState(m && m.realName ? m.name : "");
     const [phone, setPhone] = useState(m ? m.phone || "" : "");
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState("");
@@ -1108,16 +1123,16 @@
     const count = show ? N.docs.filter((d) => d.memberId === m.uid && d.month === N.cm).reduce((s, d) => s + (d.count || 0), 0) : null;
     const cats = (vis.categories || self) ? Core.categoryRows(fam.stats.cats.filter((d) => d.memberId === m.uid), N.cm, N.pm) : null;
 
-    const run = async (fn, msg) => { if (busy) return; setBusy(true); setErr(""); try { await fn(); ctx.toast(msg); await ctx.reload(); close(); } catch (e) { setErr(friendlyError(e)); setBusy(false); } };
+    const run = async (fn, msg) => { if (busy) return; setBusy(true); setErr(""); try { await fn(); ctx.toast(msg); await ctx.reload(); close(); setBusy(false); } catch (e) { setErr(friendlyError(e)); setBusy(false); } };
     const save = () => {
       if (!relation.trim() && !self) { setErr("সম্পর্ক লিখুন"); return; }
       run(() => window.FB.updateFamilyMember(ctx.familyId, m.uid, { role, permissions: Core.normalizePermissions(perms), relation: relation.trim() }), "সংরক্ষিত হয়েছে");
     };
     const saveInfo = () => {
-      if (!name.trim()) { setErr("নাম লিখুন"); return; }
       if (phone.trim() && !Core.isValidPhone(phone)) { setErr("মোবাইল নাম্বার সঠিক নয় (যেমন: 01712345678)"); return; }
-      run(() => window.FB.updateFamilyMember(ctx.familyId, m.uid, { name: name.trim(), phone: phone.trim() }), "তথ্য সংরক্ষিত হয়েছে");
+      run(() => window.FB.updateFamilyMember(ctx.familyId, m.uid, { phone: phone.trim() }), "তথ্য সংরক্ষিত হয়েছে");
     };
+    const saveAlias = () => run(() => window.FB.setMemberAlias(ctx.familyId, m.uid, alias), alias.trim() ? "ডাকনাম সংরক্ষিত হয়েছে (শুধু মালিক/এডমিন দেখবেন)" : "ডাকনাম সরানো হয়েছে");
     const changeRole = (r) => {
       setRole(r);
       const preset = Core.permissionPreset(r), next = {};
@@ -1142,12 +1157,17 @@
         h("label", { style: S.label }, "আমার নাম"), h("input", { style: S.input, value: name, maxLength: 40, onChange: (e) => setName(e.target.value) }),
         h("label", { style: S.label }, "মোবাইল নাম্বার (ঐচ্ছিক)"), h("input", { style: S.input, type: "tel", placeholder: "০১XXXXXXXXX", value: phone, maxLength: 20, onChange: (e) => setPhone(e.target.value) }),
         h("button", { style: S.btn2, disabled: busy || !name.trim(), onClick: () => run(() => window.FB.updateFamilyMember(ctx.familyId, uid, { name: name.trim(), phone: phone.trim() }), "সংরক্ষণ হয়েছে") }, "সংরক্ষণ")),
-      ownerEditsInfo && h("div", null,
-        h("div", { style: S.h2 }, "প্রোফাইল তথ্য সম্পাদনা (শুধু আপনি, মালিক হিসেবে)"),
+      adminSetsAlias && h("div", null,
+        h("div", { style: S.h2 }, "🔒 ব্যক্তিগত ডাকনাম (শুধু মালিক ও এডমিন দেখবেন)"),
         h("div", { style: S.card },
-          h("label", { style: S.label }, "নাম"), h("input", { style: S.input, value: name, maxLength: 40, onChange: (e) => setName(e.target.value) }),
+          h("div", { style: Object.assign({}, S.muted, { marginBottom: 6 }) }, `আসল নাম: ${m.realName || m.name} — বাকি সদস্যরা এই নামই দেখবেন। আপনি যে নাম দেবেন সেটা শুধু মালিক ও এডমিনের স্ক্রিনে দেখাবে।`),
+          h("input", { style: S.input, value: alias, maxLength: 40, placeholder: m.realName || m.name, onChange: (e) => setAlias(e.target.value) }),
+          h("button", { style: S.btn2, disabled: busy, onClick: saveAlias }, alias.trim() ? "ডাকনাম সংরক্ষণ" : "ডাকনাম সরান"))),
+      ownerEditsInfo && h("div", null,
+        h("div", { style: S.h2 }, "মোবাইল নাম্বার (শুধু আপনি, মালিক হিসেবে)"),
+        h("div", { style: S.card },
           h("label", { style: S.label }, "মোবাইল নাম্বার (ঐচ্ছিক)"), h("input", { style: S.input, type: "tel", placeholder: "০১XXXXXXXXX", value: phone, maxLength: 20, onChange: (e) => setPhone(e.target.value) }),
-          h("button", { style: S.btn2, disabled: busy || !name.trim(), onClick: saveInfo }, "তথ্য সংরক্ষণ"))),
+          h("button", { style: S.btn2, disabled: busy, onClick: saveInfo }, "তথ্য সংরক্ষণ"))),
       canEdit && h("div", null,
         h("div", { style: S.h2 }, "সম্পর্ক ও ভূমিকা"),
         h("div", { style: S.card },
