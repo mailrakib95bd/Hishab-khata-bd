@@ -2411,7 +2411,7 @@ function App() {
                 tab === "reports" && React.createElement(Reports, { transactions: ledger, categoryBudgets: categoryBudgets, budget: budget, onSearch: (from, to) => { setSearchSeed({ dateFrom: from, dateTo: to, ts: Date.now() }); setTab("search"); } }),
                 tab === "search" && (React.createElement(SearchView, { transactions: ledger, accounts: accounts, onOpenTx: openLedgerEntry, seed: searchSeed, familyMembers: familyMembers, userAccounts: userAccounts, debts: debts }))),
             (tab === "dashboard" || tab === "timeline" || tab === "debts") && (React.createElement("button", { style: styles.fab, onClick: () => (tab === "debts" ? setShowAddDebt(true) : setShowAdd(true)), "aria-label": tab === "debts" ? "নতুন দেনা-পাওনা যোগ করুন" : "নতুন লেনদেন যোগ করুন" }, "+")),
-            React.createElement(BottomNav, { tab: tab, setTab: setTab }),
+            React.createElement(BottomNav, { tab: tab, setTab: setTab, badges: { family: famAlerts.count || 0, planning: famAlerts.planCount || 0 } }),
             showAdd && (React.createElement(TransactionForm, { presetType: quickAddType, onClose: () => {
                     setShowAdd(false);
                     setQuickAddType(null);
@@ -3352,7 +3352,7 @@ function EmptyState({ text }) {
         React.createElement("div", { style: styles.emptyIcon }, "\uD83E\uDEB6"),
         React.createElement("div", null, text)));
 }
-function BottomNav({ tab, setTab }) {
+function BottomNav({ tab, setTab, badges }) {
     const items = [
         { key: "dashboard", label: "হোম", icon: "home" },
         { key: "timeline", label: "টাইমলাইন", icon: "timeline" },
@@ -3363,7 +3363,10 @@ function BottomNav({ tab, setTab }) {
         { key: "search", label: "খুঁজুন", icon: "search" },
     ];
     return (React.createElement("nav", { style: styles.bottomNav }, items.map((it) => (React.createElement("button", { key: it.key, onClick: () => setTab(it.key), style: Object.assign(Object.assign({}, styles.navBtn), { color: tab === it.key ? "var(--hk-gold)" : "#8A9296" }) },
-        React.createElement(Icon, { name: it.icon, size: 19, strokeWidth: tab === it.key ? 2.1 : 1.8 }),
+        // ছোট্ট সংখ্যার ব্যাজ (ইংরেজি অঙ্ক) — আইকনের ওপরে বসে, লেআউট বা লেবেলের জায়গা নড়ে না
+        React.createElement("span", { style: { position: "relative", display: "inline-block", lineHeight: 0 } },
+            React.createElement(Icon, { name: it.icon, size: 19, strokeWidth: tab === it.key ? 2.1 : 1.8 }),
+            badges && badges[it.key] > 0 && React.createElement("span", { "aria-label": badges[it.key] + " new", style: { position: "absolute", top: -6, right: -10, minWidth: 16, height: 16, padding: "0 4px", boxSizing: "border-box", borderRadius: 8, background: "#C0392B", color: "#fff", fontSize: 10, fontWeight: 700, lineHeight: "16px", textAlign: "center", fontFamily: "system-ui, -apple-system, sans-serif", border: "1.5px solid var(--hk-card, #fff)" } }, badges[it.key] > 99 ? "99+" : String(badges[it.key]))),
         React.createElement("div", { style: { fontSize: 11, marginTop: 2 } }, it.label))))));
 }
 // একটি admin special-day রেকর্ডের (fixed বা recurring:"hijri") "কার্যকর
