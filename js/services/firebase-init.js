@@ -425,6 +425,33 @@ window.FB = {
     start();
     return () => { dead = true; if (off) off(); };
   },
+  // 🔔 নিচের "প্লানিং" ট্যাবের সংখ্যা: আমার যে পরিবারগুলোতে অন্য কেউ প্লান সাবমিট করেছেন (অনুমোদনের অপেক্ষায়)
+  // এবং আমি সেই প্লানের অংশগ্রহণকারী, অথবা আমি মালিক/এডমিন — তাদের মোট সংখ্যা। লাইভ; অনুমোদন/বাতিল হলেই কমে যায়।
+  subscribePlanAlerts(cb) {
+    const u = auth.currentUser;
+    if (!u) { cb(0); return () => {}; }
+    const offs = [];
+    let dead = false;
+    const per = {};
+    const emit = () => { if (!dead) cb(Object.keys(per).reduce((n, k) => n + (per[k] || 0), 0)); };
+    getDocs(query(collection(db, "families"), where("memberUids", "array-contains", u.uid))).then((snap) => {
+      if (dead) return;
+      snap.docs.slice(0, 8).forEach((fd) => {
+        const fid = fd.id;
+        let plans = [], role = "";
+        const calc = () => {
+          const admin = role === "owner" || role === "admin";
+          per[fid] = plans.filter((p) => p.status === "pending_approval" && p.createdBy !== u.uid &&
+            (admin || p.participantMode === "all" || (p.participantUids || []).includes(u.uid))).length;
+          emit();
+        };
+        offs.push(onSnapshot(doc(db, "families", fid, "members", u.uid), (m) => { role = m.exists() ? (m.data().role || "") : ""; calc(); }, () => {}));
+        offs.push(onSnapshot(collection(db, "families", fid, "plans"), (ps) => { plans = ps.docs.map((d) => d.data()); calc(); }, () => {}));
+      });
+      emit();
+    }).catch(() => {});
+    return () => { dead = true; offs.forEach((f) => { try { f(); } catch (e) { /* ignore */ } }); };
+  },
   // লাইভ: আমার পাঠানো Invitation (এক পরিবারের) — গৃহীত/প্রত্যাখ্যাত হলে সাথে সাথে বদলায়
   subscribeSentInvitations(familyId, cb, onErr) {
     return onSnapshot(query(collection(db, "invitations"), where("invitedBy", "==", auth.currentUser.uid), where("familyId", "==", familyId)),
