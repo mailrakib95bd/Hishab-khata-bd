@@ -1684,7 +1684,20 @@
       window.addEventListener("fb-ready", go);
       return () => { dead = true; window.removeEventListener("fb-ready", go); if (off) off(); };
     }, [uid, tick]);
-    return { invites, count: invites.length, refresh: () => setTick((n) => n + 1) };
+    // নিচের "প্লানিং" ট্যাবের সংখ্যা — অন্য কেউ প্লান সাবমিট করলে (অনুমোদনের অপেক্ষায়) সবার আগে এখানে ওঠে
+    const [planCount, setPlanCount] = useState(0);
+    useEffect(() => {
+      if (!uid) { setPlanCount(0); return undefined; }
+      let dead = false, off = null;
+      const go = () => {
+        if (dead || off || !window.FB || !window.FB.subscribePlanAlerts) return;
+        off = window.FB.subscribePlanAlerts((n) => { if (!dead) setPlanCount(n); });
+      };
+      go();
+      window.addEventListener("fb-ready", go);
+      return () => { dead = true; window.removeEventListener("fb-ready", go); if (off) off(); };
+    }, [uid]);
+    return { invites, count: invites.length, planCount, refresh: () => setTick((n) => n + 1) };
   }
 
   // building blocks the separate Family Planning file (family-planning.js) reuses
