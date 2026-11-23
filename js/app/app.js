@@ -1042,6 +1042,7 @@ function App() {
     // environment at all. Read once on mount; updated after each explicit
     // request (see requestNotificationPermission below)
     const [notificationPermission, setNotificationPermission] = useState(() => (typeof Notification !== "undefined" ? Notification.permission : "unsupported"));
+    const [notificationRefreshKey, setNotificationRefreshKey] = useState(0);
     const requestNotificationPermission = useCallback(async () => {
         if (typeof Notification === "undefined") {
             setNotificationPermission("unsupported");
@@ -1056,6 +1057,12 @@ function App() {
             // the Settings button below always calls this from a click, so
             // this catch is just a safety net
         }
+    }, []);
+    const requestLocalNotificationPermission = useCallback(async () => {
+        if (!window.HKNotifications) return { supported: false, permission: "unsupported" };
+        const result = await window.HKNotifications.requestPermission();
+        if (result.permission === "granted") setNotificationRefreshKey((value) => value + 1);
+        return result;
     }, []);
     const persistDevice = useCallback((overrides) => persist(DEVICE_KEY, Object.assign({ pin, theme, autoSync }, overrides)), [pin, theme, autoSync, persist]);
     const saveTheme = (val) => {
@@ -1422,6 +1429,12 @@ function App() {
     const [notices, setNotices] = useState([]);
     const [dailyMessages, setDailyMessages] = useState([]);
     const [adminSpecialDaysCloud, setAdminSpecialDaysCloud] = useState([]);
+    // Schedule personal reminders plus fixed/Hijri calendar special days.
+    useEffect(() => {
+        if (!loaded || !window.HKNotifications) return;
+        window.HKNotifications.sync({ tasks, debts, taxes, specialDays, transactions, budget, adminSpecialDays: adminSpecialDaysCloud, categoryBudgets, expenseCats })
+            .catch((error) => console.warn("Local notification sync failed:", error));
+    }, [loaded, tasks, debts, taxes, specialDays, transactions, budget, adminSpecialDaysCloud, categoryBudgets, expenseCats, notificationRefreshKey]);
     const [adminTasksCloud, setAdminTasksCloud] = useState([]);
     const [faqCloud, setFaqCloud] = useState([]);
     const [adminContentLoading, setAdminContentLoading] = useState(false);
@@ -2327,29 +2340,8 @@ function App() {
             });
             if (fired.length > 0) {
                 setActiveReminder(fired.join(" · "));
-                try {
-                    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-                        const title = `${dashboardTitle(profileName)} — রিমাইন্ডার`;
-                        const body = fired.join(", ");
-                        // prefer the service worker's showNotification — more
-                        // reliable for an installed PWA (survives the tab
-                        // losing focus) than the raw Notification constructor.
-                        // Still requires the page/SW to be alive, though —
-                        // true notify-while-fully-closed needs a push
-                        // server, which this client-only app doesn't have.
-                        if (navigator.serviceWorker && navigator.serviceWorker.ready) {
-                            navigator.serviceWorker.ready
-                                .then((reg) => reg.showNotification(title, { body, icon: "./icon-192.png" }))
-                                .catch(() => { new Notification(title, { body }); });
-                        }
-                        else {
-                            new Notification(title, { body });
-                        }
-                    }
-                }
-                catch (e) {
-                    // Notification API unavailable in this environment — the in-app banner still shows
-                }
+                // Native local notifications are scheduled by HKNotifications;
+                // keep this banner for the foreground in-app experience.
             }
             if (tasksChanged || debtsChanged || taxesChanged) {
                 setTasks(nextTasks);
@@ -2465,7 +2457,7 @@ function App() {
                 }, theme: theme, onSaveTheme: saveTheme, user: user, syncStatus: syncStatus, lastSyncedAt: lastSyncedAt, onShowLogin: () => {
                     setShowSettings(false);
                     setShowLogin(true);
-                }, onLogout: logOut, onManualSync: manualSync, onRestoreFromCloud: restoreFromCloud, onPreviewCloudVsLocal: previewCloudVsLocal, isOnline: isOnline, pendingChanges: pendingChanges, onExportJSON: exportBackupJSON, onImportJSON: importBackupJSON, profileName: profileName, onSaveProfileName: saveProfileName, autoSync: autoSync, onSaveAutoSync: saveAutoSync, notificationPermission: notificationPermission, onRequestNotificationPermission: requestNotificationPermission, auditLog: auditLog })),
+                }, onLogout: logOut, onManualSync: manualSync, onRestoreFromCloud: restoreFromCloud, onPreviewCloudVsLocal: previewCloudVsLocal, isOnline: isOnline, pendingChanges: pendingChanges, onExportJSON: exportBackupJSON, onImportJSON: importBackupJSON, profileName: profileName, onSaveProfileName: saveProfileName, autoSync: autoSync, onSaveAutoSync: saveAutoSync, notificationPermission: notificationPermission, onRequestNotificationPermission: requestNotificationPermission, onRequestLocalNotificationPermission: requestLocalNotificationPermission, auditLog: auditLog })),
             showLogin && (React.createElement(LoginScreen, { onClose: () => setShowLogin(false), onSignedIn: () => setShowLogin(false) })),
             showHamburgerMenu && (React.createElement(HamburgerMenu, {
                 onClose: () => setShowHamburgerMenu(false),

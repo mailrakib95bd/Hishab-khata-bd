@@ -148,7 +148,7 @@ function CategoryManager({ type, list, transactions, onAdd, onUpdate, onDelete, 
                     setNewLabel("");
                 } }, "+"))));
 }
-function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, onClose, onEditBudget, onClearAll, accounts, accountOpening, onSaveAccountOpening, onAddCategory, onUpdateCategory, onDeleteCategory, onMigrateCategory, pin, onSavePin, onImportTransactions, theme, onSaveTheme, user, syncStatus, lastSyncedAt, onShowLogin, onLogout, onManualSync, onRestoreFromCloud, onPreviewCloudVsLocal, isOnline, pendingChanges, onExportJSON, onImportJSON, profileName, onSaveProfileName, autoSync, onSaveAutoSync, notificationPermission, onRequestNotificationPermission, auditLog, }) {
+function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, onClose, onEditBudget, onClearAll, accounts, accountOpening, onSaveAccountOpening, onAddCategory, onUpdateCategory, onDeleteCategory, onMigrateCategory, pin, onSavePin, onImportTransactions, theme, onSaveTheme, user, syncStatus, lastSyncedAt, onShowLogin, onLogout, onManualSync, onRestoreFromCloud, onPreviewCloudVsLocal, isOnline, pendingChanges, onExportJSON, onImportJSON, profileName, onSaveProfileName, autoSync, onSaveAutoSync, notificationPermission, onRequestNotificationPermission, onRequestLocalNotificationPermission, auditLog, }) {
     const cats = useCategories();
     const [confirmClear, setConfirmClear] = useState(false);
     const [restorePreview, setRestorePreview] = useState(null); // null | "loading" | "error" | { local, cloud }
@@ -181,6 +181,39 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
     const [currentPinVerified, setCurrentPinVerified] = useState(false);
     const [currentPinInput, setCurrentPinInput] = useState("");
     const [currentPinErr, setCurrentPinErr] = useState("");
+    const [localNotifPrefs, setLocalNotifPrefs] = useState(() => window.HKNotifications ? window.HKNotifications.getPreferences() : { enabled: true, tasks: true, debts: true, taxes: true, specialDays: true, budget: true });
+    const [localNotifStatus, setLocalNotifStatus] = useState({ supported: false, permission: "checking", exact: "unknown" });
+    const [localNotifMessage, setLocalNotifMessage] = useState("");
+    useEffect(() => {
+        let live = true;
+        if (window.HKNotifications) window.HKNotifications.checkPermissions().then(v => { if (live) setLocalNotifStatus(v); });
+        return () => { live = false; };
+    }, []);
+    const updateLocalNotifPref = (key, value) => {
+        const next = Object.assign({}, localNotifPrefs, { [key]: value });
+        setLocalNotifPrefs(next);
+        if (window.HKNotifications) window.HKNotifications.setPreferences(next);
+    };
+    const enableLocalNotifications = async () => {
+        try {
+            const result = await onRequestLocalNotificationPermission();
+            const status = window.HKNotifications ? await window.HKNotifications.checkPermissions() : result;
+            setLocalNotifStatus(status || result);
+            setLocalNotifMessage(result && result.permission === "granted" ? "নোটিফিকেশন অনুমতি চালু হয়েছে।" : "নোটিফিকেশন অনুমতি পাওয়া যায়নি। ফোনের App Settings থেকে অনুমতি দিন।");
+        } catch (e) { setLocalNotifMessage(e.message || "অনুমতি নেওয়া যায়নি।"); }
+    };
+    const enableExactAlarms = async () => {
+        try {
+            const result = await window.HKNotifications.requestExactPermission();
+            const status = await window.HKNotifications.checkPermissions();
+            setLocalNotifStatus(status);
+            setLocalNotifMessage(result.exact === "granted" ? "নির্ভুল সময়ের অ্যালার্ম অনুমোদিত হয়েছে।" : "Exact Alarm অনুমতি সেটিংসে যাচাই করুন।");
+        } catch (e) { setLocalNotifMessage(e.message || "Exact Alarm সেটিংস খোলা যায়নি।"); }
+    };
+    const testLocalNotification = async () => {
+        try { await window.HKNotifications.sendTest(); setLocalNotifMessage("১.৫ সেকেন্ডের মধ্যে পরীক্ষামূলক নোটিফিকেশন আসবে।"); }
+        catch (e) { setLocalNotifMessage(e.message || "পরীক্ষামূলক নোটিফিকেশন পাঠানো যায়নি।"); }
+    };
     const [specialText, setSpecialText] = useState(() => Object.entries(specialDays || {})
         .sort((a, b) => (a[0] < b[0] ? -1 : 1))
         .flatMap(([d, labels]) => labels.map((label) => `${d}: ${label}`))
@@ -489,19 +522,26 @@ function SettingsModal({ transactions, budget, specialDays, onSaveSpecialDays, o
                 importMsg ? React.createElement("div", { style: styles.formHint }, importMsg) : null,
                 React.createElement("button", { style: styles.saveBtn, onClick: runImport }, "\u09AF\u09CB\u0997 \u0995\u09B0\u09C1\u09A8"),
                 React.createElement("div", { style: { height: 10 } })))),
-        React.createElement(SettingsSection, { title: "\uD83D\uDD14 \u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8" },
+        React.createElement(SettingsSection, { title: "🔔 নোটিফিকেশন" },
             React.createElement("div", { style: styles.settingsRow },
-                React.createElement("span", null, "\u09AC\u09CD\u09B0\u09BE\u0989\u099C\u09BE\u09B0 \u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8"),
-                React.createElement("span", { style: styles.settingsRowValue }, notificationPermission === "granted"
-                    ? "✅ অনুমোদিত"
-                    : notificationPermission === "denied"
-                        ? "❌ প্রত্যাখ্যাত"
-                        : notificationPermission === "unsupported"
-                            ? "সমর্থিত নয়"
-                            : "অনুমতি দেওয়া হয়নি")),
-            notificationPermission !== "granted" && notificationPermission !== "unsupported" && (React.createElement("button", { style: styles.saveBtn, onClick: onRequestNotificationPermission }, "\u09A8\u09CB\u099F\u09BF\u09AB\u09BF\u0995\u09C7\u09B6\u09A8 \u0985\u09A8\u09C1\u09AE\u09A4\u09BF \u09A6\u09BF\u09A8")),
-            notificationPermission === "denied" && (React.createElement("div", { style: styles.formHint }, "\u09AC\u09CD\u09B0\u09BE\u0989\u099C\u09BE\u09B0 সেটিংস থেকে অনুমতি চালু করতে হবে — অ্যাপ থেকে আর জিজ্ঞাসা করা যাবে না।")),
-            React.createElement("div", { style: Object.assign(Object.assign({}, styles.formHint), { marginTop: 6 }) }, "রিমাইন্ডার শুধু অ্যাপ খোলা বা ব্যাকগ্রাউন্ডে থাকা অবস্থায় কাজ করে — অ্যাপ পুরোপুরি বন্ধ থাকলে নোটিফিকেশন আসবে না (এর জন্য একটি পুশ সার্ভার প্রয়োজন, যা এই ভার্সনে নেই)।")),
+                React.createElement("span", null, "Android Local Notification"),
+                React.createElement("span", { style: styles.settingsRowValue }, !localNotifStatus.supported ? "APK-তে চালু হবে" : localNotifStatus.permission === "granted" ? "✅ অনুমোদিত" : localNotifStatus.permission === "denied" ? "❌ অনুমতি বন্ধ" : "অনুমতি প্রয়োজন")),
+            localNotifStatus.supported && localNotifStatus.permission !== "granted" && React.createElement("button", { style: styles.saveBtn, onClick: enableLocalNotifications }, "Android নোটিফিকেশন অনুমতি দিন"),
+            localNotifStatus.supported && React.createElement("div", { style: styles.settingsRow },
+                React.createElement("span", null, "Exact Alarm (Android 12+)"),
+                React.createElement("span", { style: styles.settingsRowValue }, localNotifStatus.exact === "granted" ? "✅ অনুমোদিত" : localNotifStatus.exact === "denied" ? "⚠️ অনুমতি নেই" : "সিস্টেম নির্ধারিত")),
+            localNotifStatus.supported && localNotifStatus.exact !== "granted" && React.createElement("button", { style: styles.settingsRow, onClick: enableExactAlarms }, React.createElement("span", null, "নির্ধারিত সময়ে অ্যালার্মের অনুমতি দিন"), React.createElement("span", { style: styles.settingsRowValue }, "সেটিংস খুলুন ›")),
+            React.createElement("div", { style: Object.assign(Object.assign({}, styles.settingsRow), { marginTop: 6 }) },
+                React.createElement("span", null, "সব নোটিফিকেশন"),
+                React.createElement("button", { style: styles.catManageBtn, onClick: () => updateLocalNotifPref("enabled", !localNotifPrefs.enabled) }, localNotifPrefs.enabled ? "চালু ✓" : "বন্ধ")),
+            [
+                ["tasks", "টাস্ক রিমাইন্ডার"], ["debts", "দেনা-পাওনা (আগের দিন ও due date)"],
+                ["taxes", "ট্যাক্স রিমাইন্ডার"], ["specialDays", "ব্যক্তিগত বিশেষ দিন"], ["budget", "বাজেট সতর্কতা (৭০%, ৯০%, ১০০%)"]
+            ].map(([key,label]) => React.createElement("button", { key, type: "button", style: Object.assign(Object.assign({}, styles.settingsRow), { width: "100%", textAlign: "left", opacity: localNotifPrefs.enabled ? 1 : 0.5 }), onClick: () => updateLocalNotifPref(key, !localNotifPrefs[key]), disabled: !localNotifPrefs.enabled },
+                React.createElement("span", null, label), React.createElement("span", { style: styles.settingsRowValue }, localNotifPrefs[key] ? "● চালু" : "○ বন্ধ"))),
+            React.createElement("button", { style: Object.assign(Object.assign({}, styles.saveBtn), { marginTop: 8 }), onClick: testLocalNotification, disabled: !localNotifStatus.supported || localNotifStatus.permission !== "granted" }, "পরীক্ষামূলক নোটিফিকেশন পাঠান"),
+            localNotifMessage ? React.createElement("div", { style: styles.formHint }, localNotifMessage) : null,
+            React.createElement("div", { style: Object.assign(Object.assign({}, styles.formHint), { marginTop: 6 }) }, "এই নোটিফিকেশন ফোনে আগেই Schedule হয়। তাই অ্যাপ বন্ধ থাকলেও Android সেগুলো দেখাতে পারে। Exact Alarm ও Battery Optimization-এর ফোনভেদে সীমাবদ্ধতা থাকতে পারে। Browser/PWA-তে অ্যাপ বন্ধ থাকলে এই Native সুবিধা প্রযোজ্য নয়।")),
         React.createElement(SettingsSection, { title: "\uD83D\uDCCB \u0995\u09BE\u09B0\u09CD\u09AF\u0995\u09B0\u09AE\u09C7\u09B0 \u0987\u09A4\u09BF\u09B9\u09BE\u09B8" },
             React.createElement("button", { style: styles.settingsRow, onClick: () => setShowAuditLog((v) => !v) },
                 React.createElement("span", null, "সাম্প্রতিক গুরুত্বপূর্ণ পরিবর্তন"),
