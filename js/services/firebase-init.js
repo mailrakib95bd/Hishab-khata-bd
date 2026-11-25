@@ -425,28 +425,39 @@ window.FB = {
     start();
     return () => { dead = true; if (off) off(); };
   },
-  // 🔔 নিচের "প্লানিং" ট্যাবের সংখ্যা: আমার যে পরিবারগুলোতে অন্য কেউ প্লান সাবমিট করেছেন (অনুমোদনের অপেক্ষায়)
-  // এবং আমি সেই প্লানের অংশগ্রহণকারী, অথবা আমি মালিক/এডমিন — তাদের মোট সংখ্যা। লাইভ; অনুমোদন/বাতিল হলেই কমে যায়।
-  subscribePlanAlerts(cb) {
+  // 🔔 নিচের ট্যাবের সংখ্যার উৎস — আমার সব পরিবার ধরে লাইভ:
+  //   plans: অন্য কেউ সাবমিট করেছেন, এখনো অনুমোদনের অপেক্ষায়, এবং আমি অংশগ্রহণকারী অথবা মালিক/এডমিন — আইডির তালিকা
+  //   lists: আমাকে বাজার করতে দেওয়া চলমান বাজার-তালিকার আইডির তালিকা
+  // "দেখা হয়েছে কি না" ক্লায়েন্টে (FBSeen) ঠিক হয়; এখানে শুধু কী কী আছে তা জানানো হয়।
+  subscribeFamilyAlerts(cb) {
     const u = auth.currentUser;
-    if (!u) { cb(0); return () => {}; }
+    if (!u) { cb({ plans: [], lists: [] }); return () => {}; }
     const offs = [];
     let dead = false;
     const per = {};
-    const emit = () => { if (!dead) cb(Object.keys(per).reduce((n, k) => n + (per[k] || 0), 0)); };
+    const emit = () => {
+      if (dead) return;
+      const out = { plans: [], lists: [] };
+      Object.keys(per).forEach((k) => { out.plans = out.plans.concat(per[k].plans); out.lists = out.lists.concat(per[k].lists); });
+      cb(out);
+    };
     getDocs(query(collection(db, "families"), where("memberUids", "array-contains", u.uid))).then((snap) => {
       if (dead) return;
       snap.docs.slice(0, 8).forEach((fd) => {
         const fid = fd.id;
-        let plans = [], role = "";
+        let plans = [], lists = [], role = "";
         const calc = () => {
           const admin = role === "owner" || role === "admin";
-          per[fid] = plans.filter((p) => p.status === "pending_approval" && p.createdBy !== u.uid &&
-            (admin || p.participantMode === "all" || (p.participantUids || []).includes(u.uid))).length;
+          per[fid] = {
+            plans: plans.filter((p) => p.status === "pending_approval" && p.createdBy !== u.uid &&
+              (admin || p.participantMode === "all" || (p.participantUids || []).includes(u.uid))).map((p) => p.id),
+            lists: lists.filter((l) => l.status === "in_progress" && l.assignedToUid === u.uid).map((l) => l.id),
+          };
           emit();
         };
         offs.push(onSnapshot(doc(db, "families", fid, "members", u.uid), (m) => { role = m.exists() ? (m.data().role || "") : ""; calc(); }, () => {}));
-        offs.push(onSnapshot(collection(db, "families", fid, "plans"), (ps) => { plans = ps.docs.map((d) => d.data()); calc(); }, () => {}));
+        offs.push(onSnapshot(collection(db, "families", fid, "plans"), (ps) => { plans = ps.docs.map((d) => Object.assign({}, d.data(), { id: d.id })); calc(); }, () => {}));
+        offs.push(onSnapshot(collection(db, "families", fid, "shoppingLists"), (ls) => { lists = ls.docs.map((d) => Object.assign({}, d.data(), { id: d.id })); calc(); }, () => {}));
       });
       emit();
     }).catch(() => {});
