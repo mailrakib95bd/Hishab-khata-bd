@@ -14,7 +14,7 @@
   const SH = window.FBShared;
   const C = window.FSCore;
   if (!SH || !C) { console.warn("family-shopping.js: needs family-shopping-core.js and family-bazar.js loaded first"); return; }
-  const { h, bn, today, F, SERIF, S, Sheet, Empty, HBar, friendlyError, Core, taka, unitText, qtyText, dateBn, CallButtons, walletShortMsg } = SH;
+  const { Seen, useSeenTick, NumBadge, NewTag, h, bn, today, F, SERIF, S, Sheet, Empty, HBar, friendlyError, Core, taka, unitText, qtyText, dateBn, CallButtons, walletShortMsg } = SH;
 
   /* ------------------------------ small pieces ------------------------------ */
   const TONE = { success: ["var(--hk-success)", "#fff"], danger: ["var(--hk-danger)", "#fff"], warn: ["#c77d0a", "#fff"], info: ["#2f6fb5", "#fff"], gold: ["var(--hk-gold)", "#1a1a1a"], muted: ["var(--hk-border)", "var(--hk-text)"] };
@@ -53,12 +53,19 @@
     const lists = ctx.fam.shopLists || [];
     const shown = useMemo(() => C.filterLists(lists, tab), [lists, tab]);
     const nActive = lists.filter((l) => l.status === "in_progress").length, nHist = lists.length - nActive;
+    useSeenTick();
     const mine = C.pendingForShopper(lists, ctx.uid);
+    const newForMe = lists.filter((l) => l.status === "in_progress" && l.assignedToUid === ctx.uid && !Seen.has(ctx.uid, "list", l.id)).length;
     const canCreate = C.canCreateList(ctx.me);
     return h("div", null,
       canCreate && h("button", { style: S.btn, onClick: () => ctx.openSheet({ type: "shop-create" }) }, "+ নতুন তালিকা তৈরি"),
       !canCreate && h("div", { style: Object.assign({}, S.card, S.muted) }, "আপনার শুধু দেখার অনুমতি আছে — নতুন তালিকা তৈরি করতে মালিক/এডমিনকে বলুন।"),
-      mine > 0 && h("div", { style: Object.assign({}, S.card, { marginTop: 12, borderColor: "var(--hk-gold)" }) }, h("b", null, `🛒 আপনাকে ${bn(mine)}টি তালিকা দিয়ে বাজার করতে বলা হয়েছে`)),
+      mine > 0 && h("div", { style: Object.assign({}, S.card, { marginTop: 12, borderColor: "var(--hk-gold)" }) },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, h("b", null, `🛒 আপনাকে ${bn(mine)}টি তালিকা দিয়ে বাজার করতে বলা হয়েছে`), NumBadge(newForMe)),
+        // কোন তালিকাটি পাঠানো হয়েছে তা এখানেই বোঝা যায়; চাপলেই "নতুন" চিহ্ন/সংখ্যা মুছে যায়
+        lists.filter((l) => l.status === "in_progress" && l.assignedToUid === ctx.uid).map((l) => h("button", { key: l.id, onClick: () => { Seen.mark(ctx.uid, "list", l.id); ctx.openSheet({ type: "shop-list", listId: l.id }); }, style: { display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", gap: 8, background: "none", border: "none", borderTop: "1px solid var(--hk-border-light)", padding: "9px 0", marginTop: 6, textAlign: "left", color: "var(--hk-text)", fontFamily: F, minHeight: 44 } },
+          h("span", null, h("div", { style: { fontWeight: 600 } }, "🧾 " + l.title, !Seen.has(ctx.uid, "list", l.id) && NewTag()), h("div", { style: S.muted }, `পাঠিয়েছেন: ${memberName(ctx, l.createdBy, l.createdByName)}`)),
+          h("span", { style: S.pill("var(--hk-gold)", "#1a1a1a") }, "দেখুন")))),
       h("div", { role: "tablist", style: { display: "flex", gap: 4, background: "var(--hk-card)", border: "1px solid var(--hk-border)", borderRadius: 14, padding: 4, margin: "12px 0" } },
         [["active", `বাজার তালিকা (${bn(nActive)})`], ["history", `সম্পন্ন তালিকা (${bn(nHist)})`]].map(([k, label]) => h("button", { key: k, role: "tab", "aria-selected": tab === k, onClick: () => setTab(k),
           style: { flex: 1, minHeight: 42, border: "none", borderRadius: 10, fontFamily: F, fontWeight: 700, fontSize: 13, background: tab === k ? "var(--hk-gold)" : "transparent", color: tab === k ? "#1a1a1a" : "var(--hk-text-muted)" } }, label))),
@@ -69,8 +76,9 @@
   function ListCard({ ctx, l }) {
     const st = l.stats || C.listStats([]);
     const pct = C.progressPct(st);
-    return h("button", { onClick: () => ctx.openSheet({ type: "shop-list", listId: l.id }), style: Object.assign({}, S.card, { display: "block", width: "100%", textAlign: "left", cursor: "pointer", fontFamily: F, color: "inherit" }) },
-      h("div", { style: S.row }, h("b", { style: { fontSize: 15.5 } }, "🧾 " + l.title), listChip(l)),
+    const fresh = l.status === "in_progress" && l.assignedToUid === ctx.uid && !Seen.has(ctx.uid, "list", l.id);
+    return h("button", { onClick: () => { Seen.mark(ctx.uid, "list", l.id); ctx.openSheet({ type: "shop-list", listId: l.id }); }, style: Object.assign({}, S.card, { display: "block", width: "100%", textAlign: "left", cursor: "pointer", fontFamily: F, color: "inherit" }) },
+      h("div", { style: S.row }, h("b", { style: { fontSize: 15.5 } }, "🧾 " + l.title, fresh && NewTag()), listChip(l)),
       h("div", { style: Object.assign({}, S.muted, { marginTop: 3 }) }, `${dateBn(l.shoppingDate)}${l.shoppingTime ? " · " + l.shoppingTime : ""}`),
       h("div", { style: S.muted }, `তৈরি করেছেন: ${memberName(ctx, l.createdBy, l.createdByName)} → বাজার: ${memberName(ctx, l.assignedToUid, l.assignedToName)}${l.assignedToUid === ctx.uid ? " (আপনি)" : ""}`),
       h("div", { style: { margin: "8px 0 4px" } }, h(HBar, { pct, color: "var(--hk-success)" })),
@@ -204,6 +212,7 @@
   function ListSheet({ ctx, listId, close }) {
     const list = findList(ctx, listId);
     const items = useShopItems(ctx, listId);
+    useEffect(() => { Seen.mark(ctx.uid, "list", listId); }, [listId]);
     const [filter, setFilter] = useState("all"); const [err, setErr] = useState([]); const [busy, setBusy] = useState(false);
     if (!list) return h(Sheet, { title: "বাজার তালিকা", onClose: close }, h(Empty, { icon: "🧾", title: "তালিকাটি পাওয়া যায়নি", text: "এটি মুছে ফেলা হয়ে থাকতে পারে।" }));
     const m = ctx.me, uid = ctx.uid;

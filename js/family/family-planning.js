@@ -12,7 +12,7 @@
   const { useState, useEffect, useMemo, useRef, useCallback } = React;
   const SH = window.FBShared;
   if (!SH) { console.warn("family-planning.js: family-bazar.js must load first"); return; }
-  const { Avatar, Empty, F, FPCore, HBar, R_Fragment, S, SERIF, Sheet, Toggle, bn, friendlyError, h, today } = SH;
+  const { Seen, useSeenTick, NumBadge, NewTag, Avatar, Empty, F, FPCore, HBar, R_Fragment, S, SERIF, Sheet, Toggle, bn, friendlyError, h, today } = SH;
 
   /* ======================================================================
    * FAMILY PLANNING — 18-screen goal-based family savings module.
@@ -41,13 +41,16 @@
     return h("div", { style: { width: size, height: size, borderRadius: "50%", background: FP_PALETTE[idx], display: "flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.48, flex: "none" } }, plan.icon);
   }
   // card used in Home's "সম্প্রতি পরিকল্পনা", All Plans, My Planning
-  function FPPlanCard({ plan, onOpen }) {
+  // কেউ সাবমিট করা, অনুমোদনের অপেক্ষার প্লান যা আমি এখনো খুলিনি (আমি অংশগ্রহণকারী বা মালিক/এডমিন)
+  const isNewPlan = (ctx, p) => p.status === "pending_approval" && p.createdBy !== ctx.uid && (ctx.vis.admin || FPCore.isParticipant(p, ctx.uid)) && !Seen.has(ctx.uid, "plan", p.id);
+  const openPlan = (ctx, p) => () => { Seen.mark(ctx.uid, "plan", p.id); ctx.openSheet({ type: "plan-detail", planId: p.id }); };
+  function FPPlanCard({ plan, onOpen, isNew }) {
     const pct = FPCore.progressPct(plan);
     return h("button", { onClick: onOpen, style: Object.assign({}, S.card, { display: "flex", width: "100%", alignItems: "center", gap: 12, textAlign: "left", color: "var(--hk-text)", fontFamily: F, border: "1px solid var(--hk-border)" }) },
       h(FPIcon, { plan }),
       h("div", { style: { flex: 1, minWidth: 0 } },
         h("div", { style: Object.assign({}, S.row, { marginBottom: 4 }) },
-          h("span", { style: { fontWeight: 700, fontSize: 14.5 } }, plan.title),
+          h("span", { style: { fontWeight: 700, fontSize: 14.5 } }, plan.title, isNew && NewTag()),
           h(FPStatusPill, { status: plan.status })),
         h(HBar, { pct }),
         h("div", { style: Object.assign({}, S.muted, { marginTop: 3, display: "flex", justifyContent: "space-between" }) },
@@ -74,6 +77,8 @@
     const totals = FPCore.dashboardTotals(plans);
     const recent = plans.slice(0, 4);
     const pendingApprovals = FPCore.pendingApprovalPlans(plans).length;
+    useSeenTick();
+    const newPlans = plans.filter((p) => isNewPlan(ctx, p)).length;
     return h(R_Fragment, null,
       h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 } },
         h(FPStatRow, { label: "মোট পরিকল্পনা", value: bn(totals.totalPlans) }),
@@ -85,11 +90,11 @@
         ctx.vis.admin && h("button", { style: Object.assign({}, S.btn2, { flex: 1, position: "relative" }), onClick: () => ctx.openSheet({ type: "plan-owner-center" }) },
           "🔔 অনুমোদন কেন্দ্র", pendingApprovals > 0 && h("span", { style: { marginLeft: 6 } }, h("span", { style: S.pill("var(--hk-gold)", "#1a1a1a") }, bn(pendingApprovals))))),
       h("div", { style: Object.assign({}, S.row, { marginBottom: 8 }) },
-        h("div", { style: S.h2 }, "সম্প্রতি পরিকল্পনা"),
+        h("div", { style: Object.assign({}, S.h2, { display: "flex", alignItems: "center", gap: 8 }) }, "সম্প্রতি পরিকল্পনা", NumBadge(newPlans)),
         plans.length > 4 && h("button", { onClick: () => ctx.openSheet({ type: "plan-list" }), style: { background: "none", border: "none", color: "var(--hk-gold)", fontFamily: F, fontSize: 13 } }, "সব দেখুন ›")),
       recent.length === 0
         ? h(Empty, { icon: "🏠", title: "এখনো কোনো পরিকল্পনা নেই", text: "পরিবারের কোনো লক্ষ্য বা স্বপ্নের জন্য প্রথম পরিকল্পনা তৈরি করুন।" })
-        : recent.map((p) => h(FPPlanCard, { key: p.id, plan: p, onOpen: () => ctx.openSheet({ type: "plan-detail", planId: p.id }) })));
+        : recent.map((p) => h(FPPlanCard, { key: p.id, plan: p, isNew: isNewPlan(ctx, p), onOpen: openPlan(ctx, p) })));
   }
 
   function FPHomeCreateBtn({ ctx }) {
@@ -115,12 +120,13 @@
       h("input", { style: S.input, placeholder: "পরিকল্পনা খুঁজুন…", value: q, onChange: (e) => setQ(e.target.value) }),
       shown.length === 0
         ? h(Empty, { icon: "🔎", title: "কিছু পাওয়া যায়নি", text: "এই বিভাগে কোনো পরিকল্পনা নেই।" })
-        : shown.map((p) => h(FPPlanCard, { key: p.id, plan: p, onOpen: () => ctx.openSheet({ type: "plan-detail", planId: p.id }) })));
+        : shown.map((p) => h(FPPlanCard, { key: p.id, plan: p, isNew: isNewPlan(ctx, p), onOpen: openPlan(ctx, p) })));
   }
 
   /* ---------------------------- 3. Plan Details ---------------------------- */
   function FPPlanDetailsSheet({ ctx, planId, close }) {
     const plan = (ctx.fam.plans || []).find((p) => p.id === planId);
+    useEffect(() => { Seen.mark(ctx.uid, "plan", planId); }, [planId]);
     const [busy, setBusy] = useState(false);
     if (!plan) return h(Sheet, { title: "পরিকল্পনা", onClose: close }, h(Empty, { icon: "🏠", title: "পরিকল্পনা পাওয়া যায়নি", text: "সম্ভবত এটি মুছে ফেলা হয়েছে।" }));
     const creator = ctx.fam.members.find((m) => m.uid === plan.createdBy);
@@ -432,7 +438,7 @@
         h("button", { style: S.chip(tabKey === "created"), onClick: () => setTabKey("created") }, `তৈরি করেছি (${bn(created.length)})`),
         h("button", { style: S.chip(tabKey === "participating"), onClick: () => setTabKey("participating") }, `অংশ নিচ্ছি (${bn(participating.length)})`)),
       shown.length === 0 ? h(Empty, { icon: "👤", title: "কিছু নেই", text: "" })
-        : shown.map((p) => h(FPPlanCard, { key: p.id, plan: p, onOpen: () => ctx.openSheet({ type: "plan-detail", planId: p.id }) })));
+        : shown.map((p) => h(FPPlanCard, { key: p.id, plan: p, isNew: isNewPlan(ctx, p), onOpen: openPlan(ctx, p) })));
   }
 
   /* ---------------------------- 11. Owner Approval Center ---------------------------- */
@@ -450,7 +456,7 @@
           : pendingPlans.map((p) => {
               const creator = ctx.fam.members.find((m) => m.uid === p.createdBy);
               return h("div", { key: p.id, style: S.card },
-                h("button", { onClick: () => ctx.openSheet({ type: "plan-approval", planId: p.id }), style: { display: "flex", width: "100%", alignItems: "center", gap: 10, background: "none", border: "none", textAlign: "left", fontFamily: F, color: "var(--hk-text)", marginBottom: 10 } },
+                h("button", { onClick: () => { Seen.mark(ctx.uid, "plan", p.id); ctx.openSheet({ type: "plan-approval", planId: p.id }); }, style: { display: "flex", width: "100%", alignItems: "center", gap: 10, background: "none", border: "none", textAlign: "left", fontFamily: F, color: "var(--hk-text)", marginBottom: 10 } },
                   h(Avatar, { m: creator, size: 34 }),
                   h("div", { style: { flex: 1 } }, h("div", { style: { fontWeight: 700 } }, (creator && creator.name) || "?"), h("div", { style: { fontFamily: SERIF } }, p.title), h("div", { style: S.muted }, `৳${bn(p.targetAmount)} | ${FPCore.PLAN_TYPE_MAP[p.type].label}`))),
                 h("div", { style: { display: "flex", gap: 8 } },

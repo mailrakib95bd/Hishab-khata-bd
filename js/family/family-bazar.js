@@ -246,6 +246,37 @@
     catch (e) { ctx.toast("ক্যাটাগরি তৈরি করা যায়নি"); return null; }
   };
 
+  /* ------------------------------------------------------------------ *
+   * "দেখা হয়েছে" — কোন Invitation / প্লান / বাজার-তালিকা এই ডিভাইসে খোলা হয়েছে
+   * সংখ্যার ব্যাজ শুধু না-দেখা আইটেম গোনে; আইটেমের ব্যানারে চাপলেই সেটা দেখা ধরা হয়।
+   * ------------------------------------------------------------------ */
+  const Seen = (function () {
+    const mem = {};
+    const key = (uid) => `hk-seen:${uid}`;
+    const read = (uid) => { try { return JSON.parse(localStorage.getItem(key(uid)) || "{}") || {}; } catch (e) { return {}; } };
+    return {
+      has(uid, kind, id) { return !!(uid && ((mem[uid] || {})[kind + ":" + id] || read(uid)[kind + ":" + id])); },
+      mark(uid, kind, id) {
+        if (!uid || !id || this.has(uid, kind, id)) return;
+        mem[uid] = Object.assign({}, mem[uid], { [kind + ":" + id]: 1 });
+        try {
+          const all = read(uid); all[kind + ":" + id] = 1;
+          const keys = Object.keys(all); if (keys.length > 600) keys.slice(0, keys.length - 600).forEach((k) => { delete all[k]; });
+          localStorage.setItem(key(uid), JSON.stringify(all));
+        } catch (e) { /* হয়তো স্টোরেজ বন্ধ — মেমরিতে থাকবে */ }
+        try { window.dispatchEvent(new Event("fb-seen")); } catch (e) { /* ignore */ }
+      },
+    };
+  })();
+  // সংখ্যা/ব্যাজ নিজে থেকে বদলাতে: কিছু "দেখা" হলেই রিরেন্ডার
+  function useSeenTick() {
+    const [, setN] = useState(0);
+    useEffect(() => { const f = () => setN((n) => n + 1); window.addEventListener("fb-seen", f); return () => window.removeEventListener("fb-seen", f); }, []);
+  }
+  // ছোট লাল সংখ্যার ব্যাজ (ইংরেজি অঙ্ক)
+  const NumBadge = (n, style) => (n > 0 ? h("span", { "aria-label": n + " new", style: Object.assign({ display: "inline-block", minWidth: 18, height: 18, padding: "0 5px", boxSizing: "border-box", borderRadius: 9, background: "#C0392B", color: "#fff", fontSize: 11, fontWeight: 700, lineHeight: "18px", textAlign: "center", fontFamily: "system-ui, -apple-system, sans-serif" }, style || {}) }, n > 99 ? "99+" : String(n)) : null);
+  const NewTag = () => h("span", { style: { background: "#C0392B", color: "#fff", fontSize: 10.5, fontWeight: 700, padding: "1px 7px", borderRadius: 9, marginLeft: 6, fontFamily: F } }, "নতুন");
+
   function useFamilyData(user) {
     const uid = user && user.uid;
     const [top, setTop] = useState({ loading: !!uid, error: "", families: [], incoming: [] });
@@ -426,6 +457,7 @@
   }
 
   function InvitationDetails({ ctx, inv, incoming, close }) {
+    useEffect(() => { if (incoming && inv) Seen.mark(ctx.uid, "inv", inv.id); }, [incoming, inv && inv.id]);
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState("");
     const state = Core.inviteState(inv);
@@ -457,13 +489,15 @@
   }
 
   function IncomingCards({ ctx }) {
+    useSeenTick();
     const list = ctx.incoming;
     if (!list || !list.length) return null;
+    const unseen = list.filter((inv) => !Seen.has(ctx.uid, "inv", inv.id)).length;
     return h("div", { style: Object.assign({}, S.card, { borderColor: "var(--hk-gold)" }) },
-      h("div", { style: { fontWeight: 700, marginBottom: 8 } }, `📩 নতুন Invitation (${bn(list.length)})`),
-      list.map((inv) => h("button", { key: inv.id, onClick: () => ctx.openSheet({ type: "invite-details", inv, incoming: true }), style: { display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", gap: 8, background: "none", border: "none", borderTop: "1px solid var(--hk-border-light)", padding: "10px 0", textAlign: "left", color: "var(--hk-text)", fontFamily: F, minHeight: 48 } },
-        h("span", null, h("div", { style: { fontWeight: 600 } }, inv.familyName), h("div", { style: S.muted }, `${inv.invitedByName || "একজন সদস্য"} • ${relLabel(inv.relation)}`)),
-        h("span", { style: S.pill("var(--hk-gold)", "#1a1a1a") }, "দেখুন"))));
+      h("div", { style: { fontWeight: 700, marginBottom: 8, display: "flex", alignItems: "center", gap: 8 } }, "📩 নতুন Invitation", NumBadge(unseen)),
+      list.map((inv) => { const fresh = !Seen.has(ctx.uid, "inv", inv.id); return h("button", { key: inv.id, onClick: () => { Seen.mark(ctx.uid, "inv", inv.id); ctx.openSheet({ type: "invite-details", inv, incoming: true }); }, style: { display: "flex", width: "100%", alignItems: "center", justifyContent: "space-between", gap: 8, background: "none", border: "none", borderTop: "1px solid var(--hk-border-light)", padding: "10px 0", textAlign: "left", color: "var(--hk-text)", fontFamily: F, minHeight: 48 } },
+        h("span", null, h("div", { style: { fontWeight: 600 } }, inv.familyName, fresh && NewTag()), h("div", { style: S.muted }, `${inv.invitedByName || "একজন সদস্য"} • ${relLabel(inv.relation)}`)),
+        h("span", { style: S.pill("var(--hk-gold)", "#1a1a1a") }, "দেখুন")); }));
   }
 
   /* ------------------------------------------------------------------ *
@@ -1582,10 +1616,12 @@
     const header = (title, sub, right) => h(R_Fragment, null, offlineBanner, h("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: embedded ? "4px 2px 10px" : "calc(10px + env(safe-area-inset-top)) 14px 10px", background: embedded ? "transparent" : "var(--hk-header-bg)", color: embedded ? "var(--hk-text)" : "var(--hk-text-on-dark)" } },
       h("div", { style: { flex: 1, minWidth: 0 } }, h("div", { style: { fontFamily: SERIF, fontSize: 18, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, title), sub && h("div", { style: { fontSize: 12, opacity: 0.8 } }, sub)), right));
     // 📦 = Family-র মূল প্রবেশপথ (ড্যাশবোর্ড) — শুধু আইকন, কোনো লেখা নেই, 🔎 সার্চ আইকনের ঠিক বাম পাশে।
-    const iconBtn = (key, label, active, onClick, icon) => h("button", { key, onClick, "aria-label": label, "aria-pressed": active, title: label, style: { background: active ? "var(--hk-gold)" : "none", border: "none", borderRadius: 10, color: active ? "#1a1a1a" : "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } }, icon);
+    useSeenTick();
+    const newListCount = (D.fam.shopLists || []).filter((l) => l.status === "in_progress" && l.assignedToUid === uid && !Seen.has(uid, "list", l.id)).length;
+    const iconBtn = (key, label, active, onClick, icon, badge) => h("button", { key, onClick, "aria-label": label, "aria-pressed": active, title: label, style: { position: "relative", background: active ? "var(--hk-gold)" : "none", border: "none", borderRadius: 10, color: active ? "#1a1a1a" : "inherit", fontSize: 20, minHeight: 44, minWidth: 40 } }, icon, NumBadge(badge, { position: "absolute", top: 2, right: 0 }));
     // 📝 ব্যক্তিগত তালিকা — আপাতত শুধু "শীঘ্রই আসছে"; 📦 বাজার তালিকা — তালিকা বানানো/পাঠানো/বাজার করা (family-shopping.js)
     const personalBtn = iconBtn("plist", "ব্যক্তিগত তালিকা", view === "personal", () => { setStack([]); setView(view === "personal" ? "bazar" : "personal"); }, "📝");
-    const listBtn = iconBtn("slist", "বাজার তালিকা", view === "lists", () => { setStack([]); setView(view === "lists" ? "bazar" : "lists"); }, "📦");
+    const listBtn = iconBtn("slist", "বাজার তালিকা", view === "lists", () => { setStack([]); setView(view === "lists" ? "bazar" : "lists"); }, "📦", newListCount);
     const personalBody = h("div", null,
       h("button", { onClick: () => setView("bazar"), style: { background: "none", border: "none", color: "var(--hk-gold)", fontWeight: 600, fontSize: 14, minHeight: 44, padding: 0, fontFamily: F } }, "‹ ফিরে যান"),
       h("div", { style: Object.assign({}, S.card, { textAlign: "center", padding: "36px 16px" }) },
@@ -1684,23 +1720,28 @@
       window.addEventListener("fb-ready", go);
       return () => { dead = true; window.removeEventListener("fb-ready", go); if (off) off(); };
     }, [uid, tick]);
-    // নিচের "প্লানিং" ট্যাবের সংখ্যা — অন্য কেউ প্লান সাবমিট করলে (অনুমোদনের অপেক্ষায়) সবার আগে এখানে ওঠে
-    const [planCount, setPlanCount] = useState(0);
+    // নিচের ট্যাবের সংখ্যা — শুধু "না-দেখা" আইটেম: ইনভাইট, আমাকে দেওয়া বাজার-তালিকা (ফ্যামিলি ট্যাব),
+    // অন্য কারও সাবমিট করা অনুমোদনের অপেক্ষার প্লান (প্লানিং ট্যাব)। আইটেমের ব্যানারে চাপলে সংখ্যা কমে।
+    const [al, setAl] = useState({ plans: [], lists: [] });
+    useSeenTick();
     useEffect(() => {
-      if (!uid) { setPlanCount(0); return undefined; }
+      if (!uid) { setAl({ plans: [], lists: [] }); return undefined; }
       let dead = false, off = null;
       const go = () => {
-        if (dead || off || !window.FB || !window.FB.subscribePlanAlerts) return;
-        off = window.FB.subscribePlanAlerts((n) => { if (!dead) setPlanCount(n); });
+        if (dead || off || !window.FB || !window.FB.subscribeFamilyAlerts) return;
+        off = window.FB.subscribeFamilyAlerts((r) => { if (!dead) setAl(r); });
       };
       go();
       window.addEventListener("fb-ready", go);
       return () => { dead = true; window.removeEventListener("fb-ready", go); if (off) off(); };
     }, [uid]);
-    return { invites, count: invites.length, planCount, refresh: () => setTick((n) => n + 1) };
+    const newInvites = invites.filter((i) => !Seen.has(uid, "inv", i.id)).length;
+    const newLists = al.lists.filter((id) => !Seen.has(uid, "list", id)).length;
+    const planCount = al.plans.filter((id) => !Seen.has(uid, "plan", id)).length;
+    return { invites, count: newInvites + newLists, inviteCount: newInvites, listCount: newLists, planCount, refresh: () => setTick((n) => n + 1) };
   }
 
   // building blocks the separate Family Planning file (family-planning.js) reuses
-  window.FBShared = { walletShortMsg, CallButtons, Core, taka, unitText, qtyText, dateBn, h, R_Fragment, FPCore, bn, today, F, SERIF, S, Sheet, Toggle, Avatar, Empty, HBar, friendlyError };
-  window.FamilyBazar = { Module, useFamilyAlerts };
+  window.FBShared = { Seen, useSeenTick, NumBadge, NewTag, walletShortMsg, CallButtons, Core, taka, unitText, qtyText, dateBn, h, R_Fragment, FPCore, bn, today, F, SERIF, S, Sheet, Toggle, Avatar, Empty, HBar, friendlyError };
+  window.FamilyBazar = { Module, useFamilyAlerts, Seen };
 })();
