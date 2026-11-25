@@ -248,9 +248,17 @@ async function boot(userUid, extra) {
   // ===== ফ্যামিলি opens its Dashboard DIRECTLY (হোম/বাজার/রিপোর্ট/পরিবার/আরও) — no card menu =====
   await boot("u1", "embedded");
   has("কে কত খরচ করেছে"); ["হোম", "বাজার", "রিপোর্ট", "পরিবার", "আরও"].forEach(has); hasNot("ফ্যামিলি প্লানিং"); hasNot("খরচ ও রিপোর্ট"); ok("ফ্যামিলি opens the Dashboard straight away: the 5 tabs + family spending, no feature-card menu");
+  // ===== "নতুন" ব্যাজ: 📦-তে না-দেখা তালিকার সংখ্যা; তালিকার ব্যানারে চাপলেই মুছে যায় =====
+  { const sh0 = byAria("বাজার তালিকা"); assert(/📦\s*1$/.test(text(sh0).trim()), "📦 shows 1 unseen list: " + text(sh0));
+    await clickAria("বাজার তালিকা"); await tick(4);
+    has("সাপ্তাহিক বাজার"); has("নতুন");
+    await click("সাপ্তাহিক বাজার"); await tick(6);
+    await clickAria("বাজার তালিকা"); await tick(4);
+    assert.strictEqual(text(byAria("বাজার তালিকা")).trim(), "📦", "badge cleared after opening the list");
+    ok("new-list badge: shows on 📦, clears when the list banner is opened"); }
   // header icons, left → right: 📝 ব্যক্তিগত তালিকা · 🔁 পরিবার পরিবর্তন · 📦 বাজার তালিকা · 🔎 সার্চ
   const headerOrder = () => { const pl = byAria("ব্যক্তিগত তালিকা"), sw = byAria("পরিবার বদলান"), sh = byAria("বাজার তালিকা"), se = byAria("খুঁজুন");
-    assert(pl && sw && sh && se, "all four header buttons exist"); assert.strictEqual(text(pl).trim(), "📝"); assert.strictEqual(text(sh).trim(), "📦"); assert.strictEqual(text(se).trim(), "🔎");
+    assert(pl && sw && sh && se, "all four header buttons exist"); assert.strictEqual(text(pl).trim(), "📝"); assert(text(sh).trim().startsWith("📦"), "📦 icon (with an optional new-count badge)"); assert.strictEqual(text(se).trim(), "🔎");
     const row = find(tree, (n) => n.host === "div" && Array.isArray(n.kids) && n.kids.includes(pl) && n.kids.includes(se))[0]; assert(row, "one header row");
     const k = row.kids; assert(k.indexOf(pl) < k.indexOf(sw) && k.indexOf(sw) < k.indexOf(sh) && k.indexOf(sh) === k.indexOf(se) - 1, "order must be 📝 · 🔁 · 📦 · 🔎"); return { pl, sh }; };
   { headerOrder(); } ok("header icons are ordered 📝 ব্যক্তিগত তালিকা · 🔁 · 📦 বাজার তালিকা · 🔎 (📦 directly left of the search)");
